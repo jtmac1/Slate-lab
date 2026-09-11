@@ -35,6 +35,9 @@ export function stackTeams(lu, P, f) {
   }
   return Object.entries(tc).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
 }
+export function overlap(a, b) {
+  const s = new Set(a); let n = 0; for (const x of b) if (s.has(x)) n++; return n;
+}
 export function lineupOK(lu, P, f, teams) {
   if (f.bothTeams && teams.length > 1) {
     let a = 0, b = 0;

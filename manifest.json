@@ -1,0 +1,13 @@
+{
+  "name": "Slate Lab",
+  "short_name": "Slate Lab",
+  "description": "DraftKings contest simulator: field generator, pre-contest sim, post-contest review",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#080C09",
+  "theme_color": "#080C09",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
