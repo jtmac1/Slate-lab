@@ -35,6 +35,9 @@ h1,h2,h3{margin:0;font-weight:700}
 .nav .lnk[aria-selected=true]{color:#fff;border-bottom-color:var(--blue2)}
 .nav .grow{flex:1}
 .nav .right{display:flex;align-items:center;gap:14px;color:var(--ink2);font-size:12.5px}
+.nav .lnk .short{display:none}
+#ctlToggle{display:none}
+@media (max-width:700px){#ctlToggle{display:inline-flex}}
 .nav .right .st{display:flex;align-items:center;gap:6px}
 .nav .ok{color:var(--green2)}
 
@@ -189,6 +192,75 @@ textarea.txt{width:100%;min-height:90px;font-family:ui-monospace,Menlo,monospace
 .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:12px}
 .kv dt{color:var(--muted)}.kv dd{margin:0}
 @media (max-width:900px){.tab{padding:12px 14px}.ctl{gap:8px}.txt{width:90px}.tw{max-height:none}}
+/* sticky columns for sideways scrolling */
+th.stl,td.stl{position:sticky;left:0;z-index:3}
+th.stl{z-index:4}
+td.stl{background:var(--row)!important;box-shadow:2px 0 0 var(--line2)}
+tbody tr:nth-child(even) td.stl{background:var(--row2)!important}
+td.stl.roi.pos{background:var(--greencell)!important}
+td.stl.roi.neg{background:#3a1520!important}
+th.str,td.str{position:sticky;right:0;z-index:3;background:var(--row)!important;box-shadow:-2px 0 0 var(--line2)}
+th.str{background:#0d1d3d!important;z-index:4}
+tbody tr:nth-child(even) td.str{background:var(--row2)!important}
+/* phone */
+@media (max-width:700px){
+  html,body{font-size:14px}
+  .nav{height:auto;padding:6px 10px;gap:10px;flex-wrap:wrap}
+  .nav .brand{font-size:15px}
+  .nav .links{order:3;width:100%;overflow-x:auto;gap:0;-webkit-overflow-scrolling:touch}
+  .nav .lnk{padding:10px 12px;font-size:13.5px;white-space:nowrap}
+  .nav .right .st{display:none}
+  .nav .lnk .long{display:none}
+  .nav .lnk .short{display:inline}
+  #ctl.collapsed .f:not(.cta),#ctl.collapsed .slider,#ctl.collapsed .stamp,#ctl.collapsed .chip{display:none}
+  #ctl.collapsed .ctl{padding:6px 12px}
+  .ctl{display:grid;grid-template-columns:1fr 1fr;gap:8px 10px;padding:10px 12px;align-items:end}
+  .ctl .f{min-width:0}
+  .ctl .f .sel,.ctl .f .txt,.ctl .f .btn,.ctl .f label.btn{width:100%;min-height:42px;font-size:14px}
+  .ctl .f:has(#type),.ctl .f:has(.sel:only-child:not([id])){display:flex}
+  .ctl .f.site{display:none}
+  .ctl .f.wide,.ctl .slider,.ctl .stamp,.ctl .chip{grid-column:1 / -1}
+  .ctl .stamp{text-align:left;margin:0;font-size:11px}
+  .ctl .f.cta .btn{min-height:46px;font-size:14px}
+  .sel,.txt{font-size:16px}
+  .tabs{padding:0}
+  .tab{padding:12px 12px;font-size:11.5px;letter-spacing:.03em}
+  .tool{padding:6px 8px;gap:4px}
+  .tool .search{width:100%;order:1}
+  .tool .pos{width:100%;overflow-x:auto;order:2;margin:0;padding-bottom:2px}
+  .tool .pos button{padding:8px 10px;font-size:12px}
+  .tool .btn.ghost{padding:8px 8px;font-size:11px}
+  .tw{max-height:none}
+  table{font-size:12px}
+  th{padding:8px 8px;font-size:10px}
+  td{padding:8px 8px}
+  .lu{max-width:none;white-space:nowrap}
+  .step button{width:24px;height:24px;font-size:15px;line-height:22px}
+  .step input{width:54px;padding:4px 3px;font-size:13px}
+  .boost button{width:26px;height:16px;font-size:10px;line-height:12px}
+  .heart{font-size:22px;padding:2px 4px}
+  .bot{padding:8px 10px;gap:8px;position:static}
+  .bot .pg{width:100%;justify-content:space-between}
+  .bot .pg button{font-size:22px;padding:4px 12px}
+  .bot .ovw{width:100%;flex-wrap:wrap;gap:6px}
+  .bot .ovw .lab{width:100%}
+  .bot .box{flex:1;justify-content:space-between;padding:6px 8px}
+  .bot .lnk,.bot .btn{flex:1;min-height:42px;text-align:center}
+  .ov{padding:0;align-items:stretch}
+  .modal,.modal.sm{width:100%;border-radius:0;min-height:100vh;display:flex;flex-direction:column}
+  .mb{flex:1;max-height:none}
+  .mf{flex-wrap:wrap}
+  .mf .btn{flex:1;min-height:44px}
+  .grid3{grid-template-columns:1fr 1fr}
+  .crow{flex-wrap:wrap}
+  .crow .nm{width:100%;white-space:normal;font-size:12.5px}
+  .crow .plus{width:44px;height:44px}
+  .pop{position:fixed;left:8px;right:8px;top:70px;min-width:0;max-height:80vh;overflow:auto}
+  .menu{position:fixed;left:8px;right:8px;top:auto;bottom:8px}
+  .menu button{padding:14px;font-size:14px}
+  .status{padding:5px 12px;font-size:11px}
+  .empty{padding:40px 14px;font-size:14px}
+}
 </style>
 </head>
 <body>

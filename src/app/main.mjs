@@ -30,7 +30,7 @@ const S = {
   filt: { q: "", pos: "ALL", projMin: "", projMax: "", ownMin: "", ownMax: "", salMin: "", types: {}, incl: "", excl: "" },
   tab: { hub: "proj", gen: "players", sim: "proj", review: "grade" },
   ts: {}, review: { files: {}, result: null, history: store.get("reviewHistory", []) },
-  busy: null, modal: null, pop: null, stackExpo: false
+  busy: null, modal: null, pop: null, stackExpo: false, ctlOpen: true
 };
 const fkey = () => S.league === "nfl" ? (S.type === "showdown" ? "nfl_sd" : "nfl_cl") : "mlb_cl";
 const F = () => FORMATS[fkey()];
@@ -150,7 +150,7 @@ async function generateContest() {
     rankOverall(); S.res = null; S.tab.gen = "players";
     setStatus(`Contest ready — ${M.toLocaleString()} entries in ${(S.contest.ms / 1000).toFixed(1)}s, ${uniq.toLocaleString()} unique. ${g.log[g.log.length - 1] || ""}`); prog(100);
   } catch (e) { setStatus(e.message, true); prog(0); }
-  S.busy = null; render();
+  S.busy = null; if (window.innerWidth <= 700) S.ctlOpen = false; render();
 }
 function stackTypeOf(l, P, f) {
   if (f.sport !== "mlb") return stackOf(l, P, f);
@@ -189,7 +189,7 @@ async function runSim() {
     res.feats = featurize(res.rows); applyScore(res); S.res = res; S.tab.sim = "lineups"; ts("lineups").page = 0;
     setStatus(`Simulation done — ${iters.toLocaleString()} iterations in ${((performance.now() - t0) / 1000).toFixed(1)}s, ${S.fieldMode ? "the " + c.N.toLocaleString() + "-entry field scored against itself" : "your " + S.LU.length + " lineups against " + res.FS.toLocaleString() + " contest entries"}.`); prog(100);
   } catch (e) { setStatus(e.message, true); prog(0); }
-  S.busy = null; render();
+  S.busy = null; if (window.innerWidth <= 700) S.ctlOpen = false; render();
 }
 function applyScore(res) { const sc = selectScore(res.feats, +S.gate || 0); res.rows.forEach((r, i) => { r.score = sc[i]; r.rProj = res.feats[i].rProj; }); }
 function toggleFav(i) { if (S.favs.has(i)) { S.favs.delete(i); S.favOrder = S.favOrder.filter(x => x !== i); } else { S.favs.add(i); S.favOrder.push(i); } }
@@ -243,25 +243,26 @@ async function gradeReview() {
 /* ================= rendering ================= */
 function setStatus(msg, err) { S.statusMsg = msg; S.statusErr = !!err; const el = $("#status"); if (el) el.innerHTML = err ? `<span class="err">${esc(msg)}</span>` : esc(msg); }
 function prog(p) { const el = $("#prog"); if (el) el.style.width = p + "%"; }
-const VIEWS = [["hub", "Data Hub"], ["gen", "Contest Generator"], ["sim", "Pre-Contest Simulator"], ["review", "Review"]];
+const VIEWS = [["hub", "Data Hub", "Data Hub"], ["gen", "Contest Generator", "Generator"], ["sim", "Pre-Contest Simulator", "Simulator"], ["review", "Review", "Review"]];
 function render() {
   const app = $("#app");
-  app.innerHTML = `<nav class="nav"><div class="brand"><i></i>SLATE LAB</div><div class="links">${VIEWS.map(([k, l]) => `<button class="lnk" data-view="${k}" aria-selected="${S.view === k}">${l}</button>`).join("")}</div><div class="grow"></div>
-    <div class="right"><span class="st">${S.pool ? `<span class="ok">✓</span> ${esc(S.projName || "projections")}` : "No projections"}</span><button class="btn ghost" id="btnBackup">Backup</button></div></nav>
-    <div id="ctl"></div><div class="prog"><i id="prog"></i></div><div id="status" class="status">${S.statusErr ? `<span class="err">${esc(S.statusMsg || "")}</span>` : esc(S.statusMsg || "")}</div><div id="tabs"></div><div id="main"></div><div id="bot"></div><div id="modal"></div>`;
+  app.innerHTML = `<nav class="nav"><div class="brand"><i></i>SLATE LAB</div><div class="links">${VIEWS.map(([k, l, s]) => `<button class="lnk" data-view="${k}" aria-selected="${S.view === k}"><span class="long">${l}</span><span class="short">${s}</span></button>`).join("")}</div><div class="grow"></div>
+    <div class="right"><button class="btn ghost" id="ctlToggle" title="Show or hide settings">⚙ Settings</button><span class="st">${S.pool ? `<span class="ok">✓</span> ${esc(S.projName || "projections")}` : "No projections"}</span><button class="btn ghost" id="btnBackup">Backup</button></div></nav>
+    <div id="ctl" class="${S.ctlOpen === false ? "collapsed" : ""}"></div><div class="prog"><i id="prog"></i></div><div id="status" class="status">${S.statusErr ? `<span class="err">${esc(S.statusMsg || "")}</span>` : esc(S.statusMsg || "")}</div><div id="tabs"></div><div id="main"></div><div id="bot"></div><div id="modal"></div>`;
   $$(".lnk").forEach(b => b.addEventListener("click", () => { S.view = b.getAttribute("data-view"); S.pop = null; render(); }));
   $("#btnBackup").addEventListener("click", () => openModal("backup"));
+  $("#ctlToggle").addEventListener("click", () => { S.ctlOpen = !S.ctlOpen; $("#ctl").classList.toggle("collapsed", !S.ctlOpen); });
   ({ hub: renderHub, gen: renderGen, sim: renderSim, review: renderReview })[S.view]();
   renderModal();
 }
 function renderMain() { ({ hub: mainHub, gen: mainGen, sim: mainSim, review: mainReview })[S.view](); }
 const sel = (k, opts, attrs = "") => `<select class="sel" data-cfg="${k}" ${attrs}>${opts.map(o => `<option value="${o[0]}"${String(S.cfg[k]) === String(o[0]) ? " selected" : ""}>${o[1]}</option>`).join("")}</select>`;
-const ctlField = (label, inner, info) => `<div class="f"><label>${label}${info ? '<span class="i">i</span>' : ""}</label>${inner}</div>`;
+const ctlField = (label, inner, info, cls) => `<div class="f${cls ? " " + cls : ""}"><label>${label}${info ? '<span class="i">i</span>' : ""}</label>${inner}</div>`;
 function commonCtl() {
   return ctlField("League", `<select class="sel" id="league"><option value="mlb"${S.league === "mlb" ? " selected" : ""}>⚾ MLB</option><option value="nfl"${S.league === "nfl" ? " selected" : ""}>🏈 NFL</option></select>`) +
-    ctlField("Site", `<select class="sel"><option>DraftKings</option></select>`) +
+    ctlField("Site", `<select class="sel"><option>DraftKings</option></select>`, false, "site") +
     ctlField("Type", `<select class="sel" id="type"><option value="classic"${S.type === "classic" ? " selected" : ""}>Classic</option>${S.league === "nfl" ? `<option value="showdown"${S.type === "showdown" ? " selected" : ""}>Showdown</option>` : ""}</select>`) +
-    ctlField("Slate", `<select class="sel" style="min-width:200px"><option>${S.pool ? esc(S.projName || "Loaded projections") : "No projections loaded"}</option></select>`, true);
+    ctlField("Slate", `<select class="sel" style="min-width:200px"><option>${S.pool ? esc(S.projName || "Loaded projections") : "No projections loaded"}</option></select>`, true, "wide");
 }
 function wireCommon() {
   $("#league").addEventListener("change", e => { S.league = e.target.value; if (S.league === "mlb") S.type = "classic"; store.set("league", S.league); store.set("type", S.type); reloadPool(); });
@@ -281,9 +282,9 @@ function grid(key, cols, rows, opts = {}) {
   const per = st.per || 100, pages = Math.max(1, Math.ceil(idx.length / per)); if (st.page >= pages) st.page = pages - 1; if (st.page < 0) st.page = 0;
   const from = st.page * per, to = Math.min(idx.length, from + per);
   let h = `<div class="tw"><table><thead><tr>`;
-  for (const c of cols) { const ar = st.sort && st.sort.k === c.k ? `<span class="ar">${st.sort.d < 0 ? "▼" : "▲"}</span>` : ""; h += `<th class="${c.num ? "num" : ""}${c.sortable === false ? " na" : ""}" ${c.sortable === false ? "" : `data-sort="${c.k}"`}>${c.label}${c.info ? '<span class="i">i</span>' : ""}${ar}</th>`; }
+  for (const c of cols) { const ar = st.sort && st.sort.k === c.k ? `<span class="ar">${st.sort.d < 0 ? "▼" : "▲"}</span>` : ""; h += `<th class="${c.num ? "num" : ""}${c.sortable === false ? " na" : ""}${c.sticky === "l" ? " stl" : c.sticky === "r" ? " str" : ""}" ${c.sortable === false ? "" : `data-sort="${c.k}"`}>${c.label}${c.info ? '<span class="i">i</span>' : ""}${ar}</th>`; }
   h += "</tr></thead><tbody>";
-  for (let i = from; i < to; i++) { const r = rows[idx[i]]; h += "<tr>"; for (const c of cols) h += `<td class="${c.cls ? (typeof c.cls === "function" ? c.cls(r) : c.cls) : ""}${c.num ? " num" : ""}">${c.r ? c.r(r, idx[i]) : esc(r[c.k])}</td>`; h += "</tr>"; }
+  for (let i = from; i < to; i++) { const r = rows[idx[i]]; h += "<tr>"; for (const c of cols) h += `<td class="${c.cls ? (typeof c.cls === "function" ? c.cls(r) : c.cls) : ""}${c.num ? " num" : ""}${c.sticky === "l" ? " stl" : c.sticky === "r" ? " str" : ""}">${c.r ? c.r(r, idx[i]) : esc(r[c.k])}</td>`; h += "</tr>"; }
   h += "</tbody></table></div>";
   st.total = idx.length; st.from = from; st.to = to; st.pages = pages; st.idx = idx;
   return h;
@@ -313,7 +314,7 @@ function projTable(key, rerender) {
   if (!S.pool) return `<div class="empty">Load projections to start.<small>Use the Slate controls above: Stokastic Data Hub, ETR, Blick or any CSV.</small></div>`;
   const P = filterPlayers(S.pool.players), f = F(), mlb = f.sport === "mlb";
   const stepper = (p, k, step) => `<span class="step"><button class="m" data-step="${p.i}|${k}|-${step}">−</button><input data-ed="${p.i}|${k}" value="${(+p[k]).toFixed(k === "own" ? 2 : 2)}"><button class="p" data-step="${p.i}|${k}|${step}">+</button></span>`;
-  const cols = [{ k: "name", label: "Player", r: p => nameCell(p) }, { k: "sal", label: "Salary", num: true, r: p => money(p.sal) }, { k: "pos", label: "Position", r: p => esc(p.posList.join("/")) }]
+  const cols = [{ k: "name", label: "Player", sticky: "l", r: p => nameCell(p) }, { k: "sal", label: "Salary", num: true, r: p => money(p.sal) }, { k: "pos", label: "Position", r: p => esc(p.posList.join("/")) }]
     .concat(mlb ? [{ k: "ord", label: "Bat Pos.", num: true, r: p => p.ord || "—" }] : []).concat([{ k: "team", label: "Team", r: p => teamCell(p.team) }, { k: "opp", label: "Opponent", r: p => teamCell(p.opp) },
       { k: "proj", label: "Projected FP", info: true, num: true, r: p => stepper(p, "proj", 0.25) }, { k: "val", label: "Value", info: true, num: true, v: p => p.sal ? p.proj / p.sal * 1000 : 0, r: p => fmt(p.sal ? p.proj / p.sal * 1000 : 0, 2) },
       { k: "own", label: "Ownership %", info: true, num: true, r: p => stepper(p, "own", 0.5) }]).concat(f.mult ? [{ k: "cown", label: "CPT Own %", num: true, r: p => stepper(p, "cown", 0.5) }] : [])
@@ -358,7 +359,7 @@ function renderGen() {
     ${mlb ? ctlField("Stack Type Exposures", `<div style="position:relative"><button class="btn sec" id="btnStacks">Stack Type Exposures ✎</button><div id="popStacks"></div></div>`, true) : ""}
     <div class="f slider"><label>Contest Archetype <span class="i">i</span></label><input type="range" min="0" max="2" step="1" value="${a}" id="arch"><div class="ticks"><span>Low Stakes</span><span>Marquee</span><span>High Stakes</span></div></div>
     <div class="stamp">${S.projWhen ? "Projections loaded: " + esc(S.projWhen) : ""}${S.contest ? "<br>Contest generated " + esc(S.contest.when) : ""}</div>
-    <div class="f"><label>&nbsp;</label><button class="btn gen" id="btnGen"${S.pool && !S.busy ? "" : " disabled"}>${S.contest ? "Generate Lineups" : "Generate Lineups"}</button></div></div>`;
+    <div class="f wide cta"><label>&nbsp;</label><button class="btn gen" id="btnGen"${S.pool && !S.busy ? "" : " disabled"}>${S.contest ? "Generate Lineups" : "Generate Lineups"}</button></div></div>`;
   wireCommon();
   $("#poolSel").addEventListener("change", e => { if (e.target.value === "custom") { const v = prompt("Pool size (exact number of entries):", S.cfg.pool); if (v && +v >= 2) S.cfg.pool = Math.round(+v); saveCfg(); render(); } });
   $("#arch").addEventListener("input", e => { S.cfg.arch = +e.target.value; saveCfg(); });
@@ -385,7 +386,7 @@ function mainGen() {
   const bottom = (key, extra) => `<div class="bot">${pager(key, mainGen)}<div class="grow"></div>${extra || ""}<button class="lnk" id="expGen">Export to CSV</button><button class="btn sec" id="regen">Regenerate Lineups ⟳</button><button class="btn next" id="toSim">Simulate Lineups</button></div>`;
   if (t === "players") {
     const rows = filterPlayers(P).map(p => ({ p, name: p.name, pos: p.pos, team: p.team, opp: p.opp, own: p.own, fp: c.expo[p.i] / N * 100 })).map(r => Object.assign(r, { diff: r.fp - r.own }));
-    const cols = [{ k: "name", label: "Name", r: r => nameCell(r.p) }, { k: "pos", label: "Pos.", r: r => esc(r.p.posList.join("/")) }, { k: "team", label: "Team", r: r => teamCell(r.team) }, { k: "opp", label: "Opp", r: r => teamCell(r.opp) },
+    const cols = [{ k: "name", label: "Name", sticky: "l", r: r => nameCell(r.p) }, { k: "pos", label: "Pos.", r: r => esc(r.p.posList.join("/")) }, { k: "team", label: "Team", r: r => teamCell(r.team) }, { k: "opp", label: "Opp", r: r => teamCell(r.opp) },
       { k: "own", label: "Ownership", info: true, num: true, r: r => pctS(r.own) }, { k: "fp", label: "Pool Exposure", info: true, num: true, r: r => pctS(r.fp) }, { k: "diff", label: "Difference", info: true, num: true, r: r => diffS(r.diff) },
       { k: "boost", label: "Boost Ownership", info: true, cls: "ctr", sortable: false, r: r => `<span class="boost"><button data-boost="${r.p.i}|1">▲</button><button data-boost="${r.p.i}|-1">▼</button></span>${S.boosts[r.p.i] ? ` <span class="hint">${S.boosts[r.p.i] > 0 ? "+" : ""}${S.boosts[r.p.i]}%</span>` : ""}` }];
     main.innerHTML = posTool("gplayers", mainGen, `<div class="grow"></div>`) + grid("gplayers", cols, rows, { sort: { k: "fp", d: -1 } });
@@ -400,7 +401,7 @@ function mainGen() {
   } else {
     const rk = c.rk, rows = c.field.map((l, i) => ({ i, l, pr: rk.pr[i], or: rk.or[i], ovr: rk.ovr[i], proj: rk.proj[i], own: rk.own[i], sal: rk.sal[i], st: rk.st[i], tmz: rk.tmz[i], dup: rk.dup[i] }));
     const wt = (k, lab) => `${lab}<span class="wt"><button class="m" data-w="${k}|-5">−</button><span>${S.cfg[k]}%</span><button class="p" data-w="${k}|5">+</button></span>`;
-    const cols = [{ k: "pr", label: wt("wP", "Proj. Rank"), num: true }, { k: "or", label: wt("wO", "Own. Rank"), num: true }, { k: "ovr", label: "Overall Rank", num: true }, { k: "proj", label: "Lineup Proj", num: true, r: r => r.proj.toFixed(2) }, { k: "own", label: "Total Ownership", num: true, r: r => pctS(r.own) }, { k: "sal", label: "Salary", num: true, r: r => r.sal.toLocaleString() },
+    const cols = [{ k: "pr", label: wt("wP", "Proj. Rank"), num: true, sticky: "l" }, { k: "or", label: wt("wO", "Own. Rank"), num: true }, { k: "ovr", label: "Overall Rank", num: true }, { k: "proj", label: "Lineup Proj", num: true, r: r => r.proj.toFixed(2) }, { k: "own", label: "Total Ownership", num: true, r: r => pctS(r.own) }, { k: "sal", label: "Salary", num: true, r: r => r.sal.toLocaleString() },
       { k: "st", label: "Stack Type", cls: "ctr", r: r => `${esc(r.st)}${r.tmz ? ` <span class="hint">${esc(r.tmz)}</span>` : ""}` }, { k: "dup", label: "Dupes", num: true }, { k: "l", label: "Lineup", sortable: false, r: r => luCell(r.l, P, f) }];
     main.innerHTML = `<div class="tool"><div class="grow"></div><span class="hint">${N.toLocaleString()} entries · ${c.uniq.toLocaleString()} unique · most duplicated ${c.top}×</span></div>` + grid("ranker", cols, rows, { sort: { k: "ovr", d: 1 } });
     wireGrid("ranker", main, mainGen); $$("#main [data-w]").forEach(b => b.addEventListener("click", e => { e.stopPropagation(); const [k, d] = b.getAttribute("data-w").split("|"); S.cfg[k] = Math.max(0, Math.min(100, (+S.cfg[k] || 0) + (+d))); saveCfg(); rankOverall(); mainGen(); }));
@@ -422,7 +423,7 @@ function renderSim() {
     ${S.LU.length ? `<span class="chip"><span class="x" id="clearLu">✕</span> ${esc(S.luSource)} · ${S.LU.length.toLocaleString()}</span>` : ""}
     <div class="stamp">${c ? `Contest: ${c.N.toLocaleString()} entries · ${c.paidN} paid<br>first place ${(c.pay[0] / c.fee).toFixed(0)}× the entry fee` : "No contest generated"}<br><a href="#" id="dlProj">Download Projections ⬇</a></div>
     <div class="f"><label>&nbsp;</label><button class="btn sec" id="btnEntry">Entry Manager</button></div>
-    <div class="f"><label>&nbsp;</label><button class="btn gen" id="run"${c && S.LU.length && !S.busy ? "" : " disabled"}>Run Contest Simulation</button></div></div>`;
+    <div class="f wide cta"><label>&nbsp;</label><button class="btn gen" id="run"${c && S.LU.length && !S.busy ? "" : " disabled"}>Run Contest Simulation</button></div></div>`;
   wireCommon();
   $("#pct").addEventListener("change", e => { if (e.target.value === "custom") { S.cfg.payMode = "custom"; saveCfg(); openModal("payout"); } else { S.cfg.payMode = "pct"; S.cfg.pct = +e.target.value; saveCfg(); if (S.contest) { const { pay, fee } = payoutsFor(S.contest.N); S.contest.pay = pay; S.contest.fee = fee; S.contest.paidN = paidCount(pay); S.res = null; } render(); } });
   $("#fileLu").addEventListener("change", async e => { const fl = e.target.files[0]; if (fl) loadLineupsCSV(await readFile(fl), fl.name); render(); });
@@ -451,10 +452,10 @@ function mainSim() {
       main.innerHTML = `<div class="tool"><span class="hint">${S.LU.length.toLocaleString()} lineups loaded from ${esc(S.luSource)}. ${S.contest ? "Run the contest simulation to score them." : "Generate a contest first."}</span></div>` + grid("lu0", [{ k: "i", label: "#", num: true, r: r => r.i + 1 }, { k: "proj", label: "Projected FP", num: true, r: r => r.proj.toFixed(2) }, { k: "own", label: "OwnSum", num: true, r: r => pctS(r.own) }, { k: "type", label: "Stack Type", cls: "ctr" }, { k: "sal", label: "Salary", num: true, r: r => r.sal.toLocaleString() }, { k: "l", label: "Lineups", sortable: false, r: r => luCell(r.l, P, f) }], rows, { sort: { k: "proj", d: -1 } });
       wireGrid("lu0", main, mainSim); bot.innerHTML = `<div class="bot">${pager("lu0", mainSim)}<div class="grow"></div><button class="btn" id="run2"${S.contest && !S.busy ? "" : " disabled"}>Run Contest Simulation</button></div>`; wirePager("lu0", mainSim); $("#run2").addEventListener("click", runSim); return; }
     const rows = visibleRows();
-    const cols = [{ k: "roi", label: "Simulated ROI", info: true, cls: r => "roi " + (r.roi >= 0 ? "pos" : "neg"), r: r => pctS(r.roi) }, { k: "score", label: "Score", info: true, num: true, r: r => r.score > -1e8 ? pctS(r.score, 0) : '<span class="hint">below gate</span>' },
+    const cols = [{ k: "roi", label: "Simulated ROI", info: true, sticky: "l", cls: r => "roi " + (r.roi >= 0 ? "pos" : "neg"), r: r => pctS(r.roi) }, { k: "score", label: "Score", info: true, num: true, r: r => r.score > -1e8 ? pctS(r.score, 0) : '<span class="hint">below gate</span>' },
       { k: "proj", label: "Projected FP", info: true, num: true, r: r => r.proj.toFixed(2) }, { k: "own", label: "OwnSum", info: true, num: true, r: r => pctS(r.own) }, { k: "teams", label: "Stack", cls: "ctr" }, { k: "type", label: "Stack Type", cls: "ctr" },
       { k: "win", label: "Win%", info: true, num: true, r: r => pctS(r.win, 3) }, { k: "t10", label: "Top 10%", info: true, num: true, r: r => pctS(r.t10, 3) }, { k: "cash", label: "Cash%", info: true, num: true, r: r => pctS(r.cash, 3) }, { k: "dupN", label: "Dupes", info: true, num: true },
-      { k: "lu", label: "Lineups", sortable: false, r: r => luCell(r.lu, P, f) }, { k: "sal", label: "Salary", num: true, r: r => "$" + r.sal.toLocaleString() }, { k: "fav", label: "", sortable: false, cls: "ctr", r: r => `<span class="heart${S.favs.has(r.i) ? " on" : ""}" data-fav="${r.i}">${S.favs.has(r.i) ? "♥" : "♡"}</span>` }];
+      { k: "lu", label: "Lineups", sortable: false, r: r => luCell(r.lu, P, f) }, { k: "sal", label: "Salary", num: true, r: r => "$" + r.sal.toLocaleString() }, { k: "fav", label: "", sortable: false, sticky: "r", cls: "ctr", r: r => `<span class="heart${S.favs.has(r.i) ? " on" : ""}" data-fav="${r.i}">${S.favs.has(r.i) ? "♥" : "♡"}</span>` }];
     main.innerHTML = `<div class="tool"><button class="btn ghost" id="fLineup">☰ Lineup Filters</button><button class="btn ghost" id="fPlayers">✎ Players <span class="i"></span></button><button class="btn ghost" id="expRes">⬇ Export</button><span class="hint">Score gate: top <input class="txt" id="gate" style="width:52px;padding:2px 5px;min-height:0" value="${100 - S.gate}">% by projection</span><div class="grow"></div><div style="position:relative"><button class="btn sec" id="qf">Quick Favorite ▾</button><div id="qfMenu"></div></div></div>` + grid("lineups", cols, rows, { sort: { k: "roi", d: -1 } });
     wireGrid("lineups", main, mainSim);
     $$("#main [data-fav]").forEach(el => el.addEventListener("click", () => { toggleFav(+el.getAttribute("data-fav")); mainSim(); }));
@@ -466,7 +467,7 @@ function mainSim() {
   }
   if (t === "proi") { if (!res) { main.innerHTML = `<div class="empty">Run the contest simulation first.</div>`; bot.innerHTML = ""; return; }
     const rows = res.players.filter(r => { const p = P[r.id]; return (S.filt.pos === "ALL" || p.posList.includes(S.filt.pos) || (S.filt.pos === "P" && p.isP)) && (!S.filt.q || p.key.includes(nrm(S.filt.q))); }).map(r => Object.assign({}, r, { p: P[r.id] }));
-    main.innerHTML = posTool("proi", mainSim, `<button class="btn ghost" id="expP">⬇ Export</button>`) + grid("proi", [{ k: "name", label: "Player", r: r => nameCell(r.p) }, { k: "team", label: "Team", r: r => teamCell(r.team) }, { k: "opp", label: "Opponent", v: r => r.p.opp, r: r => teamCell(r.p.opp) }, { k: "pos", label: "Position", r: r => esc(r.p.posList.join("/")) }, { k: "sal", label: "Salary", num: true, v: r => r.p.sal, r: r => "$" + r.p.sal.toLocaleString() }, { k: "roi", label: "Avg Simulated ROI", info: true, num: true, r: r => pctS(r.roi) }, { k: "proj", label: "Projected FP", info: true, num: true, v: r => r.p.proj, r: r => r.p.proj.toFixed(2) }, { k: "exp", label: "Exposure", num: true, r: r => pctS(r.exp, 0) }], rows, { sort: { k: "roi", d: -1 } });
+    main.innerHTML = posTool("proi", mainSim, `<button class="btn ghost" id="expP">⬇ Export</button>`) + grid("proi", [{ k: "name", label: "Player", sticky: "l", r: r => nameCell(r.p) }, { k: "team", label: "Team", r: r => teamCell(r.team) }, { k: "opp", label: "Opponent", v: r => r.p.opp, r: r => teamCell(r.p.opp) }, { k: "pos", label: "Position", r: r => esc(r.p.posList.join("/")) }, { k: "sal", label: "Salary", num: true, v: r => r.p.sal, r: r => "$" + r.p.sal.toLocaleString() }, { k: "roi", label: "Avg Simulated ROI", info: true, num: true, r: r => pctS(r.roi) }, { k: "proj", label: "Projected FP", info: true, num: true, v: r => r.p.proj, r: r => r.p.proj.toFixed(2) }, { k: "exp", label: "Exposure", num: true, r: r => pctS(r.exp, 0) }], rows, { sort: { k: "roi", d: -1 } });
     wirePosTool("proi", mainSim); wireGrid("proi", main, mainSim); $("#expP").addEventListener("click", () => exportCSV("player-roi.csv", ["Player", "Team", "Opponent", "Position", "Salary", "Avg Simulated ROI", "Projected FP"], rows.map(r => [r.name, r.team, r.p.opp, r.p.posList.join("/"), r.p.sal, r.roi.toFixed(1) + "%", r.p.proj.toFixed(2)])));
     bot.innerHTML = `<div class="bot">${pager("proi", mainSim)}</div>`; wirePager("proi", mainSim); return; }
   if (t === "sroi") { if (!res) { main.innerHTML = `<div class="empty">Run the contest simulation first.</div>`; bot.innerHTML = ""; return; }
@@ -476,7 +477,7 @@ function mainSim() {
     wireGrid("sroi", main, mainSim); bot.innerHTML = ""; return; }
   if (t === "favs") { const rows = S.favOrder.filter(i => res && res.rows[i]).map(i => res.rows[i]);
     if (!rows.length) { main.innerHTML = `<div class="empty">No Lineups have been favorited</div>`; bot.innerHTML = favBot(); wireFavBot(); return; }
-    main.innerHTML = `<div class="tool"><div class="grow"></div><span class="hint">${rows.length} favorites</span></div>` + grid("favs", [{ k: "roi", label: "Simulated ROI", cls: r => "roi " + (r.roi >= 0 ? "pos" : "neg"), r: r => pctS(r.roi) }, { k: "proj", label: "Projected FP", num: true, r: r => r.proj.toFixed(2) }, { k: "own", label: "OwnSum", num: true, r: r => pctS(r.own) }, { k: "teams", label: "Stack", cls: "ctr" }, { k: "type", label: "Stack Type", cls: "ctr" }, { k: "lu", label: "Lineups", sortable: false, r: r => luCell(r.lu, P, f) }, { k: "sal", label: "Salary", num: true, r: r => "$" + r.sal.toLocaleString() }, { k: "fav", label: "", sortable: false, cls: "ctr", r: r => `<span class="heart on" data-fav="${r.i}">♥</span>` }], rows, { sort: { k: "roi", d: -1 } });
+    main.innerHTML = `<div class="tool"><div class="grow"></div><span class="hint">${rows.length} favorites</span></div>` + grid("favs", [{ k: "roi", label: "Simulated ROI", sticky: "l", cls: r => "roi " + (r.roi >= 0 ? "pos" : "neg"), r: r => pctS(r.roi) }, { k: "proj", label: "Projected FP", num: true, r: r => r.proj.toFixed(2) }, { k: "own", label: "OwnSum", num: true, r: r => pctS(r.own) }, { k: "teams", label: "Stack", cls: "ctr" }, { k: "type", label: "Stack Type", cls: "ctr" }, { k: "lu", label: "Lineups", sortable: false, r: r => luCell(r.lu, P, f) }, { k: "sal", label: "Salary", num: true, r: r => "$" + r.sal.toLocaleString() }, { k: "fav", label: "", sortable: false, sticky: "r", cls: "ctr", r: r => `<span class="heart on" data-fav="${r.i}">♥</span>` }], rows, { sort: { k: "roi", d: -1 } });
     wireGrid("favs", main, mainSim); $$("#main [data-fav]").forEach(el => el.addEventListener("click", () => { toggleFav(+el.getAttribute("data-fav")); mainSim(); })); bot.innerHTML = favBot("favs"); wireFavBot("favs"); return; }
   if (t === "expo") {
     const src = S.favs.size ? S.favOrder.map(i => S.LU[i]) : [], N = src.length, c = S.contest, FN = c ? c.field.length : 0;
@@ -484,7 +485,7 @@ function mainSim() {
     const toggle = `<div class="grow"></div><label class="sw${S.stackExpo ? " on" : ""}" id="swStack">Stack Exposures <i></i></label>`;
     if (!S.stackExpo) { const mine = {}; src.forEach(l => l.forEach(id => mine[id] = (mine[id] || 0) + 1)); const pr = {}; (res ? res.players : []).forEach(r => pr[r.id] = r.roi);
       const rows = filterPlayers(P).filter(p => mine[p.i]).map(p => ({ p, name: p.name, team: p.team, opp: p.opp, sal: p.sal, roi: pr[p.i], proj: p.proj, pown: c ? c.expo[p.i] / FN * 100 : p.own, exp: mine[p.i] / N * 100 })).map(r => Object.assign(r, { lev: r.exp - r.pown }));
-      main.innerHTML = posTool("expo", mainSim, toggle) + grid("expo", [{ k: "name", label: "Player", r: r => nameCell(r.p) }, { k: "team", label: "Team", r: r => teamCell(r.team) }, { k: "opp", label: "Opponent", r: r => teamCell(r.opp) }, { k: "pos", label: "Position", v: r => r.p.pos, r: r => esc(r.p.posList.join("/")) }, { k: "sal", label: "Salary", num: true, r: r => r.sal.toLocaleString() }, { k: "roi", label: "Simulated Player ROI", info: true, num: true, r: r => pctS(r.roi) }, { k: "proj", label: "Projected FP", info: true, num: true, r: r => r.proj.toFixed(2) }, { k: "pown", label: "Pool Own", info: true, num: true, r: r => pctS(r.pown) }, { k: "exp", label: "Exposure", info: true, num: true, r: r => pctS(r.exp) }, { k: "lev", label: "Leverage", info: true, num: true, r: r => diffS(r.lev) }], rows, { sort: { k: "exp", d: -1 } });
+      main.innerHTML = posTool("expo", mainSim, toggle) + grid("expo", [{ k: "name", label: "Player", sticky: "l", r: r => nameCell(r.p) }, { k: "team", label: "Team", r: r => teamCell(r.team) }, { k: "opp", label: "Opponent", r: r => teamCell(r.opp) }, { k: "pos", label: "Position", v: r => r.p.pos, r: r => esc(r.p.posList.join("/")) }, { k: "sal", label: "Salary", num: true, r: r => r.sal.toLocaleString() }, { k: "roi", label: "Simulated Player ROI", info: true, num: true, r: r => pctS(r.roi) }, { k: "proj", label: "Projected FP", info: true, num: true, r: r => r.proj.toFixed(2) }, { k: "pown", label: "Pool Own", info: true, num: true, r: r => pctS(r.pown) }, { k: "exp", label: "Exposure", info: true, num: true, r: r => pctS(r.exp) }, { k: "lev", label: "Leverage", info: true, num: true, r: r => diffS(r.lev) }], rows, { sort: { k: "exp", d: -1 } });
       wirePosTool("expo", mainSim); wireGrid("expo", main, mainSim);
     } else { const mine = {}, fld = {}; src.forEach(l => { for (const [tm, n] of stackTeams(l, P, f)) if (n >= 3) mine[tm + "|" + n] = (mine[tm + "|" + n] || 0) + 1; }); if (c) c.field.forEach(l => { for (const [tm, n] of stackTeams(l, P, f)) if (n >= 3) fld[tm + "|" + n] = (fld[tm + "|" + n] || 0) + 1; });
       const keys = [...new Set(Object.keys(mine).concat(Object.keys(fld)))], rows = keys.map(k => { const [team, size] = k.split("|"); return { team, size: +size, exp: (mine[k] || 0) / N * 100, pown: FN ? (fld[k] || 0) / FN * 100 : 0 }; }).map(r => Object.assign(r, { lev: r.exp - r.pown }));
@@ -503,7 +504,7 @@ function renderQF() {
 /* ---------- Review ---------- */
 function renderReview() {
   const rv = S.review, have = k => rv.files[k] ? "✓" : "—";
-  $("#ctl").innerHTML = `<div class="ctl">${ctlField("League", `<select class="sel" id="league"><option value="mlb"${S.league === "mlb" ? " selected" : ""}>⚾ MLB</option><option value="nfl"${S.league === "nfl" ? " selected" : ""}>🏈 NFL</option></select>`)}${ctlField("Slate date", `<input type="date" class="txt" data-cfg="rvDate" style="width:150px">`)}${ctlField("Contest name", `<input type="text" class="txt" data-cfg="rvName" style="width:240px" placeholder="e.g. 09-10 $30K Perfect Game">`)}<div class="f"><label>Post-contest files &nbsp;<span class="hint">Lineups ${have("lineup")} · Players ${have("player")} · Stacks ${have("stack")}</span></label><label class="btn sec" style="cursor:pointer">Upload Post-Contest CSVs<input type="file" id="fileRv" accept=".csv" hidden multiple></label></div><div class="f"><label>&nbsp;</label><button class="btn gen" id="btnGrade"${rv.files.lineup && rv.files.player && !S.busy ? "" : " disabled"}>Grade Selection Rules</button></div></div>`;
+  $("#ctl").innerHTML = `<div class="ctl">${ctlField("League", `<select class="sel" id="league"><option value="mlb"${S.league === "mlb" ? " selected" : ""}>⚾ MLB</option><option value="nfl"${S.league === "nfl" ? " selected" : ""}>🏈 NFL</option></select>`)}${ctlField("Slate date", `<input type="date" class="txt" data-cfg="rvDate" style="width:150px">`)}${ctlField("Contest name", `<input type="text" class="txt" data-cfg="rvName" style="width:240px" placeholder="e.g. 09-10 $30K Perfect Game">`)}<div class="f"><label>Post-contest files &nbsp;<span class="hint">Lineups ${have("lineup")} · Players ${have("player")} · Stacks ${have("stack")}</span></label><label class="btn sec" style="cursor:pointer">Upload Post-Contest CSVs<input type="file" id="fileRv" accept=".csv" hidden multiple></label></div><div class="f wide cta"><label>&nbsp;</label><button class="btn gen" id="btnGrade"${rv.files.lineup && rv.files.player && !S.busy ? "" : " disabled"}>Grade Selection Rules</button></div></div>`;
   $("#league").addEventListener("change", e => { S.league = e.target.value; store.set("league", S.league); render(); });
   $$("[data-cfg]").forEach(el => { const k = el.getAttribute("data-cfg"); el.value = S.cfg[k] ?? ""; el.addEventListener("change", () => { S.cfg[k] = el.value; saveCfg(); }); });
   $("#fileRv").addEventListener("change", async e => { for (const fl of Array.from(e.target.files)) { const t = await readFile(fl), h = t.slice(0, 400).toLowerCase(); if (h.includes("sim lineup roi")) rv.files.lineup = t; else if (h.includes("sim player roi")) rv.files.player = t; else if (h.includes("stack roi")) rv.files.stack = t; else setStatus("Not a post-contest file: " + fl.name, true); } render(); });
