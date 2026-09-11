@@ -132,7 +132,9 @@ function genFieldMLB(pool, n, o, rng, log) {
   const cum = new Float64Array(np), pick = new Int32Array(np);
 
   function pickTeam(exclude) {
-    const ks = Object.keys(share).filter(k => k !== exclude && byTeam[k]); let tot = 0;
+    let ks = Object.keys(share).filter(k => k !== exclude && byTeam[k]);
+    if (!ks.length) { ks = Object.keys(byTeam).filter(k => k !== exclude); ks.forEach(k => { if (share[k] == null) share[k] = byTeam[k].reduce((s, p) => s + p.own, 0) || 1; }); }
+    let tot = 0;
     for (const k of ks) tot += share[k];
     let x = rng() * tot;
     for (const k of ks) { x -= share[k]; if (x <= 0) return k; }

@@ -97,6 +97,10 @@ export function buildPool(headers, rows, fkey, map) {
       conf: M.conf != null ? /^(c|y|yes|true|1)$/i.test(String(r[M.conf] || "").trim()) : null
     });
   }
+  // drop stray rows: a team with only one or two players is not on this slate
+  const tcount = {}; P.forEach(p => { if (p.team) tcount[p.team] = (tcount[p.team] || 0) + 1; });
+  const stray = Object.keys(tcount).filter(t => tcount[t] < 3);
+  if (stray.length && Object.keys(tcount).length > 2) { const keep = P.filter(p => !stray.includes(p.team)); P.length = 0; keep.forEach(p => P.push(p)); }
   const tset = {}; P.forEach(p => { if (p.team) tset[p.team] = 1; });
   const teams = Object.keys(tset).sort();
   if (M.opp == null && teams.length === 2) P.forEach(p => { if (p.team) p.opp = teams[0] === p.team ? teams[1] : teams[0]; });
