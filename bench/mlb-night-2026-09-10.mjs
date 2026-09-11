@@ -140,3 +140,25 @@ console.log(`  ${ok242.length} of 242 lineups fully scorable from the contest's 
 console.log(`  Spearman vs actual points: Stokastic ROI ${spearman(ok242.map(i => stkROI[i]), ok242.map(i => act242[i])).toFixed(3)} | my ROI ${spearman(ok242.map(i => myROI[i]), ok242.map(i => act242[i])).toFixed(3)} | projection ${spearman(ok242.map(i => projPts[i]), ok242.map(i => act242[i])).toFixed(3)}`);
 const best = ok242.slice().sort((a, b) => act242[b] - act242[a]).slice(0, 5);
 console.log("  best actual among the 242: " + best.map(i => `${act242[i].toFixed(1)} pts (stk rank ${topK(stkROI, 242).indexOf(i) + 1}, mine ${topK(myROI, 242).indexOf(i) + 1})`).join("; "));
+
+/* ---------- 5. Stokastic POST-contest sim on the real 100 entries vs mine ---------- */
+console.log("\n=== POST-CONTEST: Stokastic's sim of the real 100 entries vs mine, same lineups, actual results ===");
+const post = read("DK_MLB_Night_Data_Hub_Lineup.csv").slice(1).map(r => ({ user: r[0], stkROI: num(r[1]), actROI: num(r[2]), stkFP: num(r[3]), actFP: num(r[4]), finish: num(r[6]), names: r[9].split(",").map(s => s.trim()) }));
+const postLu = post.map(e => { const ids = e.names.map(nm => byKey[nrm(nm)]); return ids.some(x => x == null) ? null : assignSlots(ids, P, f); });
+const realBySig = {}; real.forEach((e, i) => { realBySig[sigOf(e.lu, f)] = i; });
+const pairs = [];
+post.forEach((e, i) => { if (!postLu[i]) return; const ri = realBySig[sigOf(postLu[i], f)]; if (ri != null) pairs.push({ e, ri }); });
+console.log(`  matched ${pairs.length} of ${post.length} post-contest rows to real entries`);
+const sROI = pairs.map(p => p.e.stkROI), mROI = pairs.map(p => resB.rows[p.ri].roi), aFP = pairs.map(p => p.e.actFP), mRank = pairs.map(p => -resB.rows[p.ri].avgRank), sFP = pairs.map(p => p.e.stkFP), mFP = pairs.map(p => resB.rows[p.ri].proj);
+console.log(`  Spearman vs ACTUAL points: Stokastic sim ROI ${spearman(sROI, aFP).toFixed(3)} | my sim ROI ${spearman(mROI, aFP).toFixed(3)} | my avg rank ${spearman(mRank, aFP).toFixed(3)} | their avg FP ${spearman(sFP, aFP).toFixed(3)} | my avg FP ${spearman(mFP, aFP).toFixed(3)}`);
+console.log(`  Spearman Stokastic vs me on the same entries: ROI ${spearman(sROI, mROI).toFixed(3)} | avg FP ${spearman(sFP, mFP).toFixed(3)}`);
+const cashedIdx = new Set(pairs.map((p, i) => p.e.finish <= 22 ? i : -1).filter(i => i >= 0));
+const topOf = (arr, k) => arr.map((v, i) => i).sort((a, b) => arr[b] - arr[a]).slice(0, k);
+console.log(`  of each sim's top-22 by ROI, cashed: Stokastic ${topOf(sROI, 22).filter(i => cashedIdx.has(i)).length} | mine ${topOf(mROI, 22).filter(i => cashedIdx.has(i)).length} (random ~${(22 * 22 / pairs.length).toFixed(1)})`);
+const me = pairs.find(p => /jtmac/i.test(p.e.user));
+if (me) console.log(`  your entry (${me.e.user}): finished ${me.e.finish}, Stokastic sim ROI ${me.e.stkROI}% rank #${topOf(sROI, pairs.length).indexOf(pairs.indexOf(me)) + 1}, my sim ROI ${resB.rows[me.ri].roi.toFixed(1)}% rank #${topOf(mROI, pairs.length).indexOf(pairs.indexOf(me)) + 1}`);
+// player ROI: Stokastic post-contest sim vs mine on the real field
+const postP = read("DK_MLB_Night_Data_Hub_Player.csv").slice(1).map(r => ({ key: nrm(r[0]), stk: num(r[2]), act: num(r[3]), own: num(r[4]) }));
+const myPRB = playerROI(resB, P, f); const prB = {}; myPRB.forEach(r => prB[P[r.id].key] = r.roi);
+const pp = postP.filter(r => prB[r.key] != null);
+console.log(`  player ROI on the real field (${pp.length} players): Stokastic vs me ${spearman(pp.map(r => r.stk), pp.map(r => prB[r.key])).toFixed(3)} | Stokastic vs actual ${spearman(pp.map(r => r.stk), pp.map(r => r.act)).toFixed(3)} | me vs actual ${spearman(pp.map(r => prB[r.key]), pp.map(r => r.act)).toFixed(3)}`);

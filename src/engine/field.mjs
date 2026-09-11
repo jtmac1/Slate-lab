@@ -3,9 +3,9 @@ import { eligible } from "./formats.mjs";
 import { lineupOK, assignSlots } from "./lineups.mjs";
 
 const DEF = {
-  conc: 1.25, minSal: 47500, rounds: 3, boost: 1.0,
-  sizes: { 5: 0.40, 4: 0.35, 3: 0.25 },          // primary MLB stack size
-  secSizes: { 0: 0.15, 1: 0.15, 2: 0.30, 3: 0.30, 4: 0.10 },  // secondary MLB stack size
+  conc: 1.25, minSal: 49000, rounds: 3, boost: 1.0,
+  sizes: { 5: 0.60, 4: 0.32, 3: 0.08 },          // primary MLB stack size (fitted to real high-dollar fields)
+  secSizes: { 0: 0.05, 1: 0.20, 2: 0.40, 3: 0.30, 4: 0.05 },  // secondary MLB stack size
   oppPitcherPenalty: 0.15, stackTeams: null, sample: 2500
 };
 

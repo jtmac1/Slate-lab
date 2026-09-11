@@ -28,7 +28,7 @@ export function sigmaFor(p, sport, sigmaMax) {
     if (d > 0) { const s = z - Math.sqrt(d); if (s > 0.05 && s < 2) return s; }
   }
   const def = sport === "mlb"
-    ? { P: 0.55, SP: 0.55, RP: 0.60, C: 0.85, "1B": 0.85, "2B": 0.85, "3B": 0.85, SS: 0.85, OF: 0.85 }
+    ? { P: 0.55, SP: 0.55, RP: 0.60, C: 0.60, "1B": 0.60, "2B": 0.60, "3B": 0.60, SS: 0.60, OF: 0.60 }
     : { QB: 0.45, RB: 0.62, WR: 0.72, TE: 0.78, K: 0.42, DST: 0.85 };
   return def[p.pos] || 0.72;
 }
