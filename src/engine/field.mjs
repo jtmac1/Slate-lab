@@ -70,16 +70,22 @@ function genFieldMLB(pool, n, o, rng, log) {
     const out = []; for (let j = 0; j < size; j++) out.push(list[(k + j) % m]);
     return out;
   }
+  // structure targets (fraction of lineups by primary size, and secondary size given primary)
+  const wantSizes = Object.assign({}, o.sizes), wantSec = {};
+  for (const k in (o.secBy || {})) wantSec[k] = Object.assign({}, o.secBy[k]);
+  let sizes = Object.assign({}, o.sizes), secBy = o.secBy ? JSON.parse(JSON.stringify(o.secBy)) : null;
+  const struct = {};
   function draw(count, cnt) {
     const out = []; let tries = 0; const max = count * 60;
+    for (const k in struct) delete struct[k];
     while (out.length < count && tries < max) {
       tries++;
       const used = new Uint8Array(np), tc = {}, ids = [];
       let sal = 0;
-      const T1 = pickTeam(null), s1 = Math.min(pickFrom(o.sizes, rng, 5), byTeam[T1].length);
+      const T1 = pickTeam(null), s1 = Math.min(pickFrom(sizes, rng, 5), byTeam[T1].length);
       for (const p of pickWindow(byTeam[T1], s1)) { used[p.i] = 1; ids.push(p.i); sal += p.sal; }
       tc[T1] = s1;
-      const secDist = (o.secBy && o.secBy[s1]) || o.secSizes;
+      const secDist = (secBy && secBy[s1]) || o.secSizes;
       let s2 = pickFrom(secDist, rng, Math.min(4, 8 - s1)), T2 = null;
       if (s2 > 0) { T2 = pickTeam(T1); s2 = Math.min(s2, byTeam[T2].length); for (const p of pickWindow(byTeam[T2], s2)) { used[p.i] = 1; ids.push(p.i); sal += p.sal; } tc[T2] = s2; }
       const stacked = { [T1]: 1 }; if (T2) stacked[T2] = 1;
@@ -110,15 +116,26 @@ function genFieldMLB(pool, n, o, rng, log) {
       const lu = assignSlots(ids, P, f); if (!lu) continue;
       if (!lineupOK(lu, P, f, teams)) continue;
       out.push(lu); for (const id of lu) cnt[id]++;
+      const sk = s1 + "|" + (T2 ? s2 : 0); struct[sk] = (struct[sk] || 0) + 1;
     }
     return out;
+  }
+  // nudge structure weights so the built field matches the requested stack mix despite salary rejections
+  function calibrateStructure(made) {
+    const norm = d => { let s = 0; for (const k in d) s += Math.max(0, d[k]); return s || 1; };
+    const ws = norm(wantSizes), got1 = {};
+    for (const k in struct) { const s1 = k.split("|")[0]; got1[s1] = (got1[s1] || 0) + struct[k]; }
+    for (const s1 in sizes) { const want = wantSizes[s1] / ws, got = (got1[s1] || 0) / made; sizes[s1] *= Math.max(0.5, Math.min(2, Math.pow((want + 0.01) / (got + 0.01), 0.8))); }
+    if (!secBy) return;
+    for (const s1 in secBy) { const w2 = norm(wantSec[s1] || {}), tot = got1[s1] || 0; if (!tot) continue;
+      for (const s2 in secBy[s1]) { const want = (wantSec[s1][s2] || 0) / w2, got = (struct[s1 + "|" + (s2 === "0" ? 0 : s2)] || 0) / tot; secBy[s1][s2] *= Math.max(0.5, Math.min(2, Math.pow((want + 0.01) / (got + 0.01), 0.8))); } }
   }
   const lines = [];
   for (let r = 0; r < o.rounds; r++) {
     const cnt = new Float64Array(np), m = Math.min(n, o.sample), got = draw(m, cnt);
     if (!got.length) break;
     lines.push(`round ${r + 1}: ${got.length} trial lineups, mean ownership gap ${gap(t, cnt, got.length, np).toFixed(2)} pts`);
-    calibrate(w, t, cnt, got.length, np);
+    calibrate(w, t, cnt, got.length, np); calibrateStructure(got.length);
   }
   const cnt = new Float64Array(np), field = draw(n, cnt);
   lines.push(`final: ${field.length} entries, mean ownership gap ${gap(t, cnt, field.length || 1, np).toFixed(2)} pts`);
