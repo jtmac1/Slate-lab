@@ -12,7 +12,85 @@ const DEF = {
 export function genField(pool, n, opt, rng, log) {
   const o = Object.assign({}, DEF, opt || {});
   if (o.minSal >= pool.format.cap) o.minSal = pool.format.cap - 2000;
-  return pool.format.sport === "mlb" ? genFieldMLB(pool, n, o, rng, log) : genFieldSlots(pool, n, o, rng, log);
+  if (pool.format.sport === "mlb") return genFieldMLB(pool, n, o, rng, log);
+  if (pool.format.key === "nfl_cl") return genFieldNFL(pool, n, o, rng, log);
+  return genFieldSlots(pool, n, o, rng, log);
+}
+
+/* ---------- NFL classic: QB-stack driven (QB+1 / QB+2 / QB+3, optional bring-back) ---------- */
+function genFieldNFL(pool, n, o, rng, log) {
+  const P = pool.players, f = pool.format, np = P.length, teams = pool.teams;
+  const st = Object.assign({ 1: 45, 2: 25, 3: 5, bring: 25 }, o.nflStacks || {});
+  const t = new Float64Array(np), w = new Float64Array(np);
+  for (let i = 0; i < np; i++) { t[i] = Math.max(0, P[i].own) / 100; w[i] = Math.pow(Math.max(t[i], 0.0005), o.conc); }
+  const qbs = P.filter(p => p.pos === "QB" && p.own > 0), byTeamPass = {}, byTeamAll = {};
+  for (const p of P) { if (p.own <= 0 || p.isP) continue; if (p.pos === "WR" || p.pos === "TE" || p.pos === "RB") { (byTeamAll[p.team] = byTeamAll[p.team] || []).push(p); if (p.pos !== "RB") (byTeamPass[p.team] = byTeamPass[p.team] || []).push(p); } }
+  const kTot = Math.max(0, st[1]) + Math.max(0, st[2]) + Math.max(0, st[3]);
+  const wantK = { 0: Math.max(0, 100 - kTot), 1: st[1], 2: st[2], 3: st[3] }, kDist = Object.assign({}, wantK);
+  let bringP = Math.max(0, Math.min(100, st.bring)) / 100; const wantBring = bringP;
+  const need = { QB: 1, RB: 2, WR: 3, TE: 1, DST: 1, FLEX: 1 };
+  const cum = new Float64Array(np), pick = new Int32Array(np);
+  const minCost = pos => { let m = Infinity; for (const p of P) if (p.own >= 0 && (pos === "FLEX" ? ["RB", "WR", "TE"].includes(p.pos) : p.pos === pos) && p.sal < m) m = p.sal; return m === Infinity ? 0 : m; };
+  const minBy = { QB: minCost("QB"), RB: minCost("RB"), WR: minCost("WR"), TE: minCost("TE"), DST: minCost("DST"), FLEX: minCost("FLEX") };
+  const struct = { k: {}, bring: 0, n: 0 };
+  function pickWeighted(list, used, mul) {
+    let tot = 0, m = 0; for (const p of list) { if (used[p.i]) continue; const ww = w[p.i] * (mul ? mul(p) : 1); if (ww <= 0) continue; tot += ww; cum[m] = tot; pick[m] = p.i; m++; }
+    return m ? pick[rng.pickCum(cum, m)] : -1;
+  }
+  function draw(count, cnt) {
+    const out = []; let tries = 0; const max = count * 60;
+    struct.k = {}; struct.bring = 0; struct.n = 0;
+    while (out.length < count && tries < max) {
+      tries++;
+      const used = new Uint8Array(np), ids = [], left = Object.assign({}, need); let sal = 0;
+      const k = pickFrom(kDist, rng, 3);
+      const qb = pickWeighted(qbs, used); if (qb < 0) continue;
+      used[qb] = 1; ids.push(qb); sal += P[qb].sal; left.QB = 0;
+      const team = P[qb].team, opp = P[qb].opp; let bring = false;
+      const take = p => { used[p.i] = 1; ids.push(p.i); sal += p.sal; const slot = left[p.pos] > 0 ? p.pos : "FLEX"; if (left[slot] > 0) left[slot]--; };
+      for (let j = 0; j < k; j++) { const id = pickWeighted(byTeamAll[team] || [], used, p => p.pos === "RB" ? 0.35 : 1); if (id < 0) break; take(P[id]); }
+      if (k > 0 && rng() < bringP && byTeamAll[opp]) { const id = pickWeighted(byTeamAll[opp], used, p => p.pos === "RB" ? 0.4 : 1); if (id >= 0) { take(P[id]); bring = true; } }
+      // fill the rest slot by slot under the salary window
+      let ok = true; const order = ["RB", "WR", "TE", "DST", "FLEX"];
+      let remaining = order.reduce((s, x) => s + left[x] * minBy[x], 0);
+      for (const slot of order) {
+        while (left[slot] > 0) {
+          remaining -= minBy[slot];
+          const hiB = f.cap - sal - remaining, isLast = remaining <= 0, loB = isLast ? o.minSal - sal : -Infinity;
+          const id = pickWeighted(P, used, p => { if (p.own <= 0 && !(p.sal <= loB)) return 0; const okPos = slot === "FLEX" ? ["RB", "WR", "TE"].includes(p.pos) : p.pos === slot; if (!okPos || p.sal > hiB || p.sal < loB) return 0; if (p.pos === "DST" && (p.team === opp || p.opp === team)) return 0.4; return 1; });
+          if (id < 0) { ok = false; break; }
+          used[id] = 1; ids.push(id); sal += P[id].sal; left[slot]--;
+        }
+        if (!ok) break;
+      }
+      if (!ok || ids.length !== f.slots.length || sal > f.cap || sal < o.minSal) continue;
+      const lu = assignSlots(ids, P, f); if (!lu) continue;
+      if (!lineupOK(lu, P, f, teams)) continue;
+      out.push(lu); for (const id of lu) cnt[id]++;
+      // record what actually landed, since the fill stage can add teammates on its own
+      let kObs = 0, bObs = false;
+      for (const id of lu) { const p = P[id]; if (id === qb || p.pos === "DST" || p.pos === "K") continue; if (p.team === team) kObs++; else if (p.team === opp) bObs = true; }
+      kObs = Math.min(3, kObs);
+      struct.k[kObs] = (struct.k[kObs] || 0) + 1; if (kObs && bObs) struct.bring++; struct.n++;
+    }
+    return out;
+  }
+  function calibrateStructure() {
+    const n0 = struct.n || 1, wsum = Object.values(wantK).reduce((s, x) => s + Math.max(0, x), 0) || 1;
+    for (const k in kDist) { const want = Math.max(0, wantK[k]) / wsum, got = (struct.k[k] || 0) / n0; kDist[k] *= Math.max(0.5, Math.min(2, Math.pow((want + 0.01) / (got + 0.01), 0.8))); }
+    const stacked = n0 - (struct.k[0] || 0); if (stacked > 0) { const got = struct.bring / stacked; bringP = Math.max(0, Math.min(1, bringP * Math.max(0.5, Math.min(2, Math.pow((wantBring + 0.01) / (got + 0.01), 0.8))))); }
+  }
+  const lines = [];
+  for (let r = 0; r < o.rounds; r++) {
+    const cnt = new Float64Array(np), m = Math.min(n, o.sample), got = draw(m, cnt);
+    if (!got.length) break;
+    lines.push(`round ${r + 1}: ${got.length} trial lineups, mean ownership gap ${gap(t, cnt, got.length, np).toFixed(2)} pts`);
+    calibrate(w, t, cnt, got.length, np); calibrateStructure();
+  }
+  const cnt = new Float64Array(np), field = draw(n, cnt);
+  lines.push(`final: ${field.length} entries, mean ownership gap ${gap(t, cnt, field.length || 1, np).toFixed(2)} pts`);
+  if (log) lines.forEach(log);
+  return { field, expo: cnt, cC: new Float64Array(np), cF: cnt, log: lines };
 }
 
 function pickFrom(dist, rng, cap) {

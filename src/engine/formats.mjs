@@ -19,7 +19,7 @@ export const FIELDS = [
   ["opp", "Opponent", ["opponent", "opp"]],
   ["sal", "Salary", ["flex $", "flex salary", "salary", "sal"]],
   ["proj", "Projection", ["projection", "proj", "fpts", "points", "my proj"]],
-  ["own", "Ownership %", ["flex own", "ownership", "own%", "proj own", "pown", "own"]],
+  ["own", "Ownership %", ["flex own", "ownership", "own%", "proj own", "pown", "large field", "own", "small field"]],
   ["cown", "CPT ownership %", ["cpt own", "captain own", "cpt ownership"]],
   ["ceil", "Ceiling", ["super ceiling", "ceiling", "ceil", "upside"]],
   ["sd", "Std deviation", ["std dev", "stdev", "sd", "std"]],
@@ -35,6 +35,8 @@ export function detect(headers) {
   if (s.includes("cpt ownership %")) return "Blick showdown";
   if (s.includes("cpt proj") && s.includes("total own")) return "ETR showdown";
   if (s.includes("bat pos.")) return "Data Hub MLB";
+  if (s.includes("optimal %") && s.includes("boom")) return "Stokastic NFL";
+  if (s.includes("small field") && s.includes("large field")) return "ETR NFL";
   if (s.includes("name + id")) return "DraftKings salaries";
   return "";
 }
@@ -56,6 +58,9 @@ export function autoMap(headers) {
     });
     if (best >= 0) { m[f[0]] = best; used[best] = 1; }
   }
+  // ETR lists two ownership columns; large-field is the one that matches GPP play
+  const lf = headers.findIndex(h => String(h).toLowerCase().trim() === "large field");
+  if (lf >= 0 && m.own != null && String(headers[m.own]).toLowerCase().trim() === "small field") m.own = lf;
   return m;
 }
 
@@ -83,7 +88,7 @@ export function buildPool(headers, rows, fkey, map) {
     P.push({
       name: nm, key: nrm(nm), pos: plist[0] || "FLEX", posList: plist,
       team: String(M.team != null ? r[M.team] || "" : "").trim().toUpperCase(),
-      opp: String(M.opp != null ? r[M.opp] || "" : "").trim().toUpperCase(),
+      opp: String(M.opp != null ? r[M.opp] || "" : "").trim().toUpperCase().replace(/^(@|VS\.?|V)\s*/, "").replace(/[^A-Z0-9]/g, ""),
       sal, csal: M.csal != null ? (num(r[M.csal]) || sal * 1.5) : sal * 1.5,
       proj, own, cown,
       ceil: M.ceil != null ? num(r[M.ceil]) : null,

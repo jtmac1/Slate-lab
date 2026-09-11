@@ -13,10 +13,11 @@ import * as store from "./store.mjs";
 /* ================= state ================= */
 const STACK_TYPES = ["5-3", "5-2-1", "5-x", "4-4", "4-3-1", "4-2-x", "4-x", "3-3-x"];
 const STACK_DEF = { "5-3": 17, "5-2-1": 25, "5-x": 15, "4-4": 5, "4-3-1": 10, "4-2-x": 0, "4-x": 10, "3-3-x": 2 };
+const NFL_DEF = { 1: 45, 2: 25, 3: 5, bring: 25 };
 const ARCH = [{ conc: 1.0, minSal: 47500, boost: 0.6, label: "Low Stakes" }, { conc: 1.25, minSal: 49000, boost: 1.0, label: "Marquee" }, { conc: 1.6, minSal: 49300, boost: 1.5, label: "High Stakes" }];
 const S = {
   view: "hub", league: store.get("league", "mlb"), type: store.get("type", "classic"),
-  projText: store.get("projText", ""), projName: store.get("projName", ""), projWhen: store.get("projWhen", ""), tsText: store.get("tsText", ""),
+  projText: store.get("projText", ""), projName: store.get("projName", ""), projWhen: store.get("projWhen", ""), tsWhen: store.get("tsWhen", ""), tsText: store.get("tsText", ""),
   pool: null, share: null, mapOverride: null,
   contest: null, LU: [], luSource: "", fieldMode: false, res: null, favs: new Set(), favOrder: [],
   dk: { entries: [], ids: {}, name: "", dupes: true, sort: "fee" }, gate: store.get("gate", 50),
@@ -34,6 +35,19 @@ const S = {
 };
 const fkey = () => S.league === "nfl" ? (S.type === "showdown" ? "nfl_sd" : "nfl_cl") : "mlb_cl";
 const F = () => FORMATS[fkey()];
+// "DK_MLB_Main_Data_Hub_Projections.csv" -> "MLB Main slate"; "DK_NFL_Early_..." -> "NFL Early slate"
+function slateLabel(name) {
+  const m = String(name || "").match(/DK_(MLB|NFL|NBA|NHL)_(.+?)_Data_Hub/i);
+  if (m) return m[1].toUpperCase() + " " + m[2].replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()) + " slate";
+  return name || "";
+}
+function slateBar() {
+  const p = S.pool, ts = S.share, nP = p ? p.players.filter(x => x.own > 0).length : 0;
+  const a = p ? `<span class="ok">✓</span> <b>Projections</b> ${esc(slateLabel(S.projName))} · ${p.players.length.toLocaleString()} players (${nP} with ownership) · ${p.games.length} game${p.games.length === 1 ? "" : "s"} · loaded ${esc(S.projWhen || "earlier")}` : `<span class="warn">!</span> <b>Projections</b> none loaded`;
+  const b = F().sport === "mlb" ? (ts ? `<span class="ok">✓</span> <b>Top stacks</b> ${Object.keys(ts).length} teams · loaded ${esc(S.tsWhen || "earlier")}` : `<span class="warn">!</span> <b>Top stacks</b> none loaded — stack teams will follow hitter ownership`) : "";
+  const c = S.contest ? `<span class="ok">✓</span> <b>Contest</b> ${S.contest.N.toLocaleString()} entries · generated ${esc(S.contest.when)}` : `<span class="warn">!</span> <b>Contest</b> not generated yet`;
+  return `<div class="slatebar"><span>${a}</span>${b ? `<span>${b}</span>` : ""}<span>${c}</span></div>`;
+}
 const saveCfg = () => store.set("cfg", S.cfg);
 const ts = k => S.ts[k] || (S.ts[k] = { sort: null, page: 0, per: 100 });
 const mean = a => a.length ? a.reduce((s, x) => s + x, 0) / a.length : null;
@@ -80,7 +94,7 @@ function loadTopstacks(text, silent) {
   if (ti < 0 || si < 0) { if (!silent) setStatus("Top stacks file not recognised (needs Team and Top Stack % columns).", true); return; }
   const share = {}, rowsOut = []; rows.slice(1).forEach(r => { const t = String(r[ti] || "").trim().toUpperCase(); const v = num(r[si]); if (t && v != null) { share[t] = v; rowsOut.push(r); } });
   S.share = share; S.tsText = text; S.tsRows = { h: rows[0], rows: rowsOut }; store.set("tsText", text);
-  if (!silent) setStatus(`Top stacks loaded for ${Object.keys(share).length} teams.`);
+  if (!silent) { S.tsWhen = new Date().toLocaleString(); store.set("tsWhen", S.tsWhen); setStatus(`Top stacks loaded for ${Object.keys(share).length} teams.`); }
 }
 function loadLineupsCSV(text, name) {
   if (!S.pool) return;
@@ -134,7 +148,7 @@ function effectivePool() {
 async function generateContest() {
   if (!S.pool || S.busy) return;
   const c = S.cfg, N = Math.max(2, Math.round(+c.pool || 2)), f = F(), a = ARCH[+c.arch] || ARCH[1];
-  const opt = Object.assign({ conc: a.conc, minSal: a.minSal, boost: a.boost, rounds: Math.max(0, Math.round(+c.rounds || 0)), stackTeams: S.share && Object.keys(S.share).length ? S.share : null }, f.sport === "mlb" ? stacksToOpt() : {});
+  const opt = Object.assign({ conc: a.conc, minSal: a.minSal, boost: a.boost, rounds: Math.max(0, Math.round(+c.rounds || 0)), stackTeams: S.share && Object.keys(S.share).length ? S.share : null }, f.sport === "mlb" ? stacksToOpt() : { nflStacks: Object.assign({}, NFL_DEF, c.nflStacks || {}) });
   S.busy = "gen"; S.view = "gen"; render(); setStatus(`Simulating slate — building ${N.toLocaleString()} entries…`); prog(5);
   try {
     const t0 = performance.now(), pool = effectivePool();
@@ -153,6 +167,12 @@ async function generateContest() {
   S.busy = null; if (window.innerWidth <= 700) S.ctlOpen = false; render();
 }
 function stackTypeOf(l, P, f) {
+  if (f.sport === "nfl" && !f.mult) {
+    const qb = l.map(id => P[id]).find(p => p.pos === "QB"); if (!qb) return "No QB";
+    let k = 0, bring = false;
+    for (const id of l) { const p = P[id]; if (p === qb || p.pos === "DST" || p.pos === "K") continue; if (p.team === qb.team) k++; else if (p.team === qb.opp) bring = true; }
+    return (k ? "QB+" + Math.min(3, k) : "No stack") + (k && bring ? " +opp" : "");
+  }
   if (f.sport !== "mlb") return stackOf(l, P, f);
   const c = stackTeams(l, P, f).map(x => x[1]); const a = c[0] || 0, b = c[1] || 0;
   if (a >= 5) return b >= 3 ? "5-3" : b === 2 ? "5-2-1" : "5-x";
@@ -248,7 +268,7 @@ function render() {
   const app = $("#app");
   app.innerHTML = `<nav class="nav"><div class="brand"><i></i>SLATE LAB</div><div class="links">${VIEWS.map(([k, l, s]) => `<button class="lnk" data-view="${k}" aria-selected="${S.view === k}"><span class="long">${l}</span><span class="short">${s}</span></button>`).join("")}</div><div class="grow"></div>
     <div class="right"><button class="btn ghost" id="ctlToggle" title="Show or hide settings">⚙ Settings</button><span class="st">${S.pool ? `<span class="ok">✓</span> ${esc(S.projName || "projections")}` : "No projections"}</span><button class="btn ghost" id="btnBackup">Backup</button></div></nav>
-    <div id="ctl" class="${S.ctlOpen === false ? "collapsed" : ""}"></div><div class="prog"><i id="prog"></i></div><div id="status" class="status">${S.statusErr ? `<span class="err">${esc(S.statusMsg || "")}</span>` : esc(S.statusMsg || "")}</div><div id="tabs"></div><div id="main"></div><div id="bot"></div><div id="modal"></div>`;
+    ${slateBar()}<div id="ctl" class="${S.ctlOpen === false ? "collapsed" : ""}"></div><div class="prog"><i id="prog"></i></div><div id="status" class="status">${S.statusErr ? `<span class="err">${esc(S.statusMsg || "")}</span>` : esc(S.statusMsg || "")}</div><div id="tabs"></div><div id="main"></div><div id="bot"></div><div id="modal"></div>`;
   $$(".lnk").forEach(b => b.addEventListener("click", () => { S.view = b.getAttribute("data-view"); S.pop = null; render(); }));
   $("#btnBackup").addEventListener("click", () => openModal("backup"));
   $("#ctlToggle").addEventListener("click", () => { S.ctlOpen = !S.ctlOpen; $("#ctl").classList.toggle("collapsed", !S.ctlOpen); });
@@ -356,7 +376,7 @@ function renderGen() {
   $("#ctl").innerHTML = `<div class="ctl gen">${commonCtl()}
     ${ctlField("Pool Size", `<select class="sel" data-cfg="pool" id="poolSel">${[250, 500, 1000, 1500, 2000, 5000].map(n => `<option value="${n}"${+S.cfg.pool === n ? " selected" : ""}>${n}</option>`).join("")}<option value="custom"${![250, 500, 1000, 1500, 2000, 5000].includes(+S.cfg.pool) ? " selected" : ""}>Custom: ${![250, 500, 1000, 1500, 2000, 5000].includes(+S.cfg.pool) ? S.cfg.pool : "…"}</option></select>`, true)}
     ${ctlField("Team Controls", `<button class="btn sec" id="btnTeams">Team Controls</button>`, true)}
-    ${mlb ? ctlField("Stack Type Exposures", `<div style="position:relative"><button class="btn sec" id="btnStacks">Stack Type Exposures ✎</button><div id="popStacks"></div></div>`, true) : ""}
+    ${(mlb || fkey() === "nfl_cl") ? ctlField("Stack Type Exposures", `<div style="position:relative"><button class="btn sec" id="btnStacks">Stack Type Exposures ✎</button><div id="popStacks"></div></div>`, true) : ""}
     <div class="f slider"><label>Contest Archetype <span class="i">i</span></label><input type="range" min="0" max="2" step="1" value="${a}" id="arch"><div class="ticks"><span>Low Stakes</span><span>Marquee</span><span>High Stakes</span></div></div>
     <div class="stamp">${S.projWhen ? "Projections loaded: " + esc(S.projWhen) : ""}${S.contest ? "<br>Contest generated " + esc(S.contest.when) : ""}</div>
     <div class="f wide cta"><label>&nbsp;</label><button class="btn gen" id="btnGen"${S.pool && !S.busy ? "" : " disabled"}>${S.contest ? "Generate Lineups" : "Generate Lineups"}</button></div></div>`;
@@ -371,6 +391,16 @@ function renderGen() {
 }
 function renderStackPop() {
   const el = $("#popStacks"); if (!el) return; if (S.pop !== "stacks") { el.innerHTML = ""; return; }
+  if (F().sport === "nfl") {
+    const ns = S.cfg.nflStacks = Object.assign({}, NFL_DEF, S.cfg.nflStacks || {}); const tot = [1, 2, 3].reduce((s, k) => s + Math.max(0, +ns[k] || 0), 0);
+    const row = (k, lab) => `<tr><td><b>${lab}</b></td><td><span class="step"><button class="m" data-ns="${k}|-1">−</button><input data-nsv="${k}" value="${+ns[k] || 0}">%<button class="p" data-ns="${k}|1">+</button></span></td></tr>`;
+    el.innerHTML = `<div class="pop"><h4>Stack Type Exposures</h4><div class="hint">Adjust stack exposures and ensure the desired total is 100% or less. The remainder has no QB stack.</div><table><thead><tr><th>Stack Type</th><th>Desired Exposure</th></tr></thead><tbody>${row(1, "QB + 1")}${row(2, "QB + 2")}${row(3, "QB + 3")}</tbody></table><div class="tot"><span>Total</span><span style="color:${tot > 100 ? "#ff8a8a" : ""}">${tot}%</span></div><table><tbody>${row("bring", "Includes Opposing Player")}</tbody></table><div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px"><button class="btn ghost" id="stDef">Restore Defaults</button><button class="btn" id="stApply">Apply</button></div></div>`;
+    $$("#popStacks [data-ns]").forEach(b => b.addEventListener("click", () => { const [k, d] = b.getAttribute("data-ns").split("|"); ns[k] = Math.max(0, (+ns[k] || 0) + (+d)); renderStackPop(); }));
+    $$("#popStacks [data-nsv]").forEach(i => i.addEventListener("change", () => { ns[i.getAttribute("data-nsv")] = Math.max(0, +i.value || 0); renderStackPop(); }));
+    $("#stDef").addEventListener("click", () => { S.cfg.nflStacks = Object.assign({}, NFL_DEF); renderStackPop(); });
+    $("#stApply").addEventListener("click", () => { saveCfg(); S.pop = null; renderStackPop(); setStatus("Stack exposures saved — regenerate to apply."); });
+    return;
+  }
   const st = S.cfg.stacks; let tot = 0; STACK_TYPES.forEach(k => tot += Math.max(0, +st[k] || 0));
   el.innerHTML = `<div class="pop"><h4>Stack Type Exposures</h4><div class="hint">Adjust stack exposures; the desired total must be 100% or less. The remainder is unstacked.</div><table><thead><tr><th>Stack Type</th><th>Desired Exposure</th></tr></thead><tbody>${STACK_TYPES.map(k => `<tr><td><b>${k}</b></td><td><span class="step"><button class="m" data-st="${k}|-1">−</button><input data-stv="${k}" value="${+st[k] || 0}">%<button class="p" data-st="${k}|1">+</button></span></td></tr>`).join("")}</tbody></table><div class="tot"><span>Unstacked</span><span>${Math.max(0, 100 - tot)}%</span></div><div class="tot"><span>Total</span><span style="color:${tot > 100 ? "#ff8a8a" : ""}">${tot}%</span></div><div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px"><button class="btn ghost" id="stDef">Restore Defaults</button><button class="btn" id="stApply">Apply</button></div></div>`;
   $$("#popStacks [data-st]").forEach(b => b.addEventListener("click", () => { const [k, d] = b.getAttribute("data-st").split("|"); st[k] = Math.max(0, (+st[k] || 0) + (+d)); renderStackPop(); }));
@@ -395,7 +425,14 @@ function mainGen() {
     $("#bot").innerHTML = bottom("gplayers"); wirePager("gplayers", mainGen);
   } else if (t === "stacks") {
     const cnt = {}; c.rk.st.forEach(k => cnt[k] = (cnt[k] || 0) + 1);
-    const rows = (f.sport === "mlb" ? STACK_TYPES.concat(["Unstacked"]) : Object.keys(cnt)).map(k => ({ k, fp: (cnt[k] || 0) / N * 100, want: f.sport === "mlb" ? (k === "Unstacked" ? Math.max(0, 100 - STACK_TYPES.reduce((s, x) => s + (+S.cfg.stacks[x] || 0), 0)) : (+S.cfg.stacks[k] || 0)) : null })).map(r => Object.assign(r, { diff: r.want == null ? null : r.fp - r.want }));
+    let rows;
+    if (f.sport === "nfl" && !f.mult) {
+      const ns = Object.assign({}, NFL_DEF, S.cfg.nflStacks || {}), base = k => Object.keys(cnt).filter(x => x.startsWith(k)).reduce((s, x) => s + cnt[x], 0);
+      const stacked = ["QB+1", "QB+2", "QB+3"].reduce((s, k) => s + base(k), 0), bring = Object.keys(cnt).filter(x => x.endsWith("+opp")).reduce((s, x) => s + cnt[x], 0);
+      rows = [{ k: "QB + 1", fp: base("QB+1") / N * 100, want: +ns[1] || 0 }, { k: "QB + 2", fp: base("QB+2") / N * 100, want: +ns[2] || 0 }, { k: "QB + 3", fp: base("QB+3") / N * 100, want: +ns[3] || 0 },
+        { k: "No QB stack", fp: (N - stacked) / N * 100, want: Math.max(0, 100 - [1, 2, 3].reduce((s, k) => s + (+ns[k] || 0), 0)) }, { k: "Includes opposing player (of stacked)", fp: stacked ? bring / stacked * 100 : 0, want: +ns.bring || 0 }];
+    } else rows = (f.sport === "mlb" ? STACK_TYPES.concat(["Unstacked"]) : Object.keys(cnt)).map(k => ({ k, fp: (cnt[k] || 0) / N * 100, want: f.sport === "mlb" ? (k === "Unstacked" ? Math.max(0, 100 - STACK_TYPES.reduce((s, x) => s + (+S.cfg.stacks[x] || 0), 0)) : (+S.cfg.stacks[k] || 0)) : null }));
+    rows = rows.map(r => Object.assign(r, { diff: r.want == null ? null : r.fp - r.want }));
     main.innerHTML = `<div class="tool"><div class="grow"></div></div>` + grid("gstacks", [{ k: "k", label: "Stack Types" }, { k: "fp", label: "Pool Exposure", num: true, r: r => pctS(r.fp) }, { k: "want", label: "Desired Exposure", num: true, r: r => r.want == null ? "-" : r.want + "%" }, { k: "diff", label: "Difference", num: true, r: r => r.diff == null ? "-" : diffS(r.diff) }], rows, { sort: { k: "fp", d: -1 } });
     wireGrid("gstacks", main, mainGen); $("#bot").innerHTML = bottom("gstacks"); wirePager("gstacks", mainGen);
   } else {
