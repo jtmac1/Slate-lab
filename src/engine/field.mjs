@@ -79,7 +79,8 @@ function genFieldMLB(pool, n, o, rng, log) {
       const T1 = pickTeam(null), s1 = Math.min(pickFrom(o.sizes, rng, 5), byTeam[T1].length);
       for (const p of pickWindow(byTeam[T1], s1)) { used[p.i] = 1; ids.push(p.i); sal += p.sal; }
       tc[T1] = s1;
-      let s2 = pickFrom(o.secSizes, rng, Math.min(4, 8 - s1)), T2 = null;
+      const secDist = (o.secBy && o.secBy[s1]) || o.secSizes;
+      let s2 = pickFrom(secDist, rng, Math.min(4, 8 - s1)), T2 = null;
       if (s2 > 0) { T2 = pickTeam(T1); s2 = Math.min(s2, byTeam[T2].length); for (const p of pickWindow(byTeam[T2], s2)) { used[p.i] = 1; ids.push(p.i); sal += p.sal; } tc[T2] = s2; }
       const stacked = { [T1]: 1 }; if (T2) stacked[T2] = 1;
       // two pitchers, avoiding the ones facing our stacks
