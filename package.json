@@ -1,0 +1,10 @@
+{
+  "name": "slate-lab",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/",
+    "bench": "node bench/mlb-night-2026-09-10.mjs"
+  }
+}
