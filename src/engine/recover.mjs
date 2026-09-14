@@ -46,8 +46,10 @@ export function recoverContest(lineupCSV, playerCSV, teamOf, fkey = "mlb_cl") {
     const proj = solveLS(lus, np, entries.map(e => e.stkFP)), sal = solveLS(lus, np, entries.map(e => e.sal)), act = solveLS(lus, np, entries.map(e => e.actFP));
     P.forEach((p, i) => { p.proj = Math.max(0, proj[i]); p.sal = Math.max(2000, Math.round(sal[i] / 100) * 100); p.csal = p.sal * 1.5; p.act = act[i]; });
   }
+  // Tied entries share a finish position, so rank by finish (then ROI) instead of indexing by finish.
   const N = entries.length, payouts = new Float64Array(N);
-  for (const e of entries) if (e.finish >= 1 && e.finish <= N && e.actROI > -100) payouts[e.finish - 1] = 1 + e.actROI / 100;
+  const ranked = [...entries].sort((a, b) => a.finish - b.finish || b.actROI - a.actROI);
+  ranked.forEach((e, i) => { if (e.actROI > -100) payouts[i] = 1 + e.actROI / 100; });
   const paid = payouts.filter(x => x > 0).length;
   return { pool, entries, payouts, paid, unmatched, rows: L.length };
 }

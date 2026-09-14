@@ -248,12 +248,19 @@ function visibleRows() {
 /* ================= review ================= */
 async function gradeReview() {
   const rv = S.review; if (!rv.files.lineup || !rv.files.player || S.busy) return;
-  S.busy = "review"; render(); setStatus("Looking up teams and opponents from the MLB stats API…"); prog(5);
+  S.busy = "review"; render(); setStatus(F().sport === "nfl" ? "Matching teams from the loaded projections…" : "Looking up teams and opponents from the MLB stats API…"); prog(5);
   try {
     let teamOf = null, teamNote = "";
-    try { teamOf = await store.mlbTeamLookup(S.cfg.rvDate); } catch (e) { teamNote = " MLB lookup failed; graded without teams (no stack correlation)."; }
+    if (F().sport === "nfl") {
+      // No public NFL roster API; teams come from the projections loaded on the Data Hub, if any.
+      const pool = S.pool && S.pool.format && S.pool.format.sport === "nfl" ? S.pool : null;
+      if (pool) { const byKey = {}; for (const p of pool.players) byKey[p.key] = { team: p.team, opp: p.opp }; teamOf = nm => byKey[nrm(nm)] || null; }
+      else teamNote = " No NFL projections loaded; graded without teams (no stack correlation).";
+    } else {
+      try { teamOf = await store.mlbTeamLookup(S.cfg.rvDate); } catch (e) { teamNote = " MLB lookup failed; graded without teams (no stack correlation)."; }
+    }
     setStatus("Rebuilding the field…"); prog(30);
-    const rc = recoverContest(rv.files.lineup, rv.files.player, teamOf, fkey() === "nfl_sd" ? "nfl_sd" : "mlb_cl");
+    const rc = recoverContest(rv.files.lineup, rv.files.player, teamOf, fkey());
     if (rc.entries.length < 10) throw new Error(`Only ${rc.entries.length} entries could be rebuilt from the lineup file.`);
     setStatus(`Simulating ${rc.entries.length} real entries…`);
     const res = await runJob({ type: "simulate", pool: rc.pool, field: [], lineups: rc.entries.map(e => e.lu), payouts: rc.payouts, entries: rc.entries.length, fee: 1, iters: 4000, seed: 1, fieldMode: true }, { onProgress: (d, t) => prog(30 + d / t * 65) });
