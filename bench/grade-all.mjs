@@ -7,10 +7,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { nrm } from "../src/engine/csv.mjs";
+import { nrm, parseCSV } from "../src/engine/csv.mjs";
+import { buildPool } from "../src/engine/formats.mjs";
 import { recoverContest } from "../src/engine/recover.mjs";
 import { buildModel } from "../src/engine/model.mjs";
 import { simulate, playerROI } from "../src/engine/sim.mjs";
+import { genField } from "../src/engine/field.mjs";
+import { stackOf, sigOf, salOf, ownSum, assignSlots } from "../src/engine/lineups.mjs";
 import { mulberry32 } from "../src/engine/rng.mjs";
 import { featurize, gradeRules, spearman, RULES } from "../src/engine/select.mjs";
 
@@ -51,9 +54,23 @@ export function recover(c) {
   return recovered[c.dir] = recoverContest(fs.readFileSync(c.lineup, "utf8"), fs.readFileSync(c.player, "utf8"), teamOf, c.fkey);
 }
 
+// Real entries re-matched onto a projection pool (ceilings, std dev, batting order intact) so
+// the sim is graded on the inputs it gets in the app. Returns null when too few entries match.
+export function matchToProjections(rc, file, fkey) {
+  const pp = poolFromProjections(file, fkey), byKey = {}; pp.players.forEach((p, i) => { if (byKey[p.key] == null) byKey[p.key] = i; });
+  const kept = [];
+  for (const e of rc.entries) { const ids = e.names.map(nm => byKey[nrm(nm)]); if (ids.some(x => x == null)) continue; const lu = assignSlots(ids, pp.players, pp.format); if (lu) kept.push(Object.assign({}, e, { lu })); }
+  if (kept.length < rc.entries.length * 0.9) return null;
+  for (const q of rc.pool.players) { const i = byKey[q.key]; if (i != null) { pp.players[i].stkROI = q.stkROI; pp.players[i].actROI = q.actROI; } }
+  return { pool: pp, entries: kept };
+}
+
 export function gradeContest(c, opts = {}) {
   const iters = opts.iters || 4000, rc = recover(c);
-  const { pool, entries, payouts, paid } = rc, P = pool.players, N = entries.length, lus = entries.map(e => e.lu);
+  let { pool, entries } = rc; const { payouts, paid } = rc;
+  const pf = opts.proj === true ? projFileFor(c) : opts.proj || null, m = pf ? matchToProjections(rc, pf, c.fkey) : null;
+  if (m) { pool = m.pool; entries = m.entries; }
+  const P = pool.players, N = entries.length, lus = entries.map(e => e.lu);
   const t0 = Date.now();
   const model = buildModel(pool, opts.model || {});
   const res = simulate({ pool, model, field: [], lineups: lus, payouts, entries: N, fee: 1, iters, rng: mulberry32(SEED), fieldMode: true });
@@ -65,12 +82,56 @@ export function gradeContest(c, opts = {}) {
   const pr = {}; playerROI(res, P, pool.format).forEach(r => pr[r.id] = r.roi);
   const pp = P.filter(p => (p.own > 0 || p.cown > 0) && pr[p.i] != null);
   const mult = pool.format.mult, resid = Math.sqrt(mean(entries.map(e => (e.stkFP - e.lu.reduce((s, id, q) => s + (mult ? mult[q] : 1) * P[id].proj, 0)) ** 2)));
-  return { ...c, N, rows: rc.rows, paid, unmatched: rc.unmatched, players: P.length, teams: pool.teams.length, games: pool.games.length, ms: Date.now() - t0, resid,
+  return { ...c, src: m ? "projections" : "recovered", N, rows: rc.rows, paid, unmatched: rc.unmatched, players: P.length, teams: pool.teams.length, games: pool.games.length, ms: Date.now() - t0, resid,
     fieldROI: mean(entries.map(e => e.actROI)), grades,
     sStk: spearman(stk, actFP), sMine: spearman(mine, actFP), sProj: spearman(entries.map(e => e.stkFP), actFP), agree: spearman(mine, stk),
     cashStk: topOf(stk, paid).filter(i => cashSet.has(i)).length, cashMine: topOf(mine, paid).filter(i => cashSet.has(i)).length, cashRand: paid * paid / N,
     roiStk: mean(topOf(stk, k).map(i => entries[i].actROI)), roiMine: mean(topOf(mine, k).map(i => entries[i].actROI)),
     pStk: spearman(pp.map(p => p.stkROI), pp.map(p => p.actROI)), pMine: spearman(pp.map(p => pr[p.i]), pp.map(p => p.actROI)), pAgree: spearman(pp.map(p => pr[p.i]), pp.map(p => p.stkROI)) };
+}
+
+// How close is a generated field (app defaults, Marquee archetype) to the real one?
+const STACK_DEF = { "5-3": 23, "5-2-1": 29, "5-x": 11, "4-4": 4, "4-3-1": 8, "4-2-x": 5, "4-x": 2, "3-3-x": 3 };   // keep in step with src/app/main.mjs
+const NFL_DEF = { 1: 45, 2: 25, 3: 5, bring: 25 };
+function mlbStackOpt() {
+  const g = k => STACK_DEF[k] || 0, p5 = g("5-3") + g("5-2-1") + g("5-x"), p4 = g("4-4") + g("4-3-1") + g("4-2-x") + g("4-x"), p3x = g("3-3-x"), unst = Math.max(0, 100 - p5 - p4 - p3x);
+  return { sizes: { 5: p5, 4: p4, 3: p3x + unst }, secBy: { 5: { 3: g("5-3"), 2: g("5-2-1"), 1: g("5-x") }, 4: { 4: g("4-4"), 3: g("4-3-1"), 2: g("4-2-x"), 1: g("4-x") }, 3: { 3: p3x, 2: unst * 0.5, 1: unst * 0.5 } } };
+}
+// Projections file for a contest, if one was saved: the generator is judged on the same
+// inputs it gets in the app (batting order, real salaries) rather than recovered ones.
+function projFileFor(c) {
+  const dirs = [path.join("data", c.dir), path.join("data", c.dir.replace(/-post$/, "")), path.join("data", `${c.date}-${c.sport}-main`)];
+  for (const d of dirs) if (fs.existsSync(d)) { const f = fs.readdirSync(d).find(x => /Data_Hub_Projections\.csv$/i.test(x)); if (f) return path.join(d, f); }
+  return null;
+}
+function poolFromProjections(file, fkey) {
+  const rows = parseCSV(fs.readFileSync(file, "utf8")), pool = buildPool(rows[0], rows.slice(1), fkey);
+  return pool;
+}
+export function fieldCheck(c, opts = {}) {
+  const rc = recover(c), pf = opts.proj === false ? null : projFileFor(c);
+  let pool = rc.pool, entries = rc.entries;
+  if (pf) {
+    // real lineups re-matched onto the projection pool; entries whose players are not in it are dropped
+    const pp = poolFromProjections(pf, c.fkey), byKey = {}; pp.players.forEach((p, i) => { if (byKey[p.key] == null) byKey[p.key] = i; });
+    const kept = [];
+    for (const e of rc.entries) { const ids = e.names.map(nm => byKey[nrm(nm)]); if (ids.some(x => x == null)) continue; const lu = assignSlots(ids, pp.players, pp.format); if (lu) kept.push(Object.assign({}, e, { lu })); }
+    if (kept.length >= rc.entries.length * 0.8) { pool = pp; entries = kept; }
+  }
+  const P = pool.players, f = pool.format, N = entries.length, real = entries.map(e => e.lu);
+  const opt = Object.assign({ conc: 1.25, minSal: 49000, boost: 1.0, rounds: 3 }, f.sport === "mlb" ? mlbStackOpt() : { nflStacks: NFL_DEF }, opts.gen || {});
+  const t0 = Date.now(), gen = genField(pool, N, opt, mulberry32(SEED)).field, ms = Date.now() - t0;
+  const dist = lus => { const d = {}; for (const l of lus) { const k = stackOf(l, P, f); d[k] = (d[k] || 0) + 1 / lus.length; } return d; };
+  const dr = dist(real), dg = dist(gen), keys = [...new Set(Object.keys(dr).concat(Object.keys(dg)))];
+  const tvd = 0.5 * keys.reduce((s, k) => s + Math.abs((dr[k] || 0) - (dg[k] || 0)), 0);
+  const dupes = lus => lus.length - new Set(lus.map(l => sigOf(l, f))).size;
+  const expo = lus => { const e = new Float64Array(P.length); for (const l of lus) for (const id of l) e[id] += 100 / lus.length; return e; };
+  const er = expo(real), eg = expo(gen), big = P.map((p, i) => i).filter(i => er[i] >= 1);
+  const gap = mean(big.map(i => Math.abs(er[i] - eg[i])));
+  const worst = big.map(i => ({ name: P[i].name, real: er[i], gen: eg[i] })).sort((a, b) => Math.abs(b.real - b.gen) - Math.abs(a.real - a.gen)).slice(0, 4);
+  const top = Object.entries(dr).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, v]) => `${k} ${(100 * v).toFixed(0)}/${(100 * (dg[k] || 0)).toFixed(0)}`).join("  ");
+  return { dir: c.dir, fkey: c.fkey, src: pool === rc.pool ? "recovered" : "projections", N, gen: gen.length, ms, tvd, dupReal: dupes(real), dupGen: dupes(gen), salReal: mean(real.map(l => salOf(l, P, f))), salGen: mean(gen.map(l => salOf(l, P, f))),
+    ownReal: mean(real.map(l => ownSum(l, P, f))), ownGen: mean(gen.map(l => ownSum(l, P, f))), gap, worst, top };
 }
 
 export function printSummary(rows) {
@@ -91,8 +152,19 @@ export function printSummary(rows) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const ITERS = +(process.argv[2] || 4000), FILTER = process.argv[3] || "";
+  const args = process.argv.slice(2), FIELD = args.includes("--field"), rest = args.filter(a => a !== "--field");
+  const ITERS = +(rest[0] || 4000), FILTER = rest[1] || "";
   const contests = listContests().filter(c => !FILTER || c.dir.includes(FILTER) || c.fkey.includes(FILTER));
+  if (FIELD) {
+    // node bench/grade-all.mjs --field [iters-ignored] [filter]: generated field vs the real one
+    console.log("contest".padEnd(40) + "N     stackTVD  dupes real/gen  salary real/gen   ownsum real/gen  expo gap | top stacks real/gen %");
+    for (const c of contests) {
+      const r = fieldCheck(c);
+      console.log(r.dir.padEnd(40) + String(r.N).padEnd(6) + r.tvd.toFixed(2).padEnd(10) + `${r.dupReal}/${r.dupGen}`.padEnd(16) + `${r.salReal.toFixed(0)}/${r.salGen.toFixed(0)}`.padEnd(18) + `${r.ownReal.toFixed(0)}/${r.ownGen.toFixed(0)}`.padEnd(17) + r.gap.toFixed(1).padEnd(9) + "| " + r.top);
+      console.log("".padEnd(46) + "largest exposure misses: " + r.worst.map(w => `${w.name} ${w.real.toFixed(0)}→${w.gen.toFixed(0)}`).join(", ") + ` (${r.ms} ms)`);
+    }
+    process.exit(0);
+  }
   const rows = [];
   for (const c of contests) {
     const r = gradeContest(c, { iters: ITERS }); rows.push(r);

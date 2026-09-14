@@ -21,14 +21,18 @@ function ckey(a, b) { let i = POSES.indexOf(a), j = POSES.indexOf(b); if (i < 0)
 // produce absurd tails (a 2-point hitter scoring 50).
 export const SIGMA_MAX = 0.6;
 export const SIGMA_DEF = {
-  mlb: { P: 0.55, SP: 0.55, RP: 0.60, C: 0.60, "1B": 0.60, "2B": 0.60, "3B": 0.60, SS: 0.60, OF: 0.60 },
+  // Pitcher value from bench/sweep-mlb.mjs: the one change that held up on both holdout halves of 8 contests.
+  mlb: { P: 0.45, SP: 0.45, RP: 0.50, C: 0.60, "1B": 0.60, "2B": 0.60, "3B": 0.60, SS: 0.60, OF: 0.60 },
   // NFL values from bench/sweep-nfl.mjs over the 2026-09-13 classic slates and three showdowns.
   nfl: { QB: 0.55, RB: 0.50, WR: 0.60, TE: 0.65, K: 0.55, DST: 0.85 }
 };
 export function sigmaFor(p, sport, sigmaMax, sigmaDef) {
   const cap = sigmaMax ?? SIGMA_MAX;
-  if (p.sd != null && p.sd > 0 && p.proj > 0) { const r = p.sd / p.proj; return Math.min(cap, Math.sqrt(Math.log(1 + r * r))); }
-  if (p.ceil != null && p.ceil > p.proj) {
+  // MLB uses the calibrated per-position values: vendor std dev puts nearly every hitter on the
+  // cap anyway and made pitchers too volatile (bench ablation on 2026-09-10 and 09-11, both worse).
+  const fromFile = sport !== "mlb";
+  if (fromFile && p.sd != null && p.sd > 0 && p.proj > 0) { const r = p.sd / p.proj; return Math.min(cap, Math.sqrt(Math.log(1 + r * r))); }
+  if (fromFile && p.ceil != null && p.ceil > p.proj) {
     const L = Math.log(p.ceil / p.proj), z = 1.036, d = z * z - 2 * L;
     if (d > 0) { const s = z - Math.sqrt(d); if (s > 0.05 && s < 2) return s; }
   }

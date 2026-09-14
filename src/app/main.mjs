@@ -12,7 +12,8 @@ import * as store from "./store.mjs";
 
 /* ================= state ================= */
 const STACK_TYPES = ["5-3", "5-2-1", "5-x", "4-4", "4-3-1", "4-2-x", "4-x", "3-3-x"];
-const STACK_DEF = { "5-3": 17, "5-2-1": 25, "5-x": 15, "4-4": 5, "4-3-1": 10, "4-2-x": 0, "4-x": 10, "3-3-x": 2 };
+// MLB stack mix measured from seven real DK main-slate fields, 2026-09-06 to 09-12 ($67K-$350K contests).
+const STACK_DEF = { "5-3": 23, "5-2-1": 29, "5-x": 11, "4-4": 4, "4-3-1": 8, "4-2-x": 5, "4-x": 2, "3-3-x": 3 };
 const NFL_DEF = { 1: 45, 2: 25, 3: 5, bring: 25 };
 const ARCH = [{ conc: 1.0, minSal: 47500, boost: 0.6, label: "Low Stakes" }, { conc: 1.25, minSal: 49000, boost: 1.0, label: "Marquee" }, { conc: 1.6, minSal: 49300, boost: 1.5, label: "High Stakes" }];
 const S = {
@@ -26,7 +27,7 @@ const S = {
     arch: 1, conc: 1.25, minSal: 49000, boost: 1.0, rounds: 3, seed: 1, stacks: Object.assign({}, STACK_DEF),
     wP: 50, wO: 50, n: 20, obj: "blend", rand: 18, maxExp: 60, bMinSal: 0, minUniq: 1, stackSize: 0, force: "", exclude: "",
     iters: 5000, simSeed: 1, rvDate: new Date().toISOString().slice(0, 10), rvName: "", uniques: 0
-  }, store.get("cfg", {})),
+  }, store.get("cfg", {}), (s => s && JSON.stringify(s) === JSON.stringify({ "5-3": 17, "5-2-1": 25, "5-x": 15, "4-4": 5, "4-3-1": 10, "4-2-x": 0, "4-x": 10, "3-3-x": 2 }) ? { stacks: Object.assign({}, STACK_DEF) } : {})(store.get("cfg", {}).stacks)),   // saved copies of the old default move to the measured mix
   teamCtl: { removed: {}, boost: {} }, boosts: {}, plCap: {}, plBoost: {},
   filt: { q: "", pos: "ALL", projMin: "", projMax: "", ownMin: "", ownMax: "", salMin: "", types: {}, incl: "", excl: "" },
   tab: { hub: "proj", gen: "players", sim: "proj", review: "grade" },
@@ -56,6 +57,8 @@ const ts = k => S.ts[k] || (S.ts[k] = { sort: null, page: 0, per: 100 });
 const mean = a => a.length ? a.reduce((s, x) => s + x, 0) / a.length : null;
 const fmt = (v, d = 1) => v == null || isNaN(v) ? "—" : (+v).toFixed(d);
 const pctS = (v, d = 1) => v == null || isNaN(v) ? "—" : (+v).toFixed(d) + "%";
+// ROI with its standard error: "+12.3% ±4"
+const roiCell = r => pctS(r.roi) + (r.se != null ? ` <span class="hint" title="standard error of the simulated ROI">±${r.se.toFixed(0)}</span>` : "");
 const money = v => v == null || isNaN(v) ? "—" : "$" + Math.round(v).toLocaleString();
 const diffS = v => v == null || isNaN(v) ? "—" : `<span class="${v >= 0 ? "diffpos" : "diffneg"}">${v >= 0 ? "" : ""}${(+v).toFixed(1)}%</span>`;
 const nameCell = p => { const parts = p.name.split(" "); const first = parts.shift(); const badge = p.isP ? '<span class="badge p">P</span>' : (p.ord ? `<span class="badge o">${p.ord}</span>` : ""); return `<span class="pname"><span class="first">${esc(first)}</span> ${esc(parts.join(" "))}</span>${badge}`; };
@@ -157,8 +160,9 @@ async function generateContest() {
   const opt = Object.assign({ conc: a.conc, minSal: a.minSal, boost: a.boost, rounds: Math.max(0, Math.round(+c.rounds || 0)), stackTeams: S.share && Object.keys(S.share).length ? S.share : null }, f.sport === "mlb" ? stacksToOpt() : { nflStacks: Object.assign({}, NFL_DEF, c.nflStacks || {}) });
   S.busy = "gen"; S.view = "gen"; render(); setStatus(`Simulating slate — building ${N.toLocaleString()} entries…`); prog(5);
   try {
-    const t0 = performance.now(), pool = effectivePool();
-    const g = await runJob({ type: "genField", pool: poolMsg(pool), n: N, opt, seed: +c.seed || 1 }, { onLog: line => { setStatus(line); prog(Math.min(90, 20 + 20 * (S.contest ? 0 : 1))); } });
+    const t0 = performance.now(), pool = effectivePool(), seed = +c.seed || 1;
+    const g = await runJob({ type: "genField", pool: poolMsg(pool), n: N, opt, seed }, { onLog: line => { setStatus(line); prog(Math.min(90, 20 + 20 * (S.contest ? 0 : 1))); } });
+    c.seed = seed + 1; saveCfg();   // the next Regenerate rolls a fresh field; the seed used is shown so any run can be repeated
     if (!g.field.length) throw new Error("No lineups could be built with these settings.");
     const P = S.pool.players, field = g.field, sig = {}; let uniq = 0, top = 0;
     for (const l of field) { const k = sigOf(l, f); sig[k] = (sig[k] || 0) + 1; } for (const k in sig) { uniq++; if (sig[k] > top) top = sig[k]; }
@@ -166,9 +170,9 @@ async function generateContest() {
     for (let i = 0; i < M; i++) { const l = field[i]; proj[i] = projOf(l, P, f); own[i] = ownSum(l, P, f); sal[i] = salOf(l, P, f); dup[i] = sig[sigOf(l, f)] - 1; st[i] = stackTypeOf(l, P, f); tmz[i] = stackTeams(l, P, f).filter(x => x[1] >= 2).map(x => x[0]).join(","); }
     const rank = arr => { const idx = arr.map((v, i) => i).sort((a2, b) => arr[b] - arr[a2]); const r = new Int32Array(M); idx.forEach((i, k) => r[i] = k + 1); return r; };
     const { pay, fee } = payoutsFor(N);
-    S.contest = { N, fee, pay, paidN: paidCount(pay), field, expo: g.expo, cC: g.cC, cF: g.cF, log: g.log, opt, uniq, top, sig, rk: { proj, own, sal, dup, st, tmz, pr: rank(proj), or: rank(own) }, ms: performance.now() - t0, when: new Date().toLocaleTimeString() };
+    S.contest = { N, fee, pay, paidN: paidCount(pay), field, expo: g.expo, cC: g.cC, cF: g.cF, log: g.log, opt, uniq, top, sig, seed, rk: { proj, own, sal, dup, st, tmz, pr: rank(proj), or: rank(own) }, ms: performance.now() - t0, when: new Date().toLocaleTimeString() };
     rankOverall(); S.res = null; S.tab.gen = "players";
-    setStatus(`Contest ready — ${M.toLocaleString()} entries in ${(S.contest.ms / 1000).toFixed(1)}s, ${uniq.toLocaleString()} unique. ${g.log[g.log.length - 1] || ""}`); prog(100);
+    setStatus(`Contest ready — ${M.toLocaleString()} entries in ${(S.contest.ms / 1000).toFixed(1)}s, ${uniq.toLocaleString()} unique, field seed ${seed}. ${g.log[g.log.length - 1] || ""}`); prog(100);
   } catch (e) { setStatus(e.message, true); prog(0); }
   S.busy = null; if (window.innerWidth <= 700) S.ctlOpen = false; render();
 }
@@ -205,15 +209,18 @@ function buildMine() {
 async function runSim() {
   if (!S.pool || !S.LU.length || S.busy) return;
   if (!S.contest) { setStatus("Generate a contest first (Contest Generator).", true); return; }
-  const c = S.contest, iters = Math.max(100, Math.round(+S.cfg.iters || 5000));
+  // iters is one checkpoint; the engine keeps going (up to 4x) until the top of the ROI ranking settles
+  const c = S.contest, iters = Math.max(100, Math.round(+S.cfg.iters || 5000)), seed = +S.cfg.simSeed || 1;
   S.busy = "sim"; render(); setStatus("Running contest simulation…"); prog(2);
   try {
     const t0 = performance.now();
-    const res = await runJob({ type: "simulate", pool: poolMsg(S.pool), field: S.fieldMode ? [] : c.field, lineups: S.LU, payouts: c.pay, entries: c.N, fee: c.fee, iters, seed: +S.cfg.simSeed || 1, fieldMode: S.fieldMode },
-      { onProgress: (d, t) => { prog(d / t * 100); setStatus(`Simulating — ${d.toLocaleString()} / ${t.toLocaleString()}`); } });
+    const res = await runJob({ type: "simulate", pool: poolMsg(S.pool), field: S.fieldMode ? [] : c.field, lineups: S.LU, payouts: c.pay, entries: c.N, fee: c.fee, iters, maxIters: iters * 4, seed, fieldMode: S.fieldMode },
+      { onProgress: (d, t) => { prog(d / t * 100); setStatus(`Simulating — ${d.toLocaleString()} draws, checking whether the ranking has settled every ${iters.toLocaleString()}`); } });
+    S.cfg.simSeed = seed + 1; saveCfg();   // next run re-draws; the seed used is shown so any run can be repeated
     res.rows.forEach(r => { r.type = stackTypeOf(r.lu, S.pool.players, F()); r.teams = stackTeams(r.lu, S.pool.players, F()).filter(x => x[1] >= 2).map(x => x[0]).join(","); });
     res.feats = featurize(res.rows); applyScore(res); S.res = res; S.tab.sim = "lineups"; ts("lineups").page = 0;
-    setStatus(`Simulation done — ${iters.toLocaleString()} iterations in ${((performance.now() - t0) / 1000).toFixed(1)}s, ${S.fieldMode ? "the " + c.N.toLocaleString() + "-entry field scored against itself" : "your " + S.LU.length + " lineups against " + res.FS.toLocaleString() + " contest entries"}.`); prog(100);
+    const topSE = res.rows.slice().sort((a, b) => b.roi - a.roi).slice(0, 20).map(r => r.se).sort((a, b) => a - b), medSE = topSE.length ? topSE[topSE.length >> 1] : 0;
+    setStatus(`Simulation done — ${res.iters.toLocaleString()} draws (seed ${seed}) in ${((performance.now() - t0) / 1000).toFixed(1)}s, ${S.fieldMode ? "the " + c.N.toLocaleString() + "-entry field scored against itself" : "your " + S.LU.length + " lineups against " + res.FS.toLocaleString() + " contest entries"}. Top-20 ROI is good to about ±${medSE.toFixed(0)} points.`); prog(100);
   } catch (e) { setStatus(e.message, true); prog(0); }
   S.busy = null; if (window.innerWidth <= 700) S.ctlOpen = false; render();
 }
@@ -254,7 +261,7 @@ async function gradeReview() {
     if (F().sport === "nfl") {
       // Teams and real positions (showdown files only say CPT/FLEX) come from the projections loaded on the Data Hub, if any.
       const pool = S.pool && S.pool.format && S.pool.format.sport === "nfl" ? S.pool : null;
-      if (pool) { const byKey = {}; for (const p of pool.players) byKey[p.key] = { team: p.team, opp: p.opp, pos: p.pos }; teamOf = nm => byKey[nrm(nm)] || null; }
+      if (pool) { const byKey = {}; for (const p of pool.players) byKey[p.key] = { team: p.team, opp: p.opp, pos: p.pos, ceil: p.ceil, sd: p.sd }; teamOf = nm => byKey[nrm(nm)] || null; }
       else teamNote = " No NFL projections loaded; graded without teams (no stack correlation).";
     } else {
       try { teamOf = await store.mlbTeamLookup(S.cfg.rvDate); } catch (e) { teamNote = " MLB lookup failed; graded without teams (no stack correlation)."; }
@@ -502,7 +509,7 @@ function mainSim() {
       main.innerHTML = `<div class="tool"><span class="hint">${S.LU.length.toLocaleString()} lineups loaded from ${esc(S.luSource)}. ${S.contest ? "Run the contest simulation to score them." : "Generate a contest first."}</span></div>` + grid("lu0", [{ k: "i", label: "#", num: true, r: r => r.i + 1 }, { k: "proj", label: "Projected FP", num: true, r: r => r.proj.toFixed(2) }, { k: "own", label: "OwnSum", num: true, r: r => pctS(r.own) }, { k: "type", label: "Stack Type", cls: "ctr" }, { k: "sal", label: "Salary", num: true, r: r => r.sal.toLocaleString() }, { k: "l", label: "Lineups", sortable: false, r: r => luCell(r.l, P, f) }], rows, { sort: { k: "proj", d: -1 } });
       wireGrid("lu0", main, mainSim); bot.innerHTML = `<div class="bot">${pager("lu0", mainSim)}<div class="grow"></div><button class="btn" id="run2"${S.contest && !S.busy ? "" : " disabled"}>Run Contest Simulation</button></div>`; wirePager("lu0", mainSim); $("#run2").addEventListener("click", runSim); return; }
     const rows = visibleRows();
-    const cols = [{ k: "roi", label: "Simulated ROI", info: true, sticky: "l", cls: r => "roi " + (r.roi >= 0 ? "pos" : "neg"), r: r => pctS(r.roi) }, { k: "score", label: "Score", info: true, num: true, r: r => r.score > -1e8 ? pctS(r.score, 0) : '<span class="hint">below gate</span>' },
+    const cols = [{ k: "roi", label: "Simulated ROI", info: true, sticky: "l", cls: r => "roi " + (r.roi >= 0 ? "pos" : "neg"), r: r => roiCell(r) }, { k: "score", label: "Score", info: true, num: true, r: r => r.score > -1e8 ? pctS(r.score, 0) : '<span class="hint">below gate</span>' },
       { k: "proj", label: "Projected FP", info: true, num: true, r: r => r.proj.toFixed(2) }, { k: "own", label: "OwnSum", info: true, num: true, r: r => pctS(r.own) }, { k: "teams", label: "Stack", cls: "ctr" }, { k: "type", label: "Stack Type", cls: "ctr" },
       { k: "win", label: "Win%", info: true, num: true, r: r => pctS(r.win, 3) }, { k: "t10", label: "Top 10%", info: true, num: true, r: r => pctS(r.t10, 3) }, { k: "cash", label: "Cash%", info: true, num: true, r: r => pctS(r.cash, 3) }, { k: "dupN", label: "Dupes", info: true, num: true },
       { k: "lu", label: "Lineups", sortable: false, r: r => luCell(r.lu, P, f) }, { k: "sal", label: "Salary", num: true, r: r => "$" + r.sal.toLocaleString() }, { k: "fav", label: "", sortable: false, sticky: "r", cls: "ctr", r: r => `<span class="heart${S.favs.has(r.i) ? " on" : ""}" data-fav="${r.i}">${S.favs.has(r.i) ? "♥" : "♡"}</span>` }];
@@ -527,7 +534,7 @@ function mainSim() {
     wireGrid("sroi", main, mainSim); bot.innerHTML = ""; return; }
   if (t === "favs") { const rows = S.favOrder.filter(i => res && res.rows[i]).map(i => res.rows[i]);
     if (!rows.length) { main.innerHTML = `<div class="empty">No Lineups have been favorited</div>`; bot.innerHTML = favBot(); wireFavBot(); return; }
-    main.innerHTML = `<div class="tool"><div class="grow"></div><span class="hint">${rows.length} favorites</span></div>` + grid("favs", [{ k: "roi", label: "Simulated ROI", sticky: "l", cls: r => "roi " + (r.roi >= 0 ? "pos" : "neg"), r: r => pctS(r.roi) }, { k: "proj", label: "Projected FP", num: true, r: r => r.proj.toFixed(2) }, { k: "own", label: "OwnSum", num: true, r: r => pctS(r.own) }, { k: "teams", label: "Stack", cls: "ctr" }, { k: "type", label: "Stack Type", cls: "ctr" }, { k: "lu", label: "Lineups", sortable: false, r: r => luCell(r.lu, P, f) }, { k: "sal", label: "Salary", num: true, r: r => "$" + r.sal.toLocaleString() }, { k: "fav", label: "", sortable: false, sticky: "r", cls: "ctr", r: r => `<span class="heart on" data-fav="${r.i}">♥</span>` }], rows, { sort: { k: "roi", d: -1 } });
+    main.innerHTML = `<div class="tool"><div class="grow"></div><span class="hint">${rows.length} favorites</span></div>` + grid("favs", [{ k: "roi", label: "Simulated ROI", sticky: "l", cls: r => "roi " + (r.roi >= 0 ? "pos" : "neg"), r: r => roiCell(r) }, { k: "proj", label: "Projected FP", num: true, r: r => r.proj.toFixed(2) }, { k: "own", label: "OwnSum", num: true, r: r => pctS(r.own) }, { k: "teams", label: "Stack", cls: "ctr" }, { k: "type", label: "Stack Type", cls: "ctr" }, { k: "lu", label: "Lineups", sortable: false, r: r => luCell(r.lu, P, f) }, { k: "sal", label: "Salary", num: true, r: r => "$" + r.sal.toLocaleString() }, { k: "fav", label: "", sortable: false, sticky: "r", cls: "ctr", r: r => `<span class="heart on" data-fav="${r.i}">♥</span>` }], rows, { sort: { k: "roi", d: -1 } });
     wireGrid("favs", main, mainSim); $$("#main [data-fav]").forEach(el => el.addEventListener("click", () => { toggleFav(+el.getAttribute("data-fav")); mainSim(); })); bot.innerHTML = favBot("favs"); wireFavBot("favs"); return; }
   if (t === "expo") {
     const src = S.favs.size ? S.favOrder.map(i => S.LU[i]) : [], N = src.length, c = S.contest, FN = c ? c.field.length : 0;

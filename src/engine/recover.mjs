@@ -62,7 +62,8 @@ export function recoverContest(lineupCSV, playerCSV, teamOf, fkey = "mlb_cl") {
     const posRaw = (isCpt || slotPos === "FLEX") && t && t.pos ? t.pos : slotPos;
     const plist = posRaw.split("/"), isP = f.sport === "mlb" ? (plist.includes("SP") || plist.includes("RP") || plist.includes("P")) : plist[0] === "DST";
     const p = { name: pl.name, key, pos: isP && f.sport === "mlb" ? "P" : plist[0], posList: isP && f.sport === "mlb" ? ["P"] : plist,
-      team: t ? t.team : "", opp: t ? t.opp || "" : "", sal: 0, csal: 0, proj: 0, own: isCpt ? 0 : pl.own || 0, fown: isCpt ? 0 : pl.own || 0, cown: isCpt ? pl.own || 0 : 0, ceil: null, sd: null, ord: null, isP, stkROI: pl.stk, actROI: pl.act };
+      team: t ? t.team : "", opp: t ? t.opp || "" : "", sal: 0, csal: 0, proj: 0, own: isCpt ? 0 : pl.own || 0, fown: isCpt ? 0 : pl.own || 0, cown: isCpt ? pl.own || 0 : 0,
+      ceil: t && t.ceil > 0 ? t.ceil : null, sd: t && t.sd > 0 ? t.sd : null, ord: t && t.ord ? t.ord : null, isP, stkROI: pl.stk, actROI: pl.act };   // upside and order from loaded projections when the reference has them
     byKey[p.key] = P.length; P.push(p);
   }
   const teams = [...new Set(P.map(p => p.team).filter(Boolean))].sort(), gmap = {}, games = [];

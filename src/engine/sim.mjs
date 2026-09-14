@@ -4,25 +4,31 @@ import { drawScores, makeScratch } from "./model.mjs";
 import { sigOf, salOf, ownSum, stackOf } from "./lineups.mjs";
 import { paidCount } from "./payouts.mjs";
 
+// a.iters is one checkpoint; with a.maxIters the sim keeps going in checkpoints until the
+// top of the ROI ranking (top 5%, at least 20 lineups) overlaps 90% with the previous
+// checkpoint, so results stop moving before it stops. Every row carries se, the standard
+// error of its ROI in points.
 export function simulate(a) {
   const { pool, model, field, lineups, payouts, entries, fee, rng } = a;
-  const iters = Math.max(1, a.iters || 5000), fieldMode = !!a.fieldMode, onProgress = a.onProgress;
+  const base = Math.max(1, a.iters || 5000), maxIters = Math.max(base, a.maxIters || base), fieldMode = !!a.fieldMode, onProgress = a.onProgress;
   const P = pool.players, f = pool.format, n = P.length, nl = lineups.length, mult = f.mult;
   const FS = fieldMode ? 0 : Math.max(1, Math.min(field.length, entries - nl));
   const fld = field.slice(0, FS);
   const pay = payouts, paidN = paidCount(pay);
   const top1 = Math.max(1, Math.round(entries * 0.01)), top10 = Math.max(1, Math.round(entries * 0.10));
+  const topK = nl <= 20 ? Math.max(3, Math.ceil(nl / 2)) : Math.max(20, Math.round(nl * 0.05));   // small sets: is the top half settled?
+  const topSet = () => new Set(Array.from(wsum.keys()).sort((x, y) => wsum[y] - wsum[x]).slice(0, topK));
 
   const win = new Float64Array(nl), t1 = new Float64Array(nl), t10 = new Float64Array(nl), cash = new Float64Array(nl),
-    wsum = new Float64Array(nl), dupe = new Float64Array(nl), ptsum = new Float64Array(nl), ranksum = new Float64Array(nl);
+    wsum = new Float64Array(nl), wsq = new Float64Array(nl), dupe = new Float64Array(nl), ptsum = new Float64Array(nl), ranksum = new Float64Array(nl);
   const sigF = {}, sigL = {}, fdup = new Float64Array(nl);
   for (const l of fld) { const k = sigOf(l, f); sigF[k] = (sigF[k] || 0) + 1; }
   for (const l of lineups) { const k = sigOf(l, f); sigL[k] = (sigL[k] || 0) + 1; }
   for (let i = 0; i < nl; i++) { const k = sigOf(lineups[i], f); fdup[i] = (sigF[k] || 0) + (sigL[k] || 1) - 1; }
 
   const sc = new Float64Array(n), all = new Float64Array(FS + nl), ms = new Float64Array(nl), scratch = makeScratch(model, pool);
-  let anyTop1 = 0;
-  for (let it = 0; it < iters; it++) {
+  let anyTop1 = 0, iters = 0, prevTop = null;
+  for (let it = 0; it < maxIters; it++) {
     drawScores(model, pool, rng, sc, scratch);
     for (let k = 0; k < FS; k++) { const l = fld[k]; let t = 0; for (let q = 0; q < l.length; q++) t += (mult ? mult[q] : 1) * sc[l[q]]; all[k] = t; }
     for (let k = 0; k < nl; k++) { const l = lineups[k]; let t = 0; for (let q = 0; q < l.length; q++) t += (mult ? mult[q] : 1) * sc[l[q]]; ms[k] = t; ptsum[k] += t; all[FS + k] = t; }
@@ -40,19 +46,25 @@ export function simulate(a) {
       if (rank <= paidN) cash[k]++;
       const cnt = 1 + ties, steps = Math.max(1, Math.round(cnt));
       let w = 0; for (let r = rank; r < rank + steps && r <= pay.length; r++) w += pay[r - 1];
-      wsum[k] += w / cnt;
+      wsum[k] += w / cnt; wsq[k] += (w / cnt) * (w / cnt);
       if (ties >= 1) dupe[k]++;
     }
     if (hit) anyTop1++;
-    if (onProgress && (it % 200 === 199 || it === iters - 1)) onProgress(it + 1, iters);
+    iters = it + 1;
+    if (onProgress && (it % 200 === 199 || iters === maxIters)) onProgress(iters, maxIters);
+    if (iters % base === 0 && iters < maxIters) {
+      const top = topSet();
+      if (prevTop) { let same = 0; for (const x of top) if (prevTop.has(x)) same++; if (same >= 0.9 * topK) break; }
+      prevTop = top;
+    }
   }
   const rows = []; let prodMiss = 1;
   for (let k = 0; k < nl; k++) {
-    const ev = wsum[k] / iters;
+    const ev = wsum[k] / iters, sd = Math.sqrt(Math.max(0, wsq[k] / iters - ev * ev));
     rows.push({ i: k, lu: lineups[k], proj: ptsum[k] / iters, avgRank: ranksum[k] / iters,
       win: win[k] / iters * 100, t1: t1[k] / iters * 100, t10: t10[k] / iters * 100, cash: cash[k] / iters * 100,
       dupe: dupe[k] / iters * 100, dupN: fdup[k], own: ownSum(lineups[k], P, f), sal: salOf(lineups[k], P, f),
-      stack: stackOf(lineups[k], P, f), ev, roi: fee > 0 ? (ev / fee - 1) * 100 : null });
+      stack: stackOf(lineups[k], P, f), ev, roi: fee > 0 ? (ev / fee - 1) * 100 : null, se: fee > 0 ? sd / Math.sqrt(iters) / fee * 100 : null });
     prodMiss *= (1 - t1[k] / iters);
   }
   const tot = rows.reduce((s, r) => s + r.ev, 0);

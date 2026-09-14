@@ -9,6 +9,17 @@ const DEF = {
   oppPitcherPenalty: 0.15, stackTeams: null, sample: 2500
 };
 
+// Projected ownership under-calls chalk in real fields: on the 2026-09-11 Mega 8s, players
+// projected 15-30% came in at 25% and those above 30% at 48%, while everyone under 15% landed
+// on projection. Raising ownership to the power conc and rescaling each position group back
+// to its roster mass reproduces that; the calibration rounds then aim at these targets.
+function concTargets(P, conc, key, val) {
+  const t = new Float64Array(P.length), raw = {}, mass = {};
+  for (let i = 0; i < P.length; i++) { const g = key(P[i]), o = Math.max(0, val(P[i])) / 100; raw[g] = (raw[g] || 0) + o; t[i] = Math.pow(o, conc); mass[g] = (mass[g] || 0) + t[i]; }
+  for (let i = 0; i < P.length; i++) { const g = key(P[i]); t[i] = mass[g] > 0 ? t[i] * raw[g] / mass[g] : 0; }
+  return t;
+}
+
 export function genField(pool, n, opt, rng, log) {
   const o = Object.assign({}, DEF, opt || {});
   if (o.minSal >= pool.format.cap) o.minSal = pool.format.cap - 2000;
@@ -21,8 +32,8 @@ export function genField(pool, n, opt, rng, log) {
 function genFieldNFL(pool, n, o, rng, log) {
   const P = pool.players, f = pool.format, np = P.length, teams = pool.teams;
   const st = Object.assign({ 1: 45, 2: 25, 3: 5, bring: 25 }, o.nflStacks || {});
-  const t = new Float64Array(np), w = new Float64Array(np);
-  for (let i = 0; i < np; i++) { t[i] = Math.max(0, P[i].own) / 100; w[i] = Math.pow(Math.max(t[i], 0.0005), o.conc); }
+  const t = concTargets(P, o.conc, p => f.sport === "mlb" ? (p.isP ? "P" : "H") : p.pos, p => p.own), w = new Float64Array(np);
+  for (let i = 0; i < np; i++) w[i] = Math.max(t[i], 0.0005);
   const qbs = P.filter(p => p.pos === "QB" && p.own > 0), byTeamPass = {}, byTeamAll = {};
   for (const p of P) { if (p.own <= 0 || p.isP) continue; if (p.pos === "WR" || p.pos === "TE" || p.pos === "RB") { (byTeamAll[p.team] = byTeamAll[p.team] || []).push(p); if (p.pos !== "RB") (byTeamPass[p.team] = byTeamPass[p.team] || []).push(p); } }
   const kTot = Math.max(0, st[1]) + Math.max(0, st[2]) + Math.max(0, st[3]);
@@ -88,6 +99,12 @@ function genFieldNFL(pool, n, o, rng, log) {
     calibrate(w, t, cnt, got.length, np); calibrateStructure();
   }
   const cnt = new Float64Array(np), field = draw(n, cnt);
+  // A real field has every entry filled. If the salary window rejects too much (small slate,
+  // stack-heavy mix), relax the floor in steps and top the field up rather than come up short.
+  for (let relax = 0; field.length < n && relax < 4 && o.minSal > 40000; relax++) {
+    o.minSal -= 500; const more = draw(n - field.length, cnt); for (const lu of more) field.push(lu);
+    lines.push(`salary floor relaxed to ${o.minSal}: +${more.length} entries`);
+  }
   lines.push(`final: ${field.length} entries, mean ownership gap ${gap(t, cnt, field.length || 1, np).toFixed(2)} pts`);
   if (log) lines.forEach(log);
   return { field, expo: cnt, cC: new Float64Array(np), cF: cnt, log: lines };
@@ -117,13 +134,15 @@ function gap(t, cnt, made, np) {
 /* ---------- MLB classic: stack-driven ---------- */
 function genFieldMLB(pool, n, o, rng, log) {
   const P = pool.players, f = pool.format, np = P.length, teams = pool.teams;
-  const t = new Float64Array(np), w = new Float64Array(np);
-  for (let i = 0; i < np; i++) { t[i] = Math.max(0, P[i].own) / 100; w[i] = Math.pow(Math.max(t[i], 0.0005), o.conc); }
+  const t = concTargets(P, o.conc, p => f.sport === "mlb" ? (p.isP ? "P" : "H") : p.pos, p => p.own), w = new Float64Array(np);
+  for (let i = 0; i < np; i++) w[i] = Math.max(t[i], 0.0005);
   const hitters = P.filter(p => !p.isP && p.own > 0);
   const pitchers = P.filter(p => p.isP && p.own > 0);
   const byTeam = {};
   for (const p of hitters) (byTeam[p.team] = byTeam[p.team] || []).push(p);
-  for (const tm in byTeam) byTeam[tm].sort((a, b) => (a.ord || 99) - (b.ord || 99));
+  // Batting order when the projections carry it; otherwise ownership stands in for it so
+  // stack windows still group a team's most-played bats rather than whoever sits next in the file.
+  for (const tm in byTeam) byTeam[tm].sort((a, b) => (a.ord || 99) - (b.ord || 99) || b.own - a.own);
   // Primary-stack team shares: given, or from hitter ownership mass.
   let share = {};
   if (o.stackTeams) share = Object.assign({}, o.stackTeams);
@@ -156,7 +175,7 @@ function genFieldMLB(pool, n, o, rng, log) {
   let sizes = Object.assign({}, o.sizes), secBy = o.secBy ? JSON.parse(JSON.stringify(o.secBy)) : null;
   const struct = {};
   function draw(count, cnt) {
-    const out = []; let tries = 0; const max = count * 60;
+    const out = []; let tries = 0; const max = count * 150;
     for (const k in struct) delete struct[k];
     while (out.length < count && tries < max) {
       tries++;
@@ -218,6 +237,12 @@ function genFieldMLB(pool, n, o, rng, log) {
     calibrate(w, t, cnt, got.length, np); calibrateStructure(got.length);
   }
   const cnt = new Float64Array(np), field = draw(n, cnt);
+  // A real field has every entry filled. If the salary window rejects too much (small slate,
+  // stack-heavy mix), relax the floor in steps and top the field up rather than come up short.
+  for (let relax = 0; field.length < n && relax < 4 && o.minSal > 40000; relax++) {
+    o.minSal -= 500; const more = draw(n - field.length, cnt); for (const lu of more) field.push(lu);
+    lines.push(`salary floor relaxed to ${o.minSal}: +${more.length} entries`);
+  }
   lines.push(`final: ${field.length} entries, mean ownership gap ${gap(t, cnt, field.length || 1, np).toFixed(2)} pts`);
   if (log) lines.forEach(log);
   return { field, expo: cnt, cC: new Float64Array(np), cF: cnt, log: lines };
@@ -243,12 +268,9 @@ function genFieldSlots(pool, n, o, rng, log) {
     el.push(list); cheap.push(mn === Infinity ? 0 : mn);
   }
   const suf = new Float64Array(ns + 1); for (let s = ns - 1; s >= 0; s--) suf[s] = suf[s + 1] + cheap[s];
-  const tC = new Float64Array(np), tF = new Float64Array(np), wC = new Float64Array(np), wF = new Float64Array(np);
-  for (let i = 0; i < np; i++) {
-    tC[i] = f.mult ? Math.max(0, P[i].cown) / 100 : 0;
-    tF[i] = Math.max(0, f.mult ? P[i].fown : P[i].own) / 100;
-    wC[i] = Math.pow(Math.max(tC[i], 0.0005), o.conc); wF[i] = Math.pow(Math.max(tF[i], 0.0005), o.conc);
-  }
+  const tC = f.mult ? concTargets(P, o.conc, () => "CPT", p => p.cown) : new Float64Array(np);
+  const tF = concTargets(P, o.conc, p => f.mult ? "FLEX" : p.pos, p => f.mult ? p.fown : p.own), wC = new Float64Array(np), wF = new Float64Array(np);
+  for (let i = 0; i < np; i++) { wC[i] = Math.max(tC[i], 0.0005); wF[i] = Math.max(tF[i], 0.0005); }
   const cum = new Float64Array(np), pick = new Int32Array(np);
   function draw(count, cC, cF) {
     const out = []; let tries = 0; const max = count * 40;
