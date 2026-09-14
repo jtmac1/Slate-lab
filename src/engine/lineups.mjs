@@ -60,6 +60,8 @@ export function lineupOK(lu, P, f, teams) {
 export function assignSlots(ids, P, f) {
   const slots = f.slots, n = slots.length;
   if (ids.length !== n) return null;
+  // Showdown: the given order is the slot order (captain first); matching would reverse it.
+  if (f.anySlot) return ids.slice();
   const match = new Array(n).fill(-1); // slot -> player index in ids
   const tryPlayer = (k, seen) => {
     for (let s = 0; s < n; s++) {

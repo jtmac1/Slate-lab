@@ -20,16 +20,19 @@ function ckey(a, b) { let i = POSES.indexOf(a), j = POSES.indexOf(b); if (i < 0)
 // Lognormal sigma. Capped: a tiny projection with a large std dev would otherwise
 // produce absurd tails (a 2-point hitter scoring 50).
 export const SIGMA_MAX = 0.6;
-export function sigmaFor(p, sport, sigmaMax) {
+export const SIGMA_DEF = {
+  mlb: { P: 0.55, SP: 0.55, RP: 0.60, C: 0.60, "1B": 0.60, "2B": 0.60, "3B": 0.60, SS: 0.60, OF: 0.60 },
+  // NFL values from bench/sweep-nfl.mjs over the 2026-09-13 classic slates and three showdowns.
+  nfl: { QB: 0.55, RB: 0.50, WR: 0.60, TE: 0.65, K: 0.55, DST: 0.85 }
+};
+export function sigmaFor(p, sport, sigmaMax, sigmaDef) {
   const cap = sigmaMax ?? SIGMA_MAX;
   if (p.sd != null && p.sd > 0 && p.proj > 0) { const r = p.sd / p.proj; return Math.min(cap, Math.sqrt(Math.log(1 + r * r))); }
   if (p.ceil != null && p.ceil > p.proj) {
     const L = Math.log(p.ceil / p.proj), z = 1.036, d = z * z - 2 * L;
     if (d > 0) { const s = z - Math.sqrt(d); if (s > 0.05 && s < 2) return s; }
   }
-  const def = sport === "mlb"
-    ? { P: 0.55, SP: 0.55, RP: 0.60, C: 0.60, "1B": 0.60, "2B": 0.60, "3B": 0.60, SS: 0.60, OF: 0.60 }
-    : { QB: 0.45, RB: 0.62, WR: 0.72, TE: 0.78, K: 0.42, DST: 0.85 };
+  const def = sigmaDef || SIGMA_DEF[sport] || SIGMA_DEF.nfl;
   return def[p.pos] || 0.72;
 }
 
@@ -82,7 +85,7 @@ function jacobi(A, n) {
 // Pairwise matrix repaired to positive-definite, then Cholesky. Factor model above cholMax.
 export function buildModel(pool, opts = {}) {
   const P = pool.players, sport = pool.format.sport, n = P.length, cholMax = opts.cholMax ?? 220;
-  const sig = new Float64Array(n); for (let i = 0; i < n; i++) sig[i] = sigmaFor(P[i], sport, opts.sigmaMax);
+  const sig = new Float64Array(n); for (let i = 0; i < n; i++) sig[i] = sigmaFor(P[i], sport, opts.sigmaMax, opts.sigmaDef);
   if (n > cholMax) {
     const tbl = LOAD[sport], L = [];
     for (const p of P) {

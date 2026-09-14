@@ -252,9 +252,9 @@ async function gradeReview() {
   try {
     let teamOf = null, teamNote = "";
     if (F().sport === "nfl") {
-      // No public NFL roster API; teams come from the projections loaded on the Data Hub, if any.
+      // Teams and real positions (showdown files only say CPT/FLEX) come from the projections loaded on the Data Hub, if any.
       const pool = S.pool && S.pool.format && S.pool.format.sport === "nfl" ? S.pool : null;
-      if (pool) { const byKey = {}; for (const p of pool.players) byKey[p.key] = { team: p.team, opp: p.opp }; teamOf = nm => byKey[nrm(nm)] || null; }
+      if (pool) { const byKey = {}; for (const p of pool.players) byKey[p.key] = { team: p.team, opp: p.opp, pos: p.pos }; teamOf = nm => byKey[nrm(nm)] || null; }
       else teamNote = " No NFL projections loaded; graded without teams (no stack correlation).";
     } else {
       try { teamOf = await store.mlbTeamLookup(S.cfg.rvDate); } catch (e) { teamNote = " MLB lookup failed; graded without teams (no stack correlation)."; }
