@@ -85,10 +85,12 @@ export function buildPool(headers, rows, fkey, map) {
     const plist = praw ? praw.split("/") : ["FLEX"];
     let own = M.own != null ? num(r[M.own]) : null; if (own == null) own = 0;
     const cown = M.cown != null ? (num(r[M.cown]) ?? Math.max(0.1, own / 6)) : Math.max(0.1, own / 6);
+    const oppRaw = String(M.opp != null ? r[M.opp] || "" : "").trim().toUpperCase();
     P.push({
       name: nm, key: nrm(nm), pos: plist[0] || "FLEX", posList: plist,
       team: String(M.team != null ? r[M.team] || "" : "").trim().toUpperCase(),
-      opp: String(M.opp != null ? r[M.opp] || "" : "").trim().toUpperCase().replace(/^(@|VS\.?|V)\s*/, "").replace(/[^A-Z0-9]/g, ""),
+      opp: oppRaw.replace(/^(@|VS\.?|V)\s*/, "").replace(/[^A-Z0-9]/g, ""),
+      home: /^@/.test(oppRaw) ? false : /^VS?\.?\s/.test(oppRaw) ? true : null,   // "@DAL" means this team is away
       sal, csal: M.csal != null ? (num(r[M.csal]) || sal * 1.5) : sal * 1.5,
       proj, own, cown,
       ceil: M.ceil != null ? num(r[M.ceil]) : null,
@@ -112,7 +114,10 @@ export function buildPool(headers, rows, fkey, map) {
     p.isP = f.sport === "mlb" ? (p.posList.includes("P") || p.pos === "SP" || p.pos === "RP") : p.pos === "DST";
     p.fown = (f.mult && src === "ETR showdown") ? Math.max(0, p.own - p.cown) : p.own;
   });
-  return { players: P, teams, games, src, map: M, format: f };
+  // showdown: which side is away, when the opponent column said so ("@DAL" / "vs NYG")
+  let away = null, home = null;
+  if (teams.length === 2) { const a = P.find(p => p.home === false), h = P.find(p => p.home === true); away = a ? a.team : h ? h.opp : null; home = away ? teams.find(t => t !== away) || null : null; }
+  return { players: P, teams, games, src, map: M, format: f, away, home };
 }
 
 export function eligible(p, slot, f) {

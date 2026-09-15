@@ -27,9 +27,12 @@ export function simulate(a) {
   for (let i = 0; i < nl; i++) { const k = sigOf(lineups[i], f); fdup[i] = (sigF[k] || 0) + (sigL[k] || 1) - 1; }
 
   const sc = new Float64Array(n), all = new Float64Array(FS + nl), ms = new Float64Array(nl), scratch = makeScratch(model, pool);
+  // story: the average score of every player in the draws where each lineup finishes top 1%
+  const story = !!a.story, meanSc = story ? new Float64Array(n) : null, winSc = story ? new Float64Array(nl * n) : null, winN = story ? new Float64Array(nl) : null;
   let anyTop1 = 0, iters = 0, prevTop = null;
   for (let it = 0; it < maxIters; it++) {
     drawScores(model, pool, rng, sc, scratch);
+    if (story) for (let j = 0; j < n; j++) meanSc[j] += sc[j];
     for (let k = 0; k < FS; k++) { const l = fld[k]; let t = 0; for (let q = 0; q < l.length; q++) t += (mult ? mult[q] : 1) * sc[l[q]]; all[k] = t; }
     for (let k = 0; k < nl; k++) { const l = lineups[k]; let t = 0; for (let q = 0; q < l.length; q++) t += (mult ? mult[q] : 1) * sc[l[q]]; ms[k] = t; ptsum[k] += t; all[FS + k] = t; }
     all.sort();
@@ -41,7 +44,7 @@ export function simulate(a) {
       const above = all.length - lo, ties = fdup[k], rank = above + 1;
       ranksum[k] += rank;
       if (rank === 1) win[k] += 1 / (1 + ties);
-      if (rank <= top1) { t1[k]++; hit = true; }
+      if (rank <= top1) { t1[k]++; hit = true; if (story) { winN[k]++; const o = k * n; for (let j = 0; j < n; j++) winSc[o + j] += sc[j]; } }
       if (rank <= top10) t10[k]++;
       if (rank <= paidN) cash[k]++;
       const cnt = 1 + ties, steps = Math.max(1, Math.round(cnt));
@@ -65,6 +68,12 @@ export function simulate(a) {
       win: win[k] / iters * 100, t1: t1[k] / iters * 100, t10: t10[k] / iters * 100, cash: cash[k] / iters * 100,
       dupe: dupe[k] / iters * 100, dupN: fdup[k], own: ownSum(lineups[k], P, f), sal: salOf(lineups[k], P, f),
       stack: stackOf(lineups[k], P, f), ev, roi: fee > 0 ? (ev / fee - 1) * 100 : null, se: fee > 0 ? sd / Math.sqrt(iters) / fee * 100 : null });
+    if (story) {
+      // per player: score in this lineup's winning draws relative to its usual score
+      const o = k * n, m = new Float64Array(n);
+      for (let j = 0; j < n; j++) m[j] = winN[k] && meanSc[j] > 0 ? (winSc[o + j] / winN[k]) / (meanSc[j] / iters) : 1;
+      rows[k].story = { wins: winN[k], mult: Array.from(m) };
+    }
     prodMiss *= (1 - t1[k] / iters);
   }
   const tot = rows.reduce((s, r) => s + r.ev, 0);

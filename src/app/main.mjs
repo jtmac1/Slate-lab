@@ -57,6 +57,13 @@ const ts = k => S.ts[k] || (S.ts[k] = { sort: null, page: 0, per: 100 });
 const mean = a => a.length ? a.reduce((s, x) => s + x, 0) / a.length : null;
 const fmt = (v, d = 1) => v == null || isNaN(v) ? "—" : (+v).toFixed(d);
 const pctS = (v, d = 1) => v == null || isNaN(v) ? "—" : (+v).toFixed(d) + "%";
+// Showdown stack column, Stokastic style: "AWAY n | HOME n", every roster spot counted.
+// Away/home comes from the projections' opponent column ("@DAL"); otherwise alphabetical.
+function sdStack(lu, P) {
+  const pool = S.pool, tc = {}; for (const id of lu) { const t = P[id].team; if (t) tc[t] = (tc[t] || 0) + 1; }
+  const order = pool.away && pool.home ? [pool.away, pool.home] : pool.teams.slice(0, 2);
+  return order.map(t => `${t} ${tc[t] || 0}`).join(" | ");
+}
 // ROI with its standard error: "+12.3% ±4"
 const roiCell = r => pctS(r.roi) + (r.se != null ? ` <span class="hint" title="standard error of the simulated ROI">±${r.se.toFixed(0)}</span>` : "");
 const money = v => v == null || isNaN(v) ? "—" : "$" + Math.round(v).toLocaleString();
@@ -167,11 +174,11 @@ async function generateContest() {
     const P = S.pool.players, field = g.field, sig = {}; let uniq = 0, top = 0;
     for (const l of field) { const k = sigOf(l, f); sig[k] = (sig[k] || 0) + 1; } for (const k in sig) { uniq++; if (sig[k] > top) top = sig[k]; }
     const M = field.length, proj = new Float64Array(M), own = new Float64Array(M), sal = new Float64Array(M), dup = new Int32Array(M), st = new Array(M), tmz = new Array(M);
-    for (let i = 0; i < M; i++) { const l = field[i]; proj[i] = projOf(l, P, f); own[i] = ownSum(l, P, f); sal[i] = salOf(l, P, f); dup[i] = sig[sigOf(l, f)] - 1; st[i] = stackTypeOf(l, P, f); tmz[i] = stackTeams(l, P, f).filter(x => x[1] >= 2).map(x => x[0]).join(","); }
+    for (let i = 0; i < M; i++) { const l = field[i]; proj[i] = projOf(l, P, f); own[i] = ownSum(l, P, f); sal[i] = salOf(l, P, f); dup[i] = sig[sigOf(l, f)] - 1; st[i] = stackTypeOf(l, P, f); tmz[i] = f.mult ? sdStack(l, P) : stackTeams(l, P, f).filter(x => x[1] >= 2).map(x => x[0]).join(","); }
     const rank = arr => { const idx = arr.map((v, i) => i).sort((a2, b) => arr[b] - arr[a2]); const r = new Int32Array(M); idx.forEach((i, k) => r[i] = k + 1); return r; };
     const { pay, fee } = payoutsFor(N);
     S.contest = { N, fee, pay, paidN: paidCount(pay), field, expo: g.expo, cC: g.cC, cF: g.cF, log: g.log, opt, uniq, top, sig, seed, rk: { proj, own, sal, dup, st, tmz, pr: rank(proj), or: rank(own) }, ms: performance.now() - t0, when: new Date().toLocaleTimeString() };
-    rankOverall(); S.res = null; S.tab.gen = "players";
+    rankOverall(); S.res = null; S.sd = null; S.sdPick = null; S.tab.gen = "players";
     setStatus(`Contest ready — ${M.toLocaleString()} entries in ${(S.contest.ms / 1000).toFixed(1)}s, ${uniq.toLocaleString()} unique, field seed ${seed}. ${g.log[g.log.length - 1] || ""}`); prog(100);
   } catch (e) { setStatus(e.message, true); prog(0); }
   S.busy = null; if (window.innerWidth <= 700) S.ctlOpen = false; render();
@@ -214,15 +221,27 @@ async function runSim() {
   S.busy = "sim"; render(); setStatus("Running contest simulation…"); prog(2);
   try {
     const t0 = performance.now();
-    const res = await runJob({ type: "simulate", pool: poolMsg(S.pool), field: S.fieldMode ? [] : c.field, lineups: S.LU, payouts: c.pay, entries: c.N, fee: c.fee, iters, maxIters: iters * 4, seed, fieldMode: S.fieldMode },
+    const res = await runJob({ type: "simulate", pool: poolMsg(S.pool), field: S.fieldMode ? [] : c.field, lineups: S.LU, payouts: c.pay, entries: c.N, fee: c.fee, iters, maxIters: iters * 4, seed, fieldMode: S.fieldMode, story: !!F().mult },
       { onProgress: (d, t) => { prog(d / t * 100); setStatus(`Simulating — ${d.toLocaleString()} draws, checking whether the ranking has settled every ${iters.toLocaleString()}`); } });
     S.cfg.simSeed = seed + 1; saveCfg();   // next run re-draws; the seed used is shown so any run can be repeated
-    res.rows.forEach(r => { r.type = stackTypeOf(r.lu, S.pool.players, F()); r.teams = stackTeams(r.lu, S.pool.players, F()).filter(x => x[1] >= 2).map(x => x[0]).join(","); });
+    res.rows.forEach(r => { r.type = stackTypeOf(r.lu, S.pool.players, F()); r.teams = F().mult ? sdStack(r.lu, S.pool.players) : stackTeams(r.lu, S.pool.players, F()).filter(x => x[1] >= 2).map(x => x[0]).join(","); });
     res.feats = featurize(res.rows); applyScore(res); S.res = res; S.tab.sim = "lineups"; ts("lineups").page = 0;
     const topSE = res.rows.slice().sort((a, b) => b.roi - a.roi).slice(0, 20).map(r => r.se).sort((a, b) => a - b), medSE = topSE.length ? topSE[topSE.length >> 1] : 0;
     setStatus(`Simulation done — ${res.iters.toLocaleString()} draws (seed ${seed}) in ${((performance.now() - t0) / 1000).toFixed(1)}s, ${S.fieldMode ? "the " + c.N.toLocaleString() + "-entry field scored against itself" : "your " + S.LU.length + " lineups against " + res.FS.toLocaleString() + " contest entries"}. Top-20 ROI is good to about ±${medSE.toFixed(0)} points.`); prog(100);
   } catch (e) { setStatus(e.message, true); prog(0); }
   S.busy = null; if (window.innerWidth <= 700) S.ctlOpen = false; render();
+}
+// Showdown: every near-optimal lineup by structure, measured against the generated field.
+async function runStructures() {
+  if (!S.pool || !S.contest || S.busy) return;
+  S.busy = "sd"; render(); setStatus("Enumerating showdown lineups by structure…"); prog(10);
+  try {
+    const t0 = performance.now(), r = await runJob({ type: "sdStructures", pool: poolMsg(S.pool), field: S.contest.field, per: 40, minFrac: 0.9 });
+    const top = Math.max(0, ...r.rows.map(x => x.lineups[0].proj));
+    S.sd = { rows: r.rows, top, when: Date.now() }; S.sdPick = r.rows.length ? r.rows[0].structure : null;
+    setStatus(`${r.rows.length} structures have a lineup within 10% of the best projection (${((performance.now() - t0) / 1000).toFixed(1)}s).`); prog(100);
+  } catch (e) { setStatus(e.message, true); prog(0); }
+  S.busy = null; render();
 }
 function applyScore(res) { const sc = selectScore(res.feats, +S.gate || 0); res.rows.forEach((r, i) => { r.score = sc[i]; r.rProj = res.feats[i].rProj; }); }
 function toggleFav(i) { if (S.favs.has(i)) { S.favs.delete(i); S.favOrder = S.favOrder.filter(x => x !== i); } else { S.favs.add(i); S.favOrder.push(i); } }
@@ -489,7 +508,7 @@ function renderSim() {
   $("#dlProj").addEventListener("click", e => { e.preventDefault(); if (S.projText) download(S.projName || "projections.csv", S.projText); });
   $("#btnEntry").addEventListener("click", () => openModal("entry"));
   $("#run").addEventListener("click", runSim);
-  $("#tabs").innerHTML = tabsHtml("sim", [["proj", "Projections"], ["lineups", "Lineups", S.res ? S.res.rows.length.toLocaleString() : (S.LU.length ? S.LU.length.toLocaleString() : "")], ["proi", "Player ROI"]].concat(mlb ? [["sroi", "Stack ROI"]] : []).concat([["favs", "Favorites", S.favs.size || ""], ["expo", "Exposures"]])); wireTabs("sim");
+  $("#tabs").innerHTML = tabsHtml("sim", [["proj", "Projections"], ["lineups", "Lineups", S.res ? S.res.rows.length.toLocaleString() : (S.LU.length ? S.LU.length.toLocaleString() : "")], ["proi", "Player ROI"]].concat(mlb ? [["sroi", "Stack ROI"]] : []).concat(F().mult ? [["sd", "Structures", S.sd ? S.sd.rows.length : ""]] : []).concat([["favs", "Favorites", S.favs.size || ""], ["expo", "Exposures"]])); wireTabs("sim");
   mainSim();
 }
 function overviewBox() {
@@ -511,8 +530,9 @@ function mainSim() {
     const rows = visibleRows();
     const cols = [{ k: "roi", label: "Simulated ROI", info: true, sticky: "l", cls: r => "roi " + (r.roi >= 0 ? "pos" : "neg"), r: r => roiCell(r) }, { k: "score", label: "Score", info: true, num: true, r: r => r.score > -1e8 ? pctS(r.score, 0) : '<span class="hint">below gate</span>' },
       { k: "proj", label: "Projected FP", info: true, num: true, r: r => r.proj.toFixed(2) }, { k: "own", label: "OwnSum", info: true, num: true, r: r => pctS(r.own) }, { k: "teams", label: "Stack", cls: "ctr" }, { k: "type", label: "Stack Type", cls: "ctr" },
-      { k: "win", label: "Win%", info: true, num: true, r: r => pctS(r.win, 3) }, { k: "t10", label: "Top 10%", info: true, num: true, r: r => pctS(r.t10, 3) }, { k: "cash", label: "Cash%", info: true, num: true, r: r => pctS(r.cash, 3) }, { k: "dupN", label: "Dupes", info: true, num: true },
-      { k: "lu", label: "Lineups", sortable: false, r: r => luCell(r.lu, P, f) }, { k: "sal", label: "Salary", num: true, r: r => "$" + r.sal.toLocaleString() }, { k: "fav", label: "", sortable: false, sticky: "r", cls: "ctr", r: r => `<span class="heart${S.favs.has(r.i) ? " on" : ""}" data-fav="${r.i}">${S.favs.has(r.i) ? "♥" : "♡"}</span>` }];
+      { k: "win", label: "Win%", info: true, num: true, r: r => pctS(r.win, 3) }, { k: "t10", label: "Top 10%", info: true, num: true, r: r => pctS(r.t10, 3) }, { k: "cash", label: "Cash%", info: true, num: true, r: r => pctS(r.cash, 3) }, { k: "dupN", label: "Dupes", info: true, num: true }]
+      .concat(f.mult ? [{ k: "coh", label: "One bet", info: true, num: true, r: r => r.coh != null ? r.coh.toFixed(2) + "×" : "—" }, { k: "tale", label: "Story", sortable: false, r: r => `<span class="hint">${esc(r.tale || "")}</span>` }] : [])
+      .concat([{ k: "lu", label: "Lineups", sortable: false, r: r => luCell(r.lu, P, f) }, { k: "sal", label: "Salary", num: true, r: r => "$" + r.sal.toLocaleString() }, { k: "fav", label: "", sortable: false, sticky: "r", cls: "ctr", r: r => `<span class="heart${S.favs.has(r.i) ? " on" : ""}" data-fav="${r.i}">${S.favs.has(r.i) ? "♥" : "♡"}</span>` }]);
     main.innerHTML = `<div class="tool"><button class="btn ghost" id="fLineup">☰ Lineup Filters</button><button class="btn ghost" id="fPlayers">✎ Players <span class="i"></span></button><button class="btn ghost" id="expRes">⬇ Export</button><span class="hint">Score gate: top <input class="txt" id="gate" style="width:52px;padding:2px 5px;min-height:0" value="${100 - S.gate}">% by projection</span><div class="grow"></div><div style="position:relative"><button class="btn sec" id="qf">Quick Favorite ▾</button><div id="qfMenu"></div></div></div>` + grid("lineups", cols, rows, { sort: { k: "roi", d: -1 } });
     wireGrid("lineups", main, mainSim);
     $$("#main [data-fav]").forEach(el => el.addEventListener("click", () => { toggleFav(+el.getAttribute("data-fav")); mainSim(); }));
@@ -536,6 +556,32 @@ function mainSim() {
     if (!rows.length) { main.innerHTML = `<div class="empty">No Lineups have been favorited</div>`; bot.innerHTML = favBot(); wireFavBot(); return; }
     main.innerHTML = `<div class="tool"><div class="grow"></div><span class="hint">${rows.length} favorites</span></div>` + grid("favs", [{ k: "roi", label: "Simulated ROI", sticky: "l", cls: r => "roi " + (r.roi >= 0 ? "pos" : "neg"), r: r => roiCell(r) }, { k: "proj", label: "Projected FP", num: true, r: r => r.proj.toFixed(2) }, { k: "own", label: "OwnSum", num: true, r: r => pctS(r.own) }, { k: "teams", label: "Stack", cls: "ctr" }, { k: "type", label: "Stack Type", cls: "ctr" }, { k: "lu", label: "Lineups", sortable: false, r: r => luCell(r.lu, P, f) }, { k: "sal", label: "Salary", num: true, r: r => "$" + r.sal.toLocaleString() }, { k: "fav", label: "", sortable: false, sticky: "r", cls: "ctr", r: r => `<span class="heart on" data-fav="${r.i}">♥</span>` }], rows, { sort: { k: "roi", d: -1 } });
     wireGrid("favs", main, mainSim); $$("#main [data-fav]").forEach(el => el.addEventListener("click", () => { toggleFav(+el.getAttribute("data-fav")); mainSim(); })); bot.innerHTML = favBot("favs"); wireFavBot("favs"); return; }
+  if (t === "sd") {
+    const c = S.contest, sd = S.sd, pretty = k => { const [cp, split, kd, qb] = k.split("|"); return `${cp} captain · ${split} · ${kd.replace("K/D", " K/DST")} · ${qb.replace("QB", " QB")}`; };
+    if (!c) { main.innerHTML = `<div class="empty">Generate a contest first (Contest Generator).<small>Structures are ranked against that field: rare in it, yet close to the best projection.</small></div>`; bot.innerHTML = ""; return; }
+    const head = `<div class="tool"><span class="hint">Every legal lineup within 10% of the best projection, grouped by structure (captain position · team split · kickers+defenses · QBs). Share is how much of the generated field uses the structure; dupes and "differs by" compare a lineup with that field. Pick a rare structure whose best is near the top, then the lineup inside it that shares the least.</span><div class="grow"></div><button class="btn sec" id="sdRun"${S.busy ? " disabled" : ""}>${sd ? "Recompute" : "Find structures"}</button></div>`;
+    if (!sd) { main.innerHTML = head + `<div class="empty">No structures computed yet.<small>Takes a few seconds and runs in the background.</small></div>`; bot.innerHTML = ""; $("#sdRun").addEventListener("click", runStructures); return; }
+    const rows = sd.rows.map(r => ({ ...r, best: r.lineups[0], dupes: r.lineups[0].dupes, nearest: r.lineups[0].nearest, score: r.optimal - r.share }));
+    const pick = S.sdPick && sd.rows.find(r => r.structure === S.sdPick);
+    let html = head + grid("sdst", [
+      { k: "structure", label: "Structure", sticky: "l", r: r => `<button class="lnk" data-sd="${esc(r.structure)}"${r.structure === S.sdPick ? ' style="color:#fff;font-weight:700"' : ""}>${esc(pretty(r.structure))}</button>` },
+      { k: "share", label: "Field share", num: true, r: r => pctS(r.share) }, { k: "optimal", label: "Best vs optimum", num: true, r: r => pctS(r.optimal) },
+      { k: "dupes", label: "Dupes of best", num: true }, { k: "nearest", label: "Differs by", num: true }, { k: "own", label: "OwnSum", num: true, v: r => r.best.own, r: r => pctS(r.best.own, 0) },
+      { k: "lu", label: "Best lineup", sortable: false, r: r => luCell(r.best.lu, P, f) }], rows, { sort: { k: "score", d: -1 } });
+    if (pick) html += `<div class="tool" style="margin-top:12px"><b>${esc(pretty(pick.structure))}</b><span class="hint">· ${pick.lineups.length} lineups within 10% of the optimum · "differs by" is players not shared with the closest field lineup</span></div>` + grid("sdlu", [
+      { k: "proj", label: "Projected FP", num: true, r: r => r.proj.toFixed(2) }, { k: "opt", label: "vs optimum", num: true, r: r => pctS(r.opt) }, { k: "own", label: "OwnSum", num: true, r: r => pctS(r.own, 0) },
+      { k: "dupes", label: "Dupes in field", num: true, r: r => r.dupes == null ? "—" : r.dupes }, { k: "nearest", label: "Differs by", num: true, r: r => r.nearest == null ? "—" : r.nearest },
+      { k: "sal", label: "Salary", num: true, r: r => "$" + r.sal.toLocaleString() }, { k: "lu", label: "Lineup", sortable: false, r: r => luCell(r.lu, P, f) },
+      { k: "add", label: "", sortable: false, sticky: "r", cls: "ctr", r: r => `<button class="lnk" data-sdadd="${r.i}">${r.added ? "added" : "+ add"}</button>` }],
+      pick.lineups.map((l, i) => ({ ...l, i, opt: 100 * l.proj / (sd.top || 1), added: S.LU.some(x => sigOf(x, f) === sigOf(l.lu, f)) })), { sort: { k: "proj", d: -1 } });
+    main.innerHTML = html;
+    wireGrid("sdst", main, mainSim); if (pick) wireGrid("sdlu", main, mainSim);
+    $("#sdRun").addEventListener("click", runStructures);
+    $$("#main [data-sd]").forEach(el => el.addEventListener("click", () => { S.sdPick = el.getAttribute("data-sd"); mainSim(); }));
+    $$("#main [data-sdadd]").forEach(el => el.addEventListener("click", () => { const l = pick.lineups[+el.getAttribute("data-sdadd")]; if (!S.LU.some(x => sigOf(x, f) === sigOf(l.lu, f))) { S.LU.push(l.lu.slice()); S.luSource = "structures"; S.res = null; } render(); }));
+    bot.innerHTML = `<div class="bot"><span class="hint">${S.LU.length} lineups in your set</span><div class="grow"></div><button class="btn" id="run3"${S.contest && S.LU.length && !S.busy ? "" : " disabled"}>Run Contest Simulation</button></div>`; $("#run3").addEventListener("click", runSim);
+    return;
+  }
   if (t === "expo") {
     const src = S.favs.size ? S.favOrder.map(i => S.LU[i]) : [], N = src.length, c = S.contest, FN = c ? c.field.length : 0;
     if (!N) { main.innerHTML = `<div class="empty">No Lineups have been favorited<small>Exposures are measured across your favorited lineups.</small></div>`; bot.innerHTML = favBot(); wireFavBot(); return; }

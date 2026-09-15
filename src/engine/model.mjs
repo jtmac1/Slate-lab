@@ -148,3 +148,21 @@ export function drawScores(model, pool, rng, out, scratch) {
 export function makeScratch(model, pool) {
   return { z: new Float64Array(model.n), gF: new Float64Array(pool.games.length || 1), tF: new Float64Array(pool.teams.length || 1) };
 }
+
+// How much a lineup moves as one bet: its variance under the correlation model divided by
+// the variance it would have if its players were independent. 1 = independent pieces,
+// above 1 = the players rise and fall together (one story), below 1 = they hedge each other.
+export function lineupCoherence(model, pool, lu, mult) {
+  const P = pool.players, w = lu.map((id, q) => (mult ? mult[q] : 1) * P[id].proj * model.sig[id]);
+  let indep = 0; for (const x of w) indep += x * x;
+  if (!indep) return 1;
+  let v = 0;
+  if (model.type === "chol") {
+    for (let k = 0; k < model.n; k++) { let s = 0; lu.forEach((id, q) => { if (k <= id) s += model.L[id][k] * w[q]; }); v += s * s; }
+  } else {
+    const teams = pool.teams, g = {}, t = new Float64Array(teams.length || 1);
+    lu.forEach((id, q) => { const p = P[id], l = model.L[id]; g[p.gi || 0] = (g[p.gi || 0] || 0) + l.g * w[q]; if (p.ti >= 0) t[p.ti] += l.t * w[q]; const oi = teams.indexOf(p.opp); if (oi >= 0) t[oi] += l.o * w[q]; v += (l.e * w[q]) ** 2; });
+    for (const k in g) v += g[k] * g[k]; for (const x of t) v += x * x;
+  }
+  return v / indep;
+}
