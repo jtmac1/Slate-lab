@@ -8,7 +8,10 @@ export const COPP = { "QB|QB": 0.25, "QB|RB": 0.05, "QB|WR": 0.20, "QB|TE": 0.15
   "RB|RB": -0.05, "RB|WR": 0.03, "RB|TE": 0.03, "RB|K": 0.05, "RB|DST": -0.25,
   "WR|WR": 0.15, "WR|TE": 0.12, "WR|K": 0.12, "WR|DST": -0.35,
   "TE|TE": 0.12, "TE|K": 0.10, "TE|DST": -0.30, "K|K": 0.10, "K|DST": -0.15, "DST|DST": -0.30 };
-export const MLBC = { hitSame: 0.15, hitOppSameGame: 0.10, hitOwnPitcher: 0.05, hitOppPitcher: -0.20,
+// hitSame 0.22 and hitter sigma 0.70 (2026-09-16, bench/sim-variance.mjs + compare-grades.mjs over 212 pulled
+// contests): real lineups spread 27.8 FP around projection, the old 0.15/0.60 model drew 20.8; the wider
+// model lifted the gated rule's realized top-10% ROI +11pp at a cost in player-ROI rank correlation.
+export const MLBC = { hitSame: 0.22, hitOppSameGame: 0.10, hitOwnPitcher: 0.05, hitOppPitcher: -0.20,
   pitchPitchSameGame: -0.12, orderBonus: 0.08 };
 export const LOAD = {
   nfl: { QB: [0.30, 0.70, 0.10], RB: [0.20, 0.48, 0.05], WR: [0.28, 0.62, 0.10], TE: [0.25, 0.55, 0.10], K: [0.20, 0.45, 0.05], DST: [-0.15, 0.30, -0.55] },
@@ -22,7 +25,7 @@ function ckey(a, b) { let i = POSES.indexOf(a), j = POSES.indexOf(b); if (i < 0)
 export const SIGMA_MAX = 0.6;
 export const SIGMA_DEF = {
   // Pitcher value from bench/sweep-mlb.mjs: the one change that held up on both holdout halves of 8 contests.
-  mlb: { P: 0.45, SP: 0.45, RP: 0.50, C: 0.60, "1B": 0.60, "2B": 0.60, "3B": 0.60, SS: 0.60, OF: 0.60 },
+  mlb: { P: 0.45, SP: 0.45, RP: 0.50, C: 0.70, "1B": 0.70, "2B": 0.70, "3B": 0.70, SS: 0.70, OF: 0.70 },
   // NFL values from bench/sweep-nfl.mjs over the 2026-09-13 classic slates and three showdowns.
   nfl: { QB: 0.55, RB: 0.50, WR: 0.60, TE: 0.65, K: 0.55, DST: 0.85 }
 };
