@@ -4,6 +4,7 @@ import { FORMATS, detect, autoMap, buildPool, FIELDS } from "../engine/formats.m
 import { sigOf, salOf, projOf, ownSum, stackOf, stackTeams, matchLineups, overlap } from "../engine/lineups.mjs";
 import { fitPayouts, parsePayoutTable, paidCount, payoutSum } from "../engine/payouts.mjs";
 import { buildLineups } from "../engine/build.mjs";
+import { stkSlates, stkUpdateInfo, stkProjections, stkToCSV, stkTime, stkEastern, hhmm } from "../engine/stokastic.mjs";
 import { featurize, selectScore, gradeRules, DEFAULT_RULE } from "../engine/select.mjs";
 import { recoverContest } from "../engine/recover.mjs";
 import { sigmaFor } from "../engine/model.mjs";
@@ -17,7 +18,7 @@ const STACK_DEF = { "5-3": 23, "5-2-1": 29, "5-x": 11, "4-4": 4, "4-3-1": 8, "4-
 const NFL_DEF = { 1: 45, 2: 25, 3: 5, bring: 25 };
 const ARCH = [{ conc: 1.0, minSal: 47500, boost: 0.6, label: "Low Stakes" }, { conc: 1.25, minSal: 49000, boost: 1.0, label: "Marquee" }, { conc: 1.6, minSal: 49300, boost: 1.5, label: "High Stakes" }];
 const S = {
-  view: "hub", league: store.get("league", "mlb"), type: store.get("type", "classic"),
+  view: "hub", league: store.get("league", "mlb"), type: store.get("type", "classic"), stk: store.get("stk", { slates: [], slateId: null, proj: null, own: null, checked: null, loadedProj: null }),
   projText: store.get("projText", ""), projName: store.get("projName", ""), projWhen: store.get("projWhen", ""), tsWhen: store.get("tsWhen", ""), tsText: store.get("tsText", ""),
   pool: null, share: null, mapOverride: null,
   contest: null, LU: [], luSource: "", fieldMode: false, res: null, favs: new Set(), favOrder: [],
@@ -391,9 +392,44 @@ function wireProjTable(key, rerender) {
 }
 
 /* ---------- Data Hub ---------- */
+// Stokastic Data Hub: which DK slates exist today, when each was last updated, and load one straight in
+function stkSlateOptions() {
+  const list = S.stk.slates || [];
+  return `<option value="">${list.length ? "Choose a slate" : "Check to list today's slates"}</option>` + list.map(sl => `<option value="${sl.slateId}"${S.stk.slateId === sl.slateId ? " selected" : ""}>${esc(sl.name)}${sl.type === "SHOWDOWN" ? " SD" : ""} ${esc(hhmm(stkEastern(sl.start)))} (${sl.games.length}g)</option>`).join("");
+}
+function stkStampHtml() {
+  const k = S.stk; if (!k.checked) return "Not checked yet";
+  const fresh = k.loadedProj && k.proj && stkTime(k.proj) > stkTime(k.loadedProj);
+  return `Stokastic projections <b>${esc(hhmm(stkTime(k.proj)))}</b> · ownership <b>${esc(hhmm(stkTime(k.own)))}</b> · checked ${esc(hhmm(k.checked))}${k.loadedProj ? (fresh ? ` · <span class="warn">newer than what you loaded (${esc(hhmm(stkTime(k.loadedProj)))})</span>` : ` · <span class="ok">loaded is current</span>`) : ""}`;
+}
+async function stkCheck() {
+  if (S.busy) return; const sport = F().sport;
+  try {
+    setStatus("Checking Stokastic…");
+    const today = new Date().toLocaleString("sv-SE").slice(0, 10);
+    S.stk.slates = await stkSlates(sport, today);
+    if (!S.stk.slateId || !S.stk.slates.some(x => x.slateId === S.stk.slateId)) { const main = S.stk.slates.find(x => x.type === "CLASSIC" && /main/i.test(x.name)) || S.stk.slates.find(x => x.type === "CLASSIC") || S.stk.slates[0]; S.stk.slateId = main ? main.slateId : null; }
+    if (S.stk.slateId) { const u = await stkUpdateInfo(S.stk.slateId); S.stk.proj = u.projectionsLastUpdated; S.stk.own = u.ownershipLastUpdated; S.stk.checked = new Date().toISOString(); }
+    store.set("stk", S.stk); render();
+    setStatus(S.stk.slateId ? `Stokastic checked — projections ${hhmm(stkTime(S.stk.proj))}, ownership ${hhmm(stkTime(S.stk.own))}.` : `No DK ${sport.toUpperCase()} slates on Stokastic today.`);
+  } catch (e) { setStatus(e.message, true); }
+}
+async function stkLoad() {
+  if (S.busy || !S.stk.slateId) return;
+  try {
+    setStatus("Loading Stokastic projections…");
+    const u = await stkUpdateInfo(S.stk.slateId), proj = await stkProjections(S.stk.slateId), sl = (S.stk.slates || []).find(x => x.slateId === S.stk.slateId);
+    S.stk.proj = u.projectionsLastUpdated; S.stk.own = u.ownershipLastUpdated; S.stk.checked = new Date().toISOString(); S.stk.loadedProj = u.projectionsLastUpdated; store.set("stk", S.stk);
+    loadProjections(stkToCSV(proj), `DK ${F().sport.toUpperCase()} ${sl ? sl.name : "slate"} — Stokastic ${hhmm(stkTime(u.projectionsLastUpdated))}`);
+    render();
+  } catch (e) { setStatus(e.message, true); }
+}
 function renderHub() {
-  $("#ctl").innerHTML = `<div class="ctl">${commonCtl()}<div class="f"><label>Projections</label><label class="btn sec" style="cursor:pointer">Load Projections CSV<input type="file" id="fileProj" accept=".csv,text/csv,text/plain,text/comma-separated-values,application/vnd.ms-excel" hidden multiple></label></div>${F().sport === "mlb" ? `<div class="f"><label>Top stacks</label><label class="btn sec" style="cursor:pointer">Load Topstacks CSV<input type="file" id="fileTs" accept=".csv,text/csv,text/plain,text/comma-separated-values,application/vnd.ms-excel" hidden></label></div>` : ""}<div class="f"><label>&nbsp;</label><button class="btn ghost" id="btnSample">Load sample slate</button></div><div class="stamp">${S.projWhen ? "Projections loaded: " + esc(S.projWhen) : ""}${S.share ? "<br>Top stacks ✓" : ""}</div></div>`;
+  $("#ctl").innerHTML = `<div class="ctl">${commonCtl()}<div class="f"><label>Projections</label><label class="btn sec" style="cursor:pointer">Load Projections CSV<input type="file" id="fileProj" accept=".csv,text/csv,text/plain,text/comma-separated-values,application/vnd.ms-excel" hidden multiple></label></div><div class="f wide"><label>Stokastic Data Hub</label><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><select class="sel" id="stkSlate" style="min-width:170px">${stkSlateOptions()}</select><button class="btn sec" id="stkCheck" title="Ask Stokastic when this slate's projections and ownership were last updated">Check</button><button class="btn sec" id="stkLoad" title="Load the current Stokastic projections for this slate"${S.stk.slateId ? "" : " disabled"}>Load</button></div><div class="stamp" id="stkStamp">${stkStampHtml()}</div></div>${F().sport === "mlb" ? `<div class="f"><label>Top stacks</label><label class="btn sec" style="cursor:pointer">Load Topstacks CSV<input type="file" id="fileTs" accept=".csv,text/csv,text/plain,text/comma-separated-values,application/vnd.ms-excel" hidden></label></div>` : ""}<div class="f"><label>&nbsp;</label><button class="btn ghost" id="btnSample">Load sample slate</button></div><div class="stamp">${S.projWhen ? "Projections loaded: " + esc(S.projWhen) : ""}${S.share ? "<br>Top stacks ✓" : ""}</div></div>`;
   wireCommon();
+  $("#stkSlate").addEventListener("change", e => { S.stk.slateId = +e.target.value || null; S.stk.proj = S.stk.own = S.stk.checked = null; store.set("stk", S.stk); render(); });
+  $("#stkCheck").addEventListener("click", stkCheck);
+  $("#stkLoad").addEventListener("click", stkLoad);
   $("#fileProj").addEventListener("change", async e => { for (const fl of Array.from(e.target.files)) { const t = await readFile(fl); const h = t.slice(0, 300).toLowerCase(); if (h.includes("top stack")) loadTopstacks(t); else loadProjections(t, fl.name); } render(); });
   const ft = $("#fileTs"); if (ft) ft.addEventListener("change", async e => { const fl = e.target.files[0]; if (fl) loadTopstacks(await readFile(fl)); render(); });
   $("#btnSample").addEventListener("click", () => { const sp = $('script[data-seed="proj"]'), st = $('script[data-seed="topstacks"]'); if (st) loadTopstacks(st.textContent.trim(), true); if (sp) loadProjections(sp.textContent.trim(), "Sample: MLB night 2026-09-10"); render(); });

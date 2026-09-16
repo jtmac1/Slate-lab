@@ -5,6 +5,7 @@
 //   node bench/pull-stokastic.mjs 2026-08-01                       one day
 //   node bench/pull-stokastic.mjs 2026-08-01 2026-08-31 MLB        a range, one sport
 //   node bench/pull-stokastic.mjs 2025-09-01 2026-02-28 NFL --island --max 20000
+//   node bench/pull-stokastic.mjs --slate 35987 [--max N]     every contest Stokastic simulated on a slate (slate ids: bench/pull-projections.mjs)
 // --island  NFL showdowns on stand-alone games only (Mon-Sat, or Sunday 7pm+ kickoffs)
 // --max N   contests with more than N entries store players and stacks but not lineups
 import fs from "node:fs";
@@ -15,14 +16,14 @@ import { compact, writePost, postFile } from "./post-store.mjs";
 const API = "https://app-api-dfs-prod-main.azurewebsites.net/api/contests/";
 const args = process.argv.slice(2), flags = args.filter(a => a.startsWith("--")), pos = args.filter(a => !a.startsWith("--"));
 const [from, to = from, sportArg = ""] = pos;
-const ISLAND = flags.includes("--island"), MAX = flags.includes("--max") ? +args[args.indexOf("--max") + 1] : Infinity;
-if (!from) { console.error("usage: node bench/pull-stokastic.mjs <from> [to] [sport] [--island] [--max N]"); process.exit(1); }
+const ISLAND = flags.includes("--island"), MAX = flags.includes("--max") ? +args[args.indexOf("--max") + 1] : Infinity, SLATE = flags.includes("--slate") ? args[args.indexOf("--slate") + 1] : null;
+if (!from && !SLATE) { console.error("usage: node bench/pull-stokastic.mjs <from> [to] [sport] [--island] [--max N]"); process.exit(1); }
 const money = s => +String(s).replace(/[$,]/g, "") || 0, sleep = ms => new Promise(r => setTimeout(r, ms));
 const weekday = d => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(d + "T12:00:00Z").getUTCDay()];
 
 // contests entered, from the newest DK history file
 const hist = fs.readdirSync("data/dk-history").filter(f => f.endsWith(".csv")).sort().pop();
-const rows = parseCSV(fs.readFileSync(path.join("data/dk-history", hist), "utf8")).slice(1);
+const rows = SLATE ? [] : parseCSV(fs.readFileSync(path.join("data/dk-history", hist), "utf8")).slice(1);
 const C = {};
 for (const r of rows) {
   const sport = r[0], type = r[1], date = r[5].slice(0, 10), hour = +r[5].slice(11, 13), name = r[3].replace(/\s*\(\d+\/\d+\)$/, "");
@@ -31,8 +32,13 @@ for (const r of rows) {
   const g = C[r[4]] || (C[r[4]] = { key: r[4], sport, type, date, lock: r[5].slice(11, 16), name, entries: +r[10], fee: money(r[11]), paid: +r[13], mine: [] });
   g.mine.push({ entry: r[2], place: +r[6], points: +r[7], won: money(r[8]) + money(r[9]) });
 }
-const list = Object.values(C).sort((a, b) => a.date.localeCompare(b.date) || b.fee - a.fee);
-console.log(`${list.length} contests entered ${from}${to !== from ? " to " + to : ""}${sportArg ? " (" + sportArg + ")" : ""}${ISLAND ? ", island games" : ""} in ${hist}`);
+let list = Object.values(C).sort((a, b) => a.date.localeCompare(b.date) || b.fee - a.fee);
+if (SLATE) {
+  // every contest Stokastic simulated on the slate, entered or not (places paid unknown here: 0)
+  const sc = await (await fetch(API + "getSimulatedContests?slateId=" + SLATE)).json();
+  list = sc.filter(c => c.site === "DK" && !/Satellite/i.test(c.name)).map(c => ({ key: String(c.siteContestId), sport: c.sport, type: c.type === "SHOWDOWN" ? "Showdown" : "Classic", date: c.startTime.slice(0, 10), lock: c.startTime.slice(11, 16), name: c.name.trim(), entries: c.entryCount, fee: c.entryFee, paid: 0, maxEntries: c.maxPlayerEntries, mine: [] })).sort((a, b) => b.fee - a.fee);
+}
+console.log(SLATE ? `${list.length} contests Stokastic simulated on slate ${SLATE}` : `${list.length} contests entered ${from}${to !== from ? " to " + to : ""}${sportArg ? " (" + sportArg + ")" : ""}${ISLAND ? ", island games" : ""} in ${hist}`);
 
 const get = async q => { const r = await fetch(API + q); if (!r.ok) throw new Error(`${r.status} ${q.slice(0, 40)}`); return r.json(); };
 let pulled = 0, skipped = 0, failed = 0, bytes = 0;

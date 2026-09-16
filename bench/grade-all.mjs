@@ -147,7 +147,7 @@ export function gradeContest(c, opts = {}) {
 // How close is a generated field (app defaults, Marquee archetype) to the real one?
 const STACK_DEF = { "5-3": 23, "5-2-1": 29, "5-x": 11, "4-4": 4, "4-3-1": 8, "4-2-x": 5, "4-x": 2, "3-3-x": 3 };   // keep in step with src/app/main.mjs
 const NFL_DEF = { 1: 45, 2: 25, 3: 5, bring: 25 };
-function mlbStackOpt() {
+export function mlbStackOpt() {
   const g = k => STACK_DEF[k] || 0, p5 = g("5-3") + g("5-2-1") + g("5-x"), p4 = g("4-4") + g("4-3-1") + g("4-2-x") + g("4-x"), p3x = g("3-3-x"), unst = Math.max(0, 100 - p5 - p4 - p3x);
   return { sizes: { 5: p5, 4: p4, 3: p3x + unst }, secBy: { 5: { 3: g("5-3"), 2: g("5-2-1"), 1: g("5-x") }, 4: { 4: g("4-4"), 3: g("4-3-1"), 2: g("4-2-x"), 1: g("4-x") }, 3: { 3: p3x, 2: unst * 0.5, 1: unst * 0.5 } } };
 }
