@@ -9,8 +9,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { nrm, parseCSV } from "../src/engine/csv.mjs";
 import { buildPool, FORMATS } from "../src/engine/formats.mjs";
+import { listPost, readPost } from "./post-store.mjs";
 import { recoverContest } from "../src/engine/recover.mjs";
-import { buildModel } from "../src/engine/model.mjs";
+import { buildModel, CSAME, COPP, MLBC, SIGMA_DEF, SIGMA_MAX } from "../src/engine/model.mjs";
 import { simulate, playerROI } from "../src/engine/sim.mjs";
 import { genField } from "../src/engine/field.mjs";
 import { stackOf, sigOf, salOf, ownSum, assignSlots } from "../src/engine/lineups.mjs";
@@ -46,13 +47,12 @@ export function listContests() {
     const fkey = sport === "mlb" ? "mlb_cl" : /-sd-|showdown/i.test(dir) ? "nfl_sd" : "nfl_cl";
     out.push({ dir, sport, fkey, date: (dir.match(/\d{4}-\d{2}-\d{2}/) || [""])[0], lineup: path.join(D, lf), player: path.join(D, pf) });
   }
-  // contests pulled from Stokastic's API (bench/pull-stokastic.mjs)
+  // contests pulled from Stokastic's API (bench/pull-stokastic.mjs), compact gzipped files
   if (fs.existsSync("data/post")) for (const sport of fs.readdirSync("data/post").sort()) {
-    const D = path.join("data/post", sport); if (!fs.statSync(D).isDirectory()) continue;
-    for (const f of fs.readdirSync(D).filter(x => x.endsWith(".json")).sort()) {
-      const j = JSON.parse(fs.readFileSync(path.join(D, f), "utf8")), c = j.contest;
+    for (const file of listPost(sport)) {
+      const j = readPost(file), c = j.contest; if (j.lineupsSkipped || !j.lineups.length) continue;
       const fkey = sport === "mlb" ? "mlb_cl" : /showdown/i.test(c.type) ? "nfl_sd" : "nfl_cl";
-      out.push({ dir: `post/${sport}/${f.replace(/\.json$/, "")}`, sport, fkey, date: c.date, json: path.join(D, f), name: c.name, fee: c.fee, entries: c.entries, key: c.key, tier: feeTier(c.fee), size: fieldSize(c.entries) });
+      out.push({ dir: `post/${sport}/${path.basename(file).replace(/\.json(\.gz)?$/, "")}`, sport, fkey, date: c.date, json: file, name: c.name, fee: c.fee, entries: c.entries, key: c.key, tier: feeTier(c.fee), size: fieldSize(c.entries) });
     }
   }
   return out;
@@ -62,26 +62,37 @@ export function listContests() {
 // by DK player id. Pool ownership is the PROJECTED ownership (what the app has at lock);
 // actual ownership is kept as actOwn.
 export function loadPulled(file) {
-  const j = JSON.parse(fs.readFileSync(file, "utf8")), c = j.contest, f = FORMATS[c.sport === "MLB" ? "mlb_cl" : /showdown/i.test(c.type) ? "nfl_sd" : "nfl_cl"];
-  const P = [], byId = {};
+  const j = readPost(file), c = j.contest, f = FORMATS[c.sport === "MLB" ? "mlb_cl" : /showdown/i.test(c.type) ? "nfl_sd" : "nfl_cl"];
+  const P = [], byId = {}, sd = !!f.mult;
+  // showdown: the API lists a CPT row and a FLEX row per player (positions "CPT"/"FLEX"); real positions from the NFL reference
+  const ref = sd ? refLookup("data/nfl-ref", c.date, false) : null;
   for (const q of j.players) {
-    const id = (String(q.exportableNameAndId || "").match(/\((\d+)\)/) || [])[1], plist = String(q.position || "").split("/").filter(Boolean);
-    const isP = f.sport === "mlb" ? plist.some(x => x === "SP" || x === "RP" || x === "P") : plist[0] === "DST";
-    const p = { name: q.player, key: nrm(q.player), dkId: id, pos: isP && f.sport === "mlb" ? "P" : plist[0] || "FLEX", posList: isP && f.sport === "mlb" ? ["P"] : plist.length ? plist : ["FLEX"],
-      team: q.teamName || "", opp: q.opponentTeamName || "", sal: q.salary || 0, csal: (q.salary || 0) * 1.5, proj: q.projection || 0,
-      own: 100 * (q.projectedOwnership || 0), fown: 100 * (q.projectedOwnership || 0), cown: 0, actOwn: 100 * (q.overallOwnership || 0),
-      ceil: null, sd: null, ord: null, isP, stkROI: 100 * (q.simPlayerRoi ?? 0), actROI: 100 * (q.actualPlayerRoi ?? 0) };
-    if (id) byId[id] = P.length; P.push(p);
+    const slot = String(q.pos || "").toUpperCase();
+    // the CPT row carries the 1.5x salary and projection; the FLEX row is the base
+    if (sd && byId[q.id] != null) { const p = P[byId[q.id]]; if (slot === "CPT") { p.csal = q.sal; p.cown = 100 * q.pown; p.actCown = 100 * q.aown; } else { p.sal = q.sal; p.proj = q.proj; p.own = p.fown = 100 * q.pown; p.actOwn = 100 * q.aown; p.stkROI = 100 * (q.sroi ?? 0); p.actROI = 100 * (q.aroi ?? 0); } continue; }
+    const t = sd && ref ? ref(q.name) : null, posRaw = sd ? (t && t.pos ? t.pos : "FLEX") : String(q.pos || "");
+    const plist = posRaw.split("/").filter(Boolean), isP = f.sport === "mlb" ? plist.some(x => x === "SP" || x === "RP" || x === "P") : plist[0] === "DST";
+    const p = { name: q.name, key: nrm(q.name), dkId: q.id, pos: isP && f.sport === "mlb" ? "P" : plist[0] || "FLEX", posList: isP && f.sport === "mlb" ? ["P"] : plist.length ? plist : ["FLEX"],
+      team: q.team, opp: q.opp, sal: q.sal, csal: q.sal * 1.5, proj: q.proj, own: 100 * q.pown, fown: 100 * q.pown, cown: 0, actOwn: 100 * q.aown,
+      ceil: null, sd: null, ord: null, isP, stkROI: 100 * (q.sroi ?? 0), actROI: 100 * (q.aroi ?? 0) };
+    if (sd && slot === "CPT") { p.csal = q.sal; p.cown = 100 * q.pown; p.actCown = 100 * q.aown; p.sal = q.sal / 1.5; p.proj = q.proj / 1.5; p.own = p.fown = 0; }
+    if (q.id) byId[q.id] = P.length; P.push(p);
   }
   const teams = [...new Set(P.map(p => p.team).filter(Boolean))].sort(), gmap = {}, games = [];
   P.forEach((p, i) => { const k = p.team && p.opp ? [p.team, p.opp].sort().join("@") : (p.team || "?"); if (gmap[k] == null) { gmap[k] = games.length; games.push(k); } p.i = i; p.gi = gmap[k]; p.ti = teams.indexOf(p.team); });
   const pool = { players: P, teams, games, src: "stokastic api", format: f }, entries = [];
   for (const l of j.lineups) {
-    const ids = String(l.exportableLineup || "").split(",").map(s => byId[(s.match(/\((\d+)\)/) || [])[1]]);
+    let ids = l.ids.map(id => byId[id]);
     if (ids.length !== f.slots.length || ids.some(x => x == null)) continue;
+    if (sd) {
+      // ids come sorted, not captain-first: the captain is the one player whose 1.5x salary makes the lineup salary add up
+      const base = ids.reduce((s, i) => s + P[i].sal, 0), cands = ids.filter(i => Math.abs(base - P[i].sal + P[i].csal - l.sal) < 1);
+      if (cands.length !== 1) continue;
+      ids = [cands[0]].concat(ids.filter(i => i !== cands[0]));
+    }
     const lu = assignSlots(ids, P, f); if (!lu) continue;
     // a lineup with no actual ROI (e.g. an entry DK voided) counts as a full loss
-    entries.push({ user: l.user, stkROI: 100 * (l.simLineupRoi ?? 0), actROI: 100 * (l.actualLineupRoi ?? -1), stkFP: l.simAverageFantasyPoints ?? 0, actFP: l.actualFantasyPoints ?? 0, own: 100 * (l.ownershipSum ?? 0), finish: l.actualFinishPosition ?? j.lineups.length, dupes: l.duplicates ?? 0, sal: l.salary ?? 0, names: String(l.fullLineup || "").split(",").map(s => s.trim()), lu });
+    entries.push({ user: l.u, stkROI: 100 * (l.sroi ?? 0), actROI: 100 * (l.aroi ?? -1), stkFP: l.sfp ?? 0, actFP: l.afp ?? 0, own: 100 * (l.own ?? 0), finish: l.fin ?? j.lineups.length, dupes: l.dup ?? 0, sal: l.sal ?? 0, names: lu.map(id => P[id].name), lu });
   }
   const N = entries.length, payouts = new Float64Array(N), ranked = [...entries].sort((a, b) => a.finish - b.finish || b.actROI - a.actROI);
   ranked.forEach((e, i) => { if (e.actROI > -100) payouts[i] = 1 + e.actROI / 100; });
@@ -117,7 +128,7 @@ export function gradeContest(c, opts = {}) {
   const t0 = Date.now();
   const model = buildModel(pool, opts.model || {});
   const res = simulate({ pool, model, field: [], lineups: lus, payouts, entries: N, fee: 1, iters, rng: mulberry32(SEED), fieldMode: true });
-  const feats = featurize(res.rows.map((r, i) => { const e = entries[i]; return { proj: e.stkFP, roi: r.roi, cash: r.cash, t10: r.t10, avgRank: r.avgRank, own: e.own, stkROI: e.stkROI, actFP: e.actFP, actROI: e.actROI, finish: e.finish }; }));
+  const feats = featurize(res.rows.map((r, i) => { const e = entries[i]; return { proj: e.stkFP, roi: r.roi, cash: r.cash, t10: r.t10, avgRank: r.avgRank, own: e.own, dupN: e.dupes, stkROI: e.stkROI, actFP: e.actFP, actROI: e.actROI, finish: e.finish }; }));
   const grades = gradeRules(feats, paid, { "Stokastic ROI": f => f.stkROI });
   const actFP = entries.map(e => e.actFP), stk = entries.map(e => e.stkROI), mine = res.rows.map(r => r.roi);
   const cashSet = new Set(entries.map((e, i) => e.finish <= paid ? i : -1).filter(i => i >= 0));
@@ -207,8 +218,15 @@ export function printSummary(rows) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const args = process.argv.slice(2), FIELD = args.includes("--field"), rest = args.filter(a => a !== "--field");
-  const ITERS = +(rest[0] || 4000), FILTER = rest[1] || "";
+  const args = process.argv.slice(2), FIELD = args.includes("--field"), JSON_OUT = (args.find(a => a.startsWith("--json=")) || "").slice(7), rest = args.filter(a => a !== "--field" && !a.startsWith("--json="));
+  // --hitsame=0.30 --hsig=0.80 --psig=0.45 --smax=0.9: MLB outcome-model overrides for calibration runs (bench/compare-grades.mjs grades them against a default run)
+  const flag = k => { const a = args.find(x => x.startsWith(`--${k}=`)); return a ? +a.slice(k.length + 3) : null; };
+  const HS = flag("hitsame"), HSIG = flag("hsig"), PSIG = flag("psig"), SMAX = flag("smax");
+  const sigmaDef = Object.assign({}, SIGMA_DEF.mlb); if (HSIG != null) for (const k of ["C", "1B", "2B", "3B", "SS", "OF"]) sigmaDef[k] = HSIG; if (PSIG != null) for (const k of ["P", "SP", "RP"]) sigmaDef[k] = PSIG;
+  const MODEL = (HS != null || HSIG != null || PSIG != null || SMAX != null) ? { tables: { CSAME, COPP, MLBC: Object.assign({}, MLBC, HS != null ? { hitSame: HS } : {}) }, sigmaDef, sigmaMax: SMAX != null ? SMAX : SIGMA_MAX } : null;
+  const plain = args.filter(a => !a.startsWith("--"));
+  const ITERS = +(plain[0] || 4000), FILTER = plain[1] || "";
+  if (MODEL) console.log(`model overrides: hitSame ${MODEL.tables.MLBC.hitSame}, hitter sigma ${sigmaDef.OF}, pitcher sigma ${sigmaDef.P}, sigmaMax ${MODEL.sigmaMax}`);
   const contests = listContests().filter(c => !FILTER || c.dir.includes(FILTER) || c.fkey.includes(FILTER));
   if (FIELD) {
     // node bench/grade-all.mjs --field [iters-ignored] [filter]: generated field vs the real one
@@ -222,11 +240,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   }
   const rows = [];
   for (const c of contests) {
-    const r = gradeContest(c, { iters: ITERS }); rows.push(r);
+    const r = gradeContest(c, Object.assign({ iters: ITERS }, MODEL ? { model: MODEL } : {})); rows.push(r);
     console.log(`\n=== ${c.dir} [${c.fkey}] ===`);
     console.log(`  ${r.N} entries of ${r.rows} rows, ${r.paid} paid, field ROI ${r.fieldROI.toFixed(0)}%; ${r.players} players, ${r.teams} teams, ${r.games} games; unmatched ${r.unmatched.length}${r.unmatched.length ? " (" + r.unmatched.slice(0, 5).join(", ") + ")" : ""}; projection residual ${r.resid.toFixed(2)} FP/lineup; sim ${r.ms} ms`);
     console.log(`  lineup ROI vs actual FP: Stokastic ${r.sStk.toFixed(3)}  mine ${r.sMine.toFixed(3)}  projection ${r.sProj.toFixed(3)}  (agree ${r.agree.toFixed(3)}) | top-${r.paid} cashed: Stk ${r.cashStk} / me ${r.cashMine} / rand ${r.cashRand.toFixed(1)} | top-10% realized: Stk ${r.roiStk.toFixed(0)}% / me ${r.roiMine.toFixed(0)}%`);
     console.log(`  player ROI vs actual: Stokastic ${r.pStk.toFixed(3)}  mine ${r.pMine.toFixed(3)}  (agree ${r.pAgree.toFixed(3)})`);
   }
   printSummary(rows);
+  // --json=<file>: keep per-contest grades so selection rules can be analysed without re-simming
+  if (JSON_OUT) fs.writeFileSync(JSON_OUT, JSON.stringify(rows.map(r => ({ dir: r.dir, fkey: r.fkey, date: r.date, fee: r.fee, tier: r.tier, size: r.size, N: r.N, paid: r.paid, fieldROI: r.fieldROI, sStk: r.sStk, sMine: r.sMine, roiStk: r.roiStk, roiMine: r.roiMine, pStk: r.pStk, pMine: r.pMine, agree: r.agree, cashStk: r.cashStk, cashMine: r.cashMine, grades: r.grades }))));
 }
