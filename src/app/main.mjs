@@ -190,6 +190,7 @@ function stackTypeOf(l, P, f) {
     for (const id of l) { const p = P[id]; if (p === qb || p.pos === "DST" || p.pos === "K") continue; if (p.team === qb.team) k++; else if (p.team === qb.opp) bring = true; }
     return (k ? "QB+" + Math.min(3, k) : "No stack") + (k && bring ? " +opp" : "");
   }
+  if (f.mult) { const tc = {}; for (const id of l) { const t = P[id].team; if (t) tc[t] = (tc[t] || 0) + 1; } return Object.values(tc).sort((a, b) => b - a).join("-"); }   // showdown: all six spots count
   if (f.sport !== "mlb") return stackOf(l, P, f);
   const c = stackTeams(l, P, f).map(x => x[1]); const a = c[0] || 0, b = c[1] || 0;
   if (a >= 5) return b >= 3 ? "5-3" : b === 2 ? "5-2-1" : "5-x";
