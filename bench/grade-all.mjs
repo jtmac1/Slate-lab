@@ -8,7 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { nrm, parseCSV } from "../src/engine/csv.mjs";
-import { buildPool } from "../src/engine/formats.mjs";
+import { buildPool, FORMATS } from "../src/engine/formats.mjs";
 import { recoverContest } from "../src/engine/recover.mjs";
 import { buildModel } from "../src/engine/model.mjs";
 import { simulate, playerROI } from "../src/engine/sim.mjs";
@@ -34,6 +34,9 @@ function refLookup(refDir, date, mlb) {
   return name => { const p = byKey[nrm(name)] || byLoose[loose(name)]; return p ? { team: p.team, opp: opp[p.team] || "", pos: mlb ? "" : p.pos } : null; };
 }
 
+export const feeTier = fee => fee < 50 ? "<$50" : fee < 200 ? "$50-199" : fee < 600 ? "$200-599" : "$600+";
+export const fieldSize = n => n < 300 ? "<300" : n < 1500 ? "300-1.5K" : n < 10000 ? "1.5K-10K" : "10K+";
+
 export function listContests() {
   const out = [];
   for (const dir of fs.readdirSync("data").sort()) {
@@ -43,13 +46,53 @@ export function listContests() {
     const fkey = sport === "mlb" ? "mlb_cl" : /-sd-|showdown/i.test(dir) ? "nfl_sd" : "nfl_cl";
     out.push({ dir, sport, fkey, date: (dir.match(/\d{4}-\d{2}-\d{2}/) || [""])[0], lineup: path.join(D, lf), player: path.join(D, pf) });
   }
+  // contests pulled from Stokastic's API (bench/pull-stokastic.mjs)
+  if (fs.existsSync("data/post")) for (const sport of fs.readdirSync("data/post").sort()) {
+    const D = path.join("data/post", sport); if (!fs.statSync(D).isDirectory()) continue;
+    for (const f of fs.readdirSync(D).filter(x => x.endsWith(".json")).sort()) {
+      const j = JSON.parse(fs.readFileSync(path.join(D, f), "utf8")), c = j.contest;
+      const fkey = sport === "mlb" ? "mlb_cl" : /showdown/i.test(c.type) ? "nfl_sd" : "nfl_cl";
+      out.push({ dir: `post/${sport}/${f.replace(/\.json$/, "")}`, sport, fkey, date: c.date, json: path.join(D, f), name: c.name, fee: c.fee, entries: c.entries, key: c.key, tier: feeTier(c.fee), size: fieldSize(c.entries) });
+    }
+  }
   return out;
+}
+
+// A pulled contest: real projections, salaries, teams and positions per player; lineups keyed
+// by DK player id. Pool ownership is the PROJECTED ownership (what the app has at lock);
+// actual ownership is kept as actOwn.
+export function loadPulled(file) {
+  const j = JSON.parse(fs.readFileSync(file, "utf8")), c = j.contest, f = FORMATS[c.sport === "MLB" ? "mlb_cl" : /showdown/i.test(c.type) ? "nfl_sd" : "nfl_cl"];
+  const P = [], byId = {};
+  for (const q of j.players) {
+    const id = (String(q.exportableNameAndId || "").match(/\((\d+)\)/) || [])[1], plist = String(q.position || "").split("/").filter(Boolean);
+    const isP = f.sport === "mlb" ? plist.some(x => x === "SP" || x === "RP" || x === "P") : plist[0] === "DST";
+    const p = { name: q.player, key: nrm(q.player), dkId: id, pos: isP && f.sport === "mlb" ? "P" : plist[0] || "FLEX", posList: isP && f.sport === "mlb" ? ["P"] : plist.length ? plist : ["FLEX"],
+      team: q.teamName || "", opp: q.opponentTeamName || "", sal: q.salary || 0, csal: (q.salary || 0) * 1.5, proj: q.projection || 0,
+      own: 100 * (q.projectedOwnership || 0), fown: 100 * (q.projectedOwnership || 0), cown: 0, actOwn: 100 * (q.overallOwnership || 0),
+      ceil: null, sd: null, ord: null, isP, stkROI: 100 * (q.simPlayerRoi ?? 0), actROI: 100 * (q.actualPlayerRoi ?? 0) };
+    if (id) byId[id] = P.length; P.push(p);
+  }
+  const teams = [...new Set(P.map(p => p.team).filter(Boolean))].sort(), gmap = {}, games = [];
+  P.forEach((p, i) => { const k = p.team && p.opp ? [p.team, p.opp].sort().join("@") : (p.team || "?"); if (gmap[k] == null) { gmap[k] = games.length; games.push(k); } p.i = i; p.gi = gmap[k]; p.ti = teams.indexOf(p.team); });
+  const pool = { players: P, teams, games, src: "stokastic api", format: f }, entries = [];
+  for (const l of j.lineups) {
+    const ids = String(l.exportableLineup || "").split(",").map(s => byId[(s.match(/\((\d+)\)/) || [])[1]]);
+    if (ids.length !== f.slots.length || ids.some(x => x == null)) continue;
+    const lu = assignSlots(ids, P, f); if (!lu) continue;
+    // a lineup with no actual ROI (e.g. an entry DK voided) counts as a full loss
+    entries.push({ user: l.user, stkROI: 100 * (l.simLineupRoi ?? 0), actROI: 100 * (l.actualLineupRoi ?? -1), stkFP: l.simAverageFantasyPoints ?? 0, actFP: l.actualFantasyPoints ?? 0, own: 100 * (l.ownershipSum ?? 0), finish: l.actualFinishPosition ?? j.lineups.length, dupes: l.duplicates ?? 0, sal: l.salary ?? 0, names: String(l.fullLineup || "").split(",").map(s => s.trim()), lu });
+  }
+  const N = entries.length, payouts = new Float64Array(N), ranked = [...entries].sort((a, b) => a.finish - b.finish || b.actROI - a.actROI);
+  ranked.forEach((e, i) => { if (e.actROI > -100) payouts[i] = 1 + e.actROI / 100; });
+  return { pool, entries, payouts, paid: payouts.filter(x => x > 0).length, unmatched: [], rows: j.lineups.length, contest: c };
 }
 
 // Rebuild one contest from its export; cached so parameter sweeps do not re-solve it.
 const recovered = {};
 export function recover(c) {
   if (recovered[c.dir]) return recovered[c.dir];
+  if (c.json) return recovered[c.dir] = loadPulled(c.json);
   const teamOf = refLookup(c.sport === "mlb" ? "data/mlb-ref" : "data/nfl-ref", c.date, c.sport === "mlb");
   return recovered[c.dir] = recoverContest(fs.readFileSync(c.lineup, "utf8"), fs.readFileSync(c.player, "utf8"), teamOf, c.fkey);
 }
@@ -134,8 +177,20 @@ export function fieldCheck(c, opts = {}) {
     ownReal: mean(real.map(l => ownSum(l, P, f))), ownGen: mean(gen.map(l => ownSum(l, P, f))), gap, worst, top };
 }
 
+// Averages by contest attribute for pulled contests (fee tier, field size), with counts.
+function printByAttr(rows, attr, label, order) {
+  const rs = rows.filter(r => r[attr]); if (!rs.length) return;
+  const g = {}; for (const r of rs) (g[r[attr]] = g[r[attr]] || []).push(r);
+  const avg = (list, k) => mean(list.map(r => r[k]));
+  console.log(`\n=== by ${label} ===`);
+  console.log("group".padEnd(12) + "contests  StkROI  MyROI   Agree  | playerROI Stk/Me  | top10% Stk / Me / field  | gated rule: Spearman  top10%");
+  for (const k of order.filter(k => g[k])) { const l = g[k], gr = l.map(r => r.grades["ROI gated: top half proj"]); console.log(k.padEnd(12) + String(l.length).padEnd(10) + avg(l, "sStk").toFixed(3).padEnd(8) + avg(l, "sMine").toFixed(3).padEnd(8) + avg(l, "agree").toFixed(3).padEnd(7) + " | " + `${avg(l, "pStk").toFixed(2)}/${avg(l, "pMine").toFixed(2)}`.padEnd(18) + " | " + `${avg(l, "roiStk").toFixed(0)}% / ${avg(l, "roiMine").toFixed(0)}% / ${avg(l, "fieldROI").toFixed(0)}%`.padEnd(25) + " | " + mean(gr.map(x => x.spearman)).toFixed(3).padEnd(10) + mean(gr.map(x => x.real10)).toFixed(0) + "%"); }
+}
+
 export function printSummary(rows) {
   const names = Object.keys(RULES).concat(["Stokastic ROI"]);
+  printByAttr(rows, "tier", "entry fee", ["<$50", "$50-199", "$200-599", "$600+"]);
+  printByAttr(rows, "size", "field size", ["<300", "300-1.5K", "1.5K-10K", "10K+"]);
   for (const fkey of ["mlb_cl", "nfl_cl", "nfl_sd"]) {
     const rs = rows.filter(r => r.fkey === fkey); if (!rs.length) continue;
     console.log(`\n=== ${fkey}: ${rs.length} contests ===`);
