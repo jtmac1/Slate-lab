@@ -32,6 +32,7 @@ export function detect(headers) {
   const s = headers.map(x => String(x).toLowerCase().trim());
   if (s.includes("cpt gpp score")) return "Stokastic showdown";
   if (s.includes("p(expl)")) return "Stokastic MLB";
+  if (s.includes("cpt dk id")) return "Stokastic Data Hub NFL";
   if (s.includes("cpt ownership %")) return "Blick showdown";
   if (s.includes("cpt proj") && s.includes("total own")) return "ETR showdown";
   if (s.includes("bat pos.")) return "Data Hub MLB";

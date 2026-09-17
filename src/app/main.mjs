@@ -396,7 +396,7 @@ function wireProjTable(key, rerender) {
 // Stokastic Data Hub: which DK slates exist today, when each was last updated, and load one straight in
 function stkSlateOptions() {
   const list = S.stk.slates || [];
-  return `<option value="">${list.length ? "Choose a slate" : "Check to list today's slates"}</option>` + list.map(sl => `<option value="${sl.slateId}"${S.stk.slateId === sl.slateId ? " selected" : ""}>${esc(sl.name)}${sl.type === "SHOWDOWN" ? " SD" : ""} ${esc(hhmm(stkEastern(sl.start)))} (${sl.games.length}g)</option>`).join("");
+  return `<option value="">${list.length ? "Choose a slate" : "Check to list today's slates"}</option>` + list.map(sl => `<option value="${sl.slateId}"${S.stk.slateId === sl.slateId ? " selected" : ""}>${esc(sl.name)}${sl.type === "SHOWDOWN" ? " SD" : ""} · ${esc(stkEastern(sl.start).toLocaleDateString([], { weekday: "short" }))} ${esc(hhmm(stkEastern(sl.start)))} (${sl.games.length}g)</option>`).join("");
 }
 function stkStampHtml() {
   const k = S.stk; if (!k.checked) return "Not checked yet";
@@ -407,12 +407,13 @@ async function stkCheck() {
   if (S.busy) return; const sport = F().sport;
   try {
     setStatus("Checking Stokastic…");
-    const today = new Date().toLocaleString("sv-SE").slice(0, 10);
-    S.stk.slates = await stkSlates(sport, today);
-    if (!S.stk.slateId || !S.stk.slates.some(x => x.slateId === S.stk.slateId)) { const main = S.stk.slates.find(x => x.type === "CLASSIC" && /main/i.test(x.name)) || S.stk.slates.find(x => x.type === "CLASSIC") || S.stk.slates[0]; S.stk.slateId = main ? main.slateId : null; }
+    // today and the next six days, so Thursday-night and weekend slates show up midweek
+    const days = Array.from({ length: 7 }, (_, i) => new Date(Date.now() + i * 864e5).toLocaleString("sv-SE").slice(0, 10));
+    S.stk.slates = (await Promise.all(days.map(d => stkSlates(sport, d)))).flat();
+    if (!S.stk.slateId || !S.stk.slates.some(x => x.slateId === S.stk.slateId)) { const want = F().mult ? "SHOWDOWN" : "CLASSIC"; const main = S.stk.slates.find(x => x.type === want && /main/i.test(x.name)) || S.stk.slates.find(x => x.type === want) || S.stk.slates[0]; S.stk.slateId = main ? main.slateId : null; }
     if (S.stk.slateId) { const u = await stkUpdateInfo(S.stk.slateId); S.stk.proj = u.projectionsLastUpdated; S.stk.own = u.ownershipLastUpdated; S.stk.checked = new Date().toISOString(); }
     store.set("stk", S.stk); render();
-    setStatus(S.stk.slateId ? `Stokastic checked — projections ${hhmm(stkTime(S.stk.proj))}, ownership ${hhmm(stkTime(S.stk.own))}.` : `No DK ${sport.toUpperCase()} slates on Stokastic today.`);
+    setStatus(S.stk.slateId ? `Stokastic checked — projections ${hhmm(stkTime(S.stk.proj))}, ownership ${hhmm(stkTime(S.stk.own))}.` : `No DK ${sport.toUpperCase()} slates on Stokastic in the next week.`);
   } catch (e) { setStatus(e.message, true); }
 }
 async function stkLoad() {
@@ -421,7 +422,7 @@ async function stkLoad() {
     setStatus("Loading Stokastic projections…");
     const u = await stkUpdateInfo(S.stk.slateId), proj = await stkProjections(S.stk.slateId), sl = (S.stk.slates || []).find(x => x.slateId === S.stk.slateId);
     S.stk.proj = u.projectionsLastUpdated; S.stk.own = u.ownershipLastUpdated; S.stk.checked = new Date().toISOString(); S.stk.loadedProj = u.projectionsLastUpdated; store.set("stk", S.stk);
-    loadProjections(stkToCSV(proj), `DK ${F().sport.toUpperCase()} ${sl ? sl.name : "slate"} — Stokastic ${hhmm(stkTime(u.projectionsLastUpdated))}`);
+    loadProjections(stkToCSV(proj, F().sport), `DK ${F().sport.toUpperCase()} ${sl ? sl.name : "slate"} — Stokastic ${hhmm(stkTime(u.projectionsLastUpdated))}`);
     render();
   } catch (e) { setStatus(e.message, true); }
 }
