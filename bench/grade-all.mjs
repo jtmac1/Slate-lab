@@ -127,7 +127,20 @@ export function gradeContest(c, opts = {}) {
   const P = pool.players, N = entries.length, lus = entries.map(e => e.lu);
   const t0 = Date.now();
   const model = buildModel(pool, opts.model || {});
-  const res = simulate({ pool, model, field: [], lineups: lus, payouts, entries: N, fee: 1, iters, rng: mulberry32(SEED), fieldMode: true });
+  let res;
+  if (opts.genField) {
+    // the app's situation: real entries scored against a GENERATED field (not against each other),
+    // in batches like a multi-entry user, so the field generator is part of what gets graded
+    const f = pool.format, opt = Object.assign({ conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3 }, f.sport === "mlb" ? mlbStackOpt() : { nflStacks: NFL_DEF }, opts.gen || {});
+    // oracleOwn: build the field on ACTUAL ownership instead of projected - an upper bound on what a perfect ownership projection would buy
+    const gpool = opts.gen && opts.gen.oracleOwn ? Object.assign({}, pool, { players: P.map(q => Object.assign({}, q, { own: q.actOwn != null ? q.actOwn : q.own, fown: q.actOwn != null ? q.actOwn : q.fown })) }) : pool;
+    const gen = genField(gpool, N, opt, mulberry32(SEED)).field, B = opts.batch || 50, rows = [];
+    for (let b = 0; b < N; b += B) {
+      const batch = lus.slice(b, b + B), r = simulate({ pool, model, field: gen, lineups: batch, payouts, entries: N, fee: 1, iters, rng: mulberry32(SEED + b), fieldMode: false });
+      r.rows.forEach((row, k) => { row.i = b + k; rows.push(row); });
+    }
+    res = { rows, iters, genDupes: gen.length - new Set(gen.map(l => sigOf(l, f))).size, genN: gen.length };
+  } else res = simulate({ pool, model, field: [], lineups: lus, payouts, entries: N, fee: 1, iters, rng: mulberry32(SEED), fieldMode: true });
   const feats = featurize(res.rows.map((r, i) => { const e = entries[i]; return { proj: e.stkFP, roi: r.roi, cash: r.cash, t10: r.t10, avgRank: r.avgRank, own: e.own, dupN: e.dupes, stkROI: e.stkROI, actFP: e.actFP, actROI: e.actROI, finish: e.finish }; }));
   const grades = gradeRules(feats, paid, { "Stokastic ROI": f => f.stkROI });
   const actFP = entries.map(e => e.actFP), stk = entries.map(e => e.stkROI), mine = res.rows.map(r => r.roi);
@@ -173,7 +186,7 @@ export function fieldCheck(c, opts = {}) {
     if (kept.length >= rc.entries.length * 0.8) { pool = pp; entries = kept; }
   }
   const P = pool.players, f = pool.format, N = entries.length, real = entries.map(e => e.lu);
-  const opt = Object.assign({ conc: 1.25, minSal: 49000, boost: 1.0, rounds: 3 }, f.sport === "mlb" ? mlbStackOpt() : { nflStacks: NFL_DEF }, opts.gen || {});
+  const opt = Object.assign({ conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3 }, f.sport === "mlb" ? mlbStackOpt() : { nflStacks: NFL_DEF }, opts.gen || {});
   const t0 = Date.now(), gen = genField(pool, N, opt, mulberry32(SEED)).field, ms = Date.now() - t0;
   const dist = lus => { const d = {}; for (const l of lus) { const k = stackOf(l, P, f); d[k] = (d[k] || 0) + 1 / lus.length; } return d; };
   const dr = dist(real), dg = dist(gen), keys = [...new Set(Object.keys(dr).concat(Object.keys(dg)))];
@@ -218,21 +231,24 @@ export function printSummary(rows) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const args = process.argv.slice(2), FIELD = args.includes("--field"), JSON_OUT = (args.find(a => a.startsWith("--json=")) || "").slice(7), rest = args.filter(a => a !== "--field" && !a.startsWith("--json="));
+  const args = process.argv.slice(2), FIELD = args.includes("--field"), DUPECAP = args.includes("--dupecap"), JSON_OUT = (args.find(a => a.startsWith("--json=")) || "").slice(7), rest = args.filter(a => a !== "--field" && !a.startsWith("--json="));
   // --hitsame=0.30 --hsig=0.80 --psig=0.45 --smax=0.9: MLB outcome-model overrides for calibration runs (bench/compare-grades.mjs grades them against a default run)
   const flag = k => { const a = args.find(x => x.startsWith(`--${k}=`)); return a ? +a.slice(k.length + 3) : null; };
-  const HS = flag("hitsame"), HSIG = flag("hsig"), PSIG = flag("psig"), SMAX = flag("smax");
+  const HS = flag("hitsame"), HSIG = flag("hsig"), PSIG = flag("psig"), SMAX = flag("smax"), CONC = flag("conc");
   const sigmaDef = Object.assign({}, SIGMA_DEF.mlb); if (HSIG != null) for (const k of ["C", "1B", "2B", "3B", "SS", "OF"]) sigmaDef[k] = HSIG; if (PSIG != null) for (const k of ["P", "SP", "RP"]) sigmaDef[k] = PSIG;
   const MODEL = (HS != null || HSIG != null || PSIG != null || SMAX != null) ? { tables: { CSAME, COPP, MLBC: Object.assign({}, MLBC, HS != null ? { hitSame: HS } : {}) }, sigmaDef, sigmaMax: SMAX != null ? SMAX : SIGMA_MAX } : null;
   const plain = args.filter(a => !a.startsWith("--"));
   const ITERS = +(plain[0] || 4000), FILTER = plain[1] || "";
+  // --genfield [--batch=50] [--dupecap] [--minfee=200]: grade the generator too (real entries vs a generated field)
+  const GENFIELD = args.includes("--genfield"), BATCH = flag("batch") || 50, MINFEE = flag("minfee") || 0, MAXFEE = flag("maxfee") || 1e9, ORACLE = args.includes("--oracleown");
   if (MODEL) console.log(`model overrides: hitSame ${MODEL.tables.MLBC.hitSame}, hitter sigma ${sigmaDef.OF}, pitcher sigma ${sigmaDef.P}, sigmaMax ${MODEL.sigmaMax}`);
-  const contests = listContests().filter(c => !FILTER || c.dir.includes(FILTER) || c.fkey.includes(FILTER));
+  const contests = listContests().filter(c => (!FILTER || c.dir.includes(FILTER) || c.fkey.includes(FILTER)) && (!MINFEE || (c.fee || 0) >= MINFEE) && ((c.fee || 0) <= MAXFEE));
+  if (GENFIELD) console.log(`generated-field grading: batches of ${BATCH}${DUPECAP ? ", duplicate quota on" : ""}${CONC != null ? ", conc " + CONC : ""}${ORACLE ? ", field built on ACTUAL ownership (oracle)" : ""}`);
   if (FIELD) {
     // node bench/grade-all.mjs --field [iters-ignored] [filter]: generated field vs the real one
     console.log("contest".padEnd(40) + "N     stackTVD  dupes real/gen  salary real/gen   ownsum real/gen  expo gap | top stacks real/gen %");
     for (const c of contests) {
-      const r = fieldCheck(c);
+      const r = fieldCheck(c, { gen: Object.assign({}, DUPECAP ? { dupeCap: true } : {}, CONC != null ? { conc: CONC } : {}) });
       console.log(r.dir.padEnd(40) + String(r.N).padEnd(6) + r.tvd.toFixed(2).padEnd(10) + `${r.dupReal}/${r.dupGen}`.padEnd(16) + `${r.salReal.toFixed(0)}/${r.salGen.toFixed(0)}`.padEnd(18) + `${r.ownReal.toFixed(0)}/${r.ownGen.toFixed(0)}`.padEnd(17) + r.gap.toFixed(1).padEnd(9) + "| " + r.top);
       console.log("".padEnd(46) + "largest exposure misses: " + r.worst.map(w => `${w.name} ${w.real.toFixed(0)}→${w.gen.toFixed(0)}`).join(", ") + ` (${r.ms} ms)`);
     }
@@ -240,7 +256,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   }
   const rows = [];
   for (const c of contests) {
-    const r = gradeContest(c, Object.assign({ iters: ITERS }, MODEL ? { model: MODEL } : {})); rows.push(r);
+    const r = gradeContest(c, Object.assign({ iters: ITERS }, MODEL ? { model: MODEL } : {}, GENFIELD ? { genField: true, batch: BATCH, gen: Object.assign({}, DUPECAP ? { dupeCap: true } : {}, CONC != null ? { conc: CONC } : {}, ORACLE ? { oracleOwn: true } : {}) } : {})); rows.push(r);
     console.log(`\n=== ${c.dir} [${c.fkey}] ===`);
     console.log(`  ${r.N} entries of ${r.rows} rows, ${r.paid} paid, field ROI ${r.fieldROI.toFixed(0)}%; ${r.players} players, ${r.teams} teams, ${r.games} games; unmatched ${r.unmatched.length}${r.unmatched.length ? " (" + r.unmatched.slice(0, 5).join(", ") + ")" : ""}; projection residual ${r.resid.toFixed(2)} FP/lineup; sim ${r.ms} ms`);
     console.log(`  lineup ROI vs actual FP: Stokastic ${r.sStk.toFixed(3)}  mine ${r.sMine.toFixed(3)}  projection ${r.sProj.toFixed(3)}  (agree ${r.agree.toFixed(3)}) | top-${r.paid} cashed: Stk ${r.cashStk} / me ${r.cashMine} / rand ${r.cashRand.toFixed(1)} | top-10% realized: Stk ${r.roiStk.toFixed(0)}% / me ${r.roiMine.toFixed(0)}%`);

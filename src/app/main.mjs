@@ -16,7 +16,8 @@ const STACK_TYPES = ["5-3", "5-2-1", "5-x", "4-4", "4-3-1", "4-2-x", "4-x", "3-3
 // MLB stack mix measured from seven real DK main-slate fields, 2026-09-06 to 09-12 ($67K-$350K contests).
 const STACK_DEF = { "5-3": 23, "5-2-1": 29, "5-x": 11, "4-4": 4, "4-3-1": 8, "4-2-x": 5, "4-x": 2, "3-3-x": 3 };
 const NFL_DEF = { 1: 45, 2: 25, 3: 5, bring: 25 };
-const ARCH = [{ conc: 1.0, minSal: 47500, boost: 0.6, label: "Low Stakes" }, { conc: 1.25, minSal: 49000, boost: 1.0, label: "Marquee" }, { conc: 1.6, minSal: 49300, boost: 1.5, label: "High Stakes" }];
+// Marquee conc 1.0 is the graded default (src/engine/field.mjs); the other two bracket it
+const ARCH = [{ conc: 0.85, minSal: 47500, boost: 0.6, label: "Low Stakes" }, { conc: 1.0, minSal: 49000, boost: 1.0, label: "Marquee" }, { conc: 1.25, minSal: 49300, boost: 1.5, label: "High Stakes" }];
 const S = {
   view: "hub", league: store.get("league", "mlb"), type: store.get("type", "classic"), stk: store.get("stk", { slates: [], slateId: null, proj: null, own: null, checked: null, loadedProj: null }),
   projText: store.get("projText", ""), projName: store.get("projName", ""), projWhen: store.get("projWhen", ""), tsWhen: store.get("tsWhen", ""), tsText: store.get("tsText", ""),
@@ -25,7 +26,7 @@ const S = {
   dk: { entries: [], ids: {}, name: "", dupes: true, sort: "fee" }, gate: store.get("gate", 50),
   cfg: Object.assign({
     pool: 500, pct: 10, payMode: "pct", entries: 500, fee: 20, payText: "", rake: 15,
-    arch: 1, conc: 1.25, minSal: 49000, boost: 1.0, rounds: 3, seed: 1, stacks: Object.assign({}, STACK_DEF),
+    arch: 1, conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3, seed: 1, stacks: Object.assign({}, STACK_DEF),
     wP: 50, wO: 50, n: 20, obj: "blend", rand: 18, maxExp: 60, bMinSal: 0, minUniq: 1, stackSize: 0, force: "", exclude: "",
     iters: 5000, simSeed: 1, rvDate: new Date().toISOString().slice(0, 10), rvName: "", uniques: 0
   }, store.get("cfg", {}), (s => s && JSON.stringify(s) === JSON.stringify({ "5-3": 17, "5-2-1": 25, "5-x": 15, "4-4": 5, "4-3-1": 10, "4-2-x": 0, "4-x": 10, "3-3-x": 2 }) ? { stacks: Object.assign({}, STACK_DEF) } : {})(store.get("cfg", {}).stacks)),   // saved copies of the old default move to the measured mix

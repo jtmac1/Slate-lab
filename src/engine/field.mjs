@@ -1,13 +1,23 @@
 // Contest generator: builds one realistic opponent lineup per contest entry.
 import { eligible } from "./formats.mjs";
-import { lineupOK, assignSlots } from "./lineups.mjs";
+import { lineupOK, assignSlots, sigOf } from "./lineups.mjs";
 
+// conc 1.0 and dupeCap on (2026-09-16, bench/grade-all.mjs --genfield over 155 pulled $50+ contests):
+// real entries simmed against the generated field rank actual results better at conc 1.0 than at
+// 1.25 (lineup Spearman 0.125 -> 0.151 on $200+, top-10% realized +4% -> +20%; 1.6 worse, 0.8 no
+// better), and a field built on realized ownership ranks worse still - the sim's edge needs a
+// projection-based field, not a chalkier one. The quota brings duplicates to the real 1-3%.
 const DEF = {
-  conc: 1.25, minSal: 49000, rounds: 3, boost: 1.0,
+  conc: 1.0, minSal: 49000, rounds: 3, boost: 1.0,
   sizes: { 5: 0.60, 4: 0.32, 3: 0.08 },          // primary MLB stack size (fitted to real high-dollar fields)
   secSizes: { 0: 0.05, 1: 0.20, 2: 0.40, 3: 0.30, 4: 0.05 },  // secondary MLB stack size
-  oppPitcherPenalty: 0.15, stackTeams: null, sample: 2500
+  oppPitcherPenalty: 0.15, stackTeams: null, sample: 2500,
+  dupeCap: true    // MLB: hold exact-copy lineups to the real field's duplicate share (dupeTarget)
 };
+// Share of entries that duplicate another entry in real DK MLB fields, by field size
+// (bench/grade-all.mjs --field over 217 pulled contests, 2026-09-16: 2.1% under 300 entries,
+// 1.3% at 300-1.5K, 3.1% at 1.5K-10K). Left alone the generator runs 2.5-4.5x that.
+export function dupeTarget(n) { return n < 300 ? 0.021 : n < 1500 ? 0.013 : 0.031; }
 
 // Projected ownership under-calls chalk in real fields: on the 2026-09-11 Mega 8s, players
 // projected 15-30% came in at 25% and those above 30% at 48%, while everyone under 15% landed
@@ -174,7 +184,7 @@ function genFieldMLB(pool, n, o, rng, log) {
   for (const k in (o.secBy || {})) wantSec[k] = Object.assign({}, o.secBy[k]);
   let sizes = Object.assign({}, o.sizes), secBy = o.secBy ? JSON.parse(JSON.stringify(o.secBy)) : null;
   const struct = {};
-  function draw(count, cnt) {
+  function draw(count, cnt, dd) {
     const out = []; let tries = 0; const max = count * 150;
     for (const k in struct) delete struct[k];
     while (out.length < count && tries < max) {
@@ -214,6 +224,8 @@ function genFieldMLB(pool, n, o, rng, log) {
       if (!ok || sal > f.cap || sal < o.minSal) continue;
       const lu = assignSlots(ids, P, f); if (!lu) continue;
       if (!lineupOK(lu, P, f, teams)) continue;
+      // duplicate quota (final draws only): a copy beyond the real share is thrown back
+      if (dd) { const sg = sigOf(lu, f); if (dd.sigs.has(sg)) { if (dd.dupes >= dd.allow) continue; dd.dupes++; } else dd.sigs.add(sg); }
       out.push(lu); for (const id of lu) cnt[id]++;
       const sk = s1 + "|" + (T2 ? s2 : 0); struct[sk] = (struct[sk] || 0) + 1;
     }
@@ -236,14 +248,15 @@ function genFieldMLB(pool, n, o, rng, log) {
     lines.push(`round ${r + 1}: ${got.length} trial lineups, mean ownership gap ${gap(t, cnt, got.length, np).toFixed(2)} pts`);
     calibrate(w, t, cnt, got.length, np); calibrateStructure(got.length);
   }
-  const cnt = new Float64Array(np), field = draw(n, cnt);
+  const dd = o.dupeCap ? { sigs: new Set(), dupes: 0, allow: Math.round(n * (typeof o.dupeCap === "number" ? o.dupeCap : dupeTarget(n))) } : null;
+  const cnt = new Float64Array(np), field = draw(n, cnt, dd);
   // A real field has every entry filled. If the salary window rejects too much (small slate,
   // stack-heavy mix), relax the floor in steps and top the field up rather than come up short.
   for (let relax = 0; field.length < n && relax < 4 && o.minSal > 40000; relax++) {
-    o.minSal -= 500; const more = draw(n - field.length, cnt); for (const lu of more) field.push(lu);
+    o.minSal -= 500; const more = draw(n - field.length, cnt, dd); for (const lu of more) field.push(lu);
     lines.push(`salary floor relaxed to ${o.minSal}: +${more.length} entries`);
   }
-  lines.push(`final: ${field.length} entries, mean ownership gap ${gap(t, cnt, field.length || 1, np).toFixed(2)} pts`);
+  lines.push(`final: ${field.length} entries, mean ownership gap ${gap(t, cnt, field.length || 1, np).toFixed(2)} pts${dd ? `, ${dd.dupes} duplicate entries (quota ${dd.allow})` : ""}`);
   if (log) lines.forEach(log);
   return { field, expo: cnt, cC: new Float64Array(np), cF: cnt, log: lines };
 }

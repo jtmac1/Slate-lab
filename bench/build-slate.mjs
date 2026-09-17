@@ -23,8 +23,8 @@ const pool = buildPool(headers, rows, "mlb_cl"), P = pool.players, f = pool.form
 const dkId = {}; const idCol = headers.findIndex(h => /^dk id$/i.test(h)); if (idCol >= 0) rows.forEach((r, i) => { const p = P.find(q => q.name === r[headers.findIndex(h => /^player$/i.test(h))]); if (p) dkId[p.i] = r[idCol]; });
 console.log(`${file}: ${P.length} players (${P.filter(p => p.proj > 0).length} projected), ${pool.teams.length} teams, ${pool.games.length} games; source "${pool.src}"`);
 
-// Contest Generator, Marquee archetype (conc 1.25, minSal 49000, boost 1.0, 3 rounds), measured stack mix
-const opt = Object.assign({ conc: 1.25, minSal: 49000, boost: 1.0, rounds: 3 }, mlbStackOpt());
+// Contest Generator, Marquee archetype (conc 1.0, minSal 49000, boost 1.0, 3 rounds), measured stack mix
+const opt = Object.assign({ conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3 }, mlbStackOpt());
 let t0 = Date.now();
 const g = genField(pool, N, opt, mulberry32(SEED));
 const field = g.field, sig = {}; for (const l of field) { const k = sigOf(l, f); sig[k] = (sig[k] || 0) + 1; }
