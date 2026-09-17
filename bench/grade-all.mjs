@@ -141,8 +141,12 @@ export function gradeContest(c, opts = {}) {
     }
     res = { rows, iters, genDupes: gen.length - new Set(gen.map(l => sigOf(l, f))).size, genN: gen.length };
   } else res = simulate({ pool, model, field: [], lineups: lus, payouts, entries: N, fee: 1, iters, rng: mulberry32(SEED), fieldMode: true });
-  const feats = featurize(res.rows.map((r, i) => { const e = entries[i]; return { proj: e.stkFP, roi: r.roi, cash: r.cash, t10: r.t10, avgRank: r.avgRank, own: e.own, dupN: e.dupes, stkROI: e.stkROI, actFP: e.actFP, actROI: e.actROI, finish: e.finish }; }));
-  const grades = gradeRules(feats, paid, { "Stokastic ROI": f => f.stkROI });
+  // against a generated field the sim's own copy count (r.dupN) is pre-contest information; against the real field only the actual count exists
+  const feats = featurize(res.rows.map((r, i) => { const e = entries[i]; return { proj: e.stkFP, roi: r.roi, cash: r.cash, t10: r.t10, avgRank: r.avgRank, own: e.own, dupN: opts.genField ? (r.dupN || 0) : e.dupes, stkROI: e.stkROI, actFP: e.actFP, actROI: e.actROI, finish: e.finish }; }));
+  // duplicate-aware candidates (graded only; they enter the app if they beat the default)
+  const extra = { "Stokastic ROI": f => f.stkROI };
+  if (opts.genField) Object.assign(extra, { "Sim ROI, no expected copies": f => f.dupN > 0 ? -1e9 + f.rROI : f.roi, "Gated top half, no expected copies": f => (f.rProj >= 0.5 && f.dupN === 0) ? f.roi : -1e9 + f.rProj, "Sim ROI minus 15pp per expected copy": f => f.roi - 15 * f.dupN, "Gated top half minus 15pp per copy": f => f.rProj >= 0.5 ? f.roi - 15 * f.dupN : -1e9 + f.rProj });
+  const grades = gradeRules(feats, paid, extra);
   const actFP = entries.map(e => e.actFP), stk = entries.map(e => e.stkROI), mine = res.rows.map(r => r.roi);
   const cashSet = new Set(entries.map((e, i) => e.finish <= paid ? i : -1).filter(i => i >= 0));
   const k = Math.max(3, Math.round(N * 0.1));
@@ -212,7 +216,7 @@ function printByAttr(rows, attr, label, order) {
 }
 
 export function printSummary(rows) {
-  const names = Object.keys(RULES).concat(["Stokastic ROI"]);
+  const names = rows.length ? Object.keys(rows[0].grades) : Object.keys(RULES).concat(["Stokastic ROI"]);
   printByAttr(rows, "tier", "entry fee", ["<$50", "$50-199", "$200-599", "$600+"]);
   printByAttr(rows, "size", "field size", ["<300", "300-1.5K", "1.5K-10K", "10K+"]);
   for (const fkey of ["mlb_cl", "nfl_cl", "nfl_sd"]) {
@@ -245,6 +249,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const isNFL = FILTER.startsWith("nfl") || /nfl/.test(FILTER);
   const MODEL = (HS != null || HSIG != null || PSIG != null || SMAX != null || NFLSIG || CORR != null) ? { tables: { CSAME: scaleT(CSAME), COPP: scaleT(COPP), MLBC: Object.assign({}, MLBC, HS != null ? { hitSame: HS } : {}) }, sigmaDef: isNFL ? nflSigma : sigmaDef, sigmaMax: SMAX != null ? SMAX : SIGMA_MAX } : null;
   // --genfield [--batch=50] [--dupecap] [--minfee=200]: grade the generator too (real entries vs a generated field)
+  // --vendor: grade on the recovered Stokastic pre-lock file (vendor Std Dev path) when bench/stk-vendor-files.mjs found one
+  const NOSD = args.includes("--nosd");   // with --vendor: same file, but default sigmas instead of its Std Dev
+  const VENDOR = args.includes("--vendor"), vendorMap = VENDOR ? Object.fromEntries(fs.readdirSync("data/vendor").flatMap(k => { const m = path.join("data/vendor", k, "map.json"); return fs.existsSync(m) ? Object.entries(JSON.parse(fs.readFileSync(m, "utf8"))) : []; })) : {};
   const GENFIELD = args.includes("--genfield"), BATCH = flag("batch") || 50, MINFEE = flag("minfee") || 0, MAXFEE = flag("maxfee") || 1e9, MAXN = flag("maxentries") || 1e9, ORACLE = args.includes("--oracleown"), SHARD = (args.find(a => a.startsWith("--shard=")) || "").slice(8).split("/").map(Number);
   if (MODEL) console.log(isNFL ? `model overrides (NFL): sigma ${JSON.stringify(nflSigma)}, corr x${CORR != null ? CORR : 1}, sigmaMax ${MODEL.sigmaMax}` : `model overrides: hitSame ${MODEL.tables.MLBC.hitSame}, hitter sigma ${sigmaDef.OF}, pitcher sigma ${sigmaDef.P}, sigmaMax ${MODEL.sigmaMax}`);
   const contests = listContests().filter(c => (!FILTER || c.dir.includes(FILTER) || c.fkey.includes(FILTER)) && (!MINFEE || (c.fee || 0) >= MINFEE) && ((c.fee || 0) <= MAXFEE) && ((c.entries || 0) <= MAXN));
@@ -264,7 +271,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   }
   const rows = [];
   for (const c of shardList) {
-    const r = gradeContest(c, Object.assign({ iters: ITERS }, MODEL ? { model: MODEL } : {}, GENFIELD ? { genField: true, batch: BATCH, gen: Object.assign({}, DUPECAP ? { dupeCap: true } : {}, CONC != null ? { conc: CONC } : {}, ORACLE ? { oracleOwn: true } : {}) } : {})); rows.push(r);
+    if (VENDOR && !vendorMap[c.key]) continue;   // only contests with a vendor file, so A/B runs pair up
+    const r = gradeContest(c, Object.assign({ iters: ITERS }, VENDOR ? { proj: vendorMap[c.key].file } : {}, MODEL ? { model: MODEL } : {}, NOSD ? { model: Object.assign({}, MODEL || {}, { ignoreFileSigma: true }) } : {}, GENFIELD ? { genField: true, batch: BATCH, gen: Object.assign({}, DUPECAP ? { dupeCap: true } : {}, CONC != null ? { conc: CONC } : {}, ORACLE ? { oracleOwn: true } : {}) } : {})); rows.push(r);
     console.log(`\n=== ${c.dir} [${c.fkey}] ===`);
     console.log(`  ${r.N} entries of ${r.rows} rows, ${r.paid} paid, field ROI ${r.fieldROI.toFixed(0)}%; ${r.players} players, ${r.teams} teams, ${r.games} games; unmatched ${r.unmatched.length}${r.unmatched.length ? " (" + r.unmatched.slice(0, 5).join(", ") + ")" : ""}; projection residual ${r.resid.toFixed(2)} FP/lineup; sim ${r.ms} ms`);
     console.log(`  lineup ROI vs actual FP: Stokastic ${r.sStk.toFixed(3)}  mine ${r.sMine.toFixed(3)}  projection ${r.sProj.toFixed(3)}  (agree ${r.agree.toFixed(3)}) | top-${r.paid} cashed: Stk ${r.cashStk} / me ${r.cashMine} / rand ${r.cashRand.toFixed(1)} | top-10% realized: Stk ${r.roiStk.toFixed(0)}% / me ${r.roiMine.toFixed(0)}%`);
@@ -272,5 +280,5 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   }
   printSummary(rows);
   // --json=<file>: keep per-contest grades so selection rules can be analysed without re-simming
-  if (JSON_OUT) fs.writeFileSync(JSON_OUT, JSON.stringify(rows.map(r => ({ dir: r.dir, fkey: r.fkey, date: r.date, fee: r.fee, tier: r.tier, size: r.size, N: r.N, paid: r.paid, fieldROI: r.fieldROI, sStk: r.sStk, sMine: r.sMine, roiStk: r.roiStk, roiMine: r.roiMine, pStk: r.pStk, pMine: r.pMine, agree: r.agree, cashStk: r.cashStk, cashMine: r.cashMine, grades: r.grades }))));
+  if (JSON_OUT) fs.writeFileSync(JSON_OUT, JSON.stringify(rows.map(r => ({ dir: r.dir, fkey: r.fkey, date: r.date, fee: r.fee, tier: r.tier, size: r.size, src: r.src, resid: r.resid, N: r.N, paid: r.paid, fieldROI: r.fieldROI, sStk: r.sStk, sMine: r.sMine, roiStk: r.roiStk, roiMine: r.roiMine, pStk: r.pStk, pMine: r.pMine, agree: r.agree, cashStk: r.cashStk, cashMine: r.cashMine, grades: r.grades }))));
 }

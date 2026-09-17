@@ -33,11 +33,11 @@ export const SIGMA_DEF = {
   // the 30-point tail match, and lineup rank correlation with actual rose 0.082 -> 0.125 (both halves).
   nfl_sd: { QB: 0.45, RB: 0.42, WR: 0.50, TE: 0.55, K: 0.55, DST: 0.65 }
 };
-export function sigmaFor(p, sport, sigmaMax, sigmaDef) {
+export function sigmaFor(p, sport, sigmaMax, sigmaDef, ignoreFile) {
   const cap = sigmaMax ?? SIGMA_MAX;
   // MLB uses the calibrated per-position values: vendor std dev puts nearly every hitter on the
   // cap anyway and made pitchers too volatile (bench ablation on 2026-09-10 and 09-11, both worse).
-  const fromFile = sport !== "mlb";
+  const fromFile = sport !== "mlb" && !ignoreFile;   // ignoreFile: grade the default-sigma path on a file that carries Std Dev
   if (fromFile && p.sd != null && p.sd > 0 && p.proj > 0) { const r = p.sd / p.proj; return Math.min(cap, Math.sqrt(Math.log(1 + r * r))); }
   if (fromFile && p.ceil != null && p.ceil > p.proj) {
     const L = Math.log(p.ceil / p.proj), z = 1.036, d = z * z - 2 * L;
@@ -98,7 +98,7 @@ export function buildModel(pool, opts = {}) {
   const P = pool.players, sport = pool.format.sport, n = P.length, cholMax = opts.cholMax ?? 220;
   // default sigmas are per format when a format table exists (showdown), else per sport
   const sigmaDef = opts.sigmaDef || SIGMA_DEF[pool.format.key] || SIGMA_DEF[sport];
-  const sig = new Float64Array(n); for (let i = 0; i < n; i++) sig[i] = sigmaFor(P[i], sport, opts.sigmaMax, sigmaDef);
+  const sig = new Float64Array(n); for (let i = 0; i < n; i++) sig[i] = sigmaFor(P[i], sport, opts.sigmaMax, sigmaDef, opts.ignoreFileSigma);
   if (n > cholMax) {
     const tbl = LOAD[sport], L = [];
     for (const p of P) {
