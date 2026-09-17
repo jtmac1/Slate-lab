@@ -27,7 +27,11 @@ export const SIGMA_DEF = {
   // Pitcher value from bench/sweep-mlb.mjs: the one change that held up on both holdout halves of 8 contests.
   mlb: { P: 0.45, SP: 0.45, RP: 0.50, C: 0.70, "1B": 0.70, "2B": 0.70, "3B": 0.70, SS: 0.70, OF: 0.70 },
   // NFL values from bench/sweep-nfl.mjs over the 2026-09-13 classic slates and three showdowns.
-  nfl: { QB: 0.55, RB: 0.50, WR: 0.60, TE: 0.65, K: 0.55, DST: 0.85 }
+  nfl: { QB: 0.55, RB: 0.50, WR: 0.60, TE: 0.65, K: 0.55, DST: 0.85 },
+  // Showdown: 0.82x the classic values (2026-09-17, bench/sd-variance.mjs + grade-all over 272 pulled
+  // showdowns): the classic sigmas drew lineup spread ~20% wider than realized; at 0.82x the spread and
+  // the 30-point tail match, and lineup rank correlation with actual rose 0.082 -> 0.125 (both halves).
+  nfl_sd: { QB: 0.45, RB: 0.42, WR: 0.50, TE: 0.55, K: 0.55, DST: 0.65 }
 };
 export function sigmaFor(p, sport, sigmaMax, sigmaDef) {
   const cap = sigmaMax ?? SIGMA_MAX;
@@ -92,7 +96,9 @@ function jacobi(A, n) {
 // Pairwise matrix repaired to positive-definite, then Cholesky. Factor model above cholMax.
 export function buildModel(pool, opts = {}) {
   const P = pool.players, sport = pool.format.sport, n = P.length, cholMax = opts.cholMax ?? 220;
-  const sig = new Float64Array(n); for (let i = 0; i < n; i++) sig[i] = sigmaFor(P[i], sport, opts.sigmaMax, opts.sigmaDef);
+  // default sigmas are per format when a format table exists (showdown), else per sport
+  const sigmaDef = opts.sigmaDef || SIGMA_DEF[pool.format.key] || SIGMA_DEF[sport];
+  const sig = new Float64Array(n); for (let i = 0; i < n; i++) sig[i] = sigmaFor(P[i], sport, opts.sigmaMax, sigmaDef);
   if (n > cholMax) {
     const tbl = LOAD[sport], L = [];
     for (const p of P) {

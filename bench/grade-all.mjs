@@ -234,20 +234,28 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const args = process.argv.slice(2), FIELD = args.includes("--field"), DUPECAP = args.includes("--dupecap"), JSON_OUT = (args.find(a => a.startsWith("--json=")) || "").slice(7), rest = args.filter(a => a !== "--field" && !a.startsWith("--json="));
   // --hitsame=0.30 --hsig=0.80 --psig=0.45 --smax=0.9: MLB outcome-model overrides for calibration runs (bench/compare-grades.mjs grades them against a default run)
   const flag = k => { const a = args.find(x => x.startsWith(`--${k}=`)); return a ? +a.slice(k.length + 3) : null; };
-  const HS = flag("hitsame"), HSIG = flag("hsig"), PSIG = flag("psig"), SMAX = flag("smax"), CONC = flag("conc");
-  const sigmaDef = Object.assign({}, SIGMA_DEF.mlb); if (HSIG != null) for (const k of ["C", "1B", "2B", "3B", "SS", "OF"]) sigmaDef[k] = HSIG; if (PSIG != null) for (const k of ["P", "SP", "RP"]) sigmaDef[k] = PSIG;
-  const MODEL = (HS != null || HSIG != null || PSIG != null || SMAX != null) ? { tables: { CSAME, COPP, MLBC: Object.assign({}, MLBC, HS != null ? { hitSame: HS } : {}) }, sigmaDef, sigmaMax: SMAX != null ? SMAX : SIGMA_MAX } : null;
   const plain = args.filter(a => !a.startsWith("--"));
   const ITERS = +(plain[0] || 4000), FILTER = plain[1] || "";
+  const HS = flag("hitsame"), HSIG = flag("hsig"), PSIG = flag("psig"), SMAX = flag("smax"), CONC = flag("conc");
+  // NFL: --nflsig=QB:0.45,WR:0.5,RB:0.42,TE:0.55,DST:0.65 (per-position sigma) and --corr=0.8 (scale every CSAME/COPP entry)
+  const NFLSIG = (args.find(a => a.startsWith("--nflsig=")) || "").slice(9), CORR = flag("corr");
+  const nflSigma = Object.assign({}, SIGMA_DEF.nfl); for (const kv of NFLSIG.split(",").filter(Boolean)) { const [k, v] = kv.split(":"); nflSigma[k] = +v; }
+  const scaleT = t => CORR != null ? Object.fromEntries(Object.entries(t).map(([k, v]) => [k, v * CORR])) : t;
+  const sigmaDef = Object.assign({}, SIGMA_DEF.mlb); if (HSIG != null) for (const k of ["C", "1B", "2B", "3B", "SS", "OF"]) sigmaDef[k] = HSIG; if (PSIG != null) for (const k of ["P", "SP", "RP"]) sigmaDef[k] = PSIG;
+  const isNFL = FILTER.startsWith("nfl") || /nfl/.test(FILTER);
+  const MODEL = (HS != null || HSIG != null || PSIG != null || SMAX != null || NFLSIG || CORR != null) ? { tables: { CSAME: scaleT(CSAME), COPP: scaleT(COPP), MLBC: Object.assign({}, MLBC, HS != null ? { hitSame: HS } : {}) }, sigmaDef: isNFL ? nflSigma : sigmaDef, sigmaMax: SMAX != null ? SMAX : SIGMA_MAX } : null;
   // --genfield [--batch=50] [--dupecap] [--minfee=200]: grade the generator too (real entries vs a generated field)
-  const GENFIELD = args.includes("--genfield"), BATCH = flag("batch") || 50, MINFEE = flag("minfee") || 0, MAXFEE = flag("maxfee") || 1e9, ORACLE = args.includes("--oracleown");
-  if (MODEL) console.log(`model overrides: hitSame ${MODEL.tables.MLBC.hitSame}, hitter sigma ${sigmaDef.OF}, pitcher sigma ${sigmaDef.P}, sigmaMax ${MODEL.sigmaMax}`);
-  const contests = listContests().filter(c => (!FILTER || c.dir.includes(FILTER) || c.fkey.includes(FILTER)) && (!MINFEE || (c.fee || 0) >= MINFEE) && ((c.fee || 0) <= MAXFEE));
+  const GENFIELD = args.includes("--genfield"), BATCH = flag("batch") || 50, MINFEE = flag("minfee") || 0, MAXFEE = flag("maxfee") || 1e9, MAXN = flag("maxentries") || 1e9, ORACLE = args.includes("--oracleown"), SHARD = (args.find(a => a.startsWith("--shard=")) || "").slice(8).split("/").map(Number);
+  if (MODEL) console.log(isNFL ? `model overrides (NFL): sigma ${JSON.stringify(nflSigma)}, corr x${CORR != null ? CORR : 1}, sigmaMax ${MODEL.sigmaMax}` : `model overrides: hitSame ${MODEL.tables.MLBC.hitSame}, hitter sigma ${sigmaDef.OF}, pitcher sigma ${sigmaDef.P}, sigmaMax ${MODEL.sigmaMax}`);
+  const contests = listContests().filter(c => (!FILTER || c.dir.includes(FILTER) || c.fkey.includes(FILTER)) && (!MINFEE || (c.fee || 0) >= MINFEE) && ((c.fee || 0) <= MAXFEE) && ((c.entries || 0) <= MAXN));
+  // --shard=k/n: take every n-th contest starting at k (0-based) so several processes can split a run; merge with bench/merge-json.mjs
+  const shardList = SHARD.length === 2 && SHARD[1] > 1 ? contests.filter((c, i) => i % SHARD[1] === SHARD[0]) : contests;
+  if (shardList !== contests) console.log(`shard ${SHARD[0]}/${SHARD[1]}: ${shardList.length} of ${contests.length} contests`);
   if (GENFIELD) console.log(`generated-field grading: batches of ${BATCH}${DUPECAP ? ", duplicate quota on" : ""}${CONC != null ? ", conc " + CONC : ""}${ORACLE ? ", field built on ACTUAL ownership (oracle)" : ""}`);
   if (FIELD) {
     // node bench/grade-all.mjs --field [iters-ignored] [filter]: generated field vs the real one
     console.log("contest".padEnd(40) + "N     stackTVD  dupes real/gen  salary real/gen   ownsum real/gen  expo gap | top stacks real/gen %");
-    for (const c of contests) {
+    for (const c of shardList) {
       const r = fieldCheck(c, { gen: Object.assign({}, DUPECAP ? { dupeCap: true } : {}, CONC != null ? { conc: CONC } : {}) });
       console.log(r.dir.padEnd(40) + String(r.N).padEnd(6) + r.tvd.toFixed(2).padEnd(10) + `${r.dupReal}/${r.dupGen}`.padEnd(16) + `${r.salReal.toFixed(0)}/${r.salGen.toFixed(0)}`.padEnd(18) + `${r.ownReal.toFixed(0)}/${r.ownGen.toFixed(0)}`.padEnd(17) + r.gap.toFixed(1).padEnd(9) + "| " + r.top);
       console.log("".padEnd(46) + "largest exposure misses: " + r.worst.map(w => `${w.name} ${w.real.toFixed(0)}→${w.gen.toFixed(0)}`).join(", ") + ` (${r.ms} ms)`);
@@ -255,7 +263,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     process.exit(0);
   }
   const rows = [];
-  for (const c of contests) {
+  for (const c of shardList) {
     const r = gradeContest(c, Object.assign({ iters: ITERS }, MODEL ? { model: MODEL } : {}, GENFIELD ? { genField: true, batch: BATCH, gen: Object.assign({}, DUPECAP ? { dupeCap: true } : {}, CONC != null ? { conc: CONC } : {}, ORACLE ? { oracleOwn: true } : {}) } : {})); rows.push(r);
     console.log(`\n=== ${c.dir} [${c.fkey}] ===`);
     console.log(`  ${r.N} entries of ${r.rows} rows, ${r.paid} paid, field ROI ${r.fieldROI.toFixed(0)}%; ${r.players} players, ${r.teams} teams, ${r.games} games; unmatched ${r.unmatched.length}${r.unmatched.length ? " (" + r.unmatched.slice(0, 5).join(", ") + ")" : ""}; projection residual ${r.resid.toFixed(2)} FP/lineup; sim ${r.ms} ms`);
