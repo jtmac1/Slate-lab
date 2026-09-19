@@ -498,6 +498,13 @@ function dkMine() {
   const mine = all.filter(c => ids.has(String(c.id)) || names.has(String(c.name || "").trim().toLowerCase()));
   return mine.length ? { list: mine, filtered: true } : { list: all, filtered: false };
 }
+// how stale the list is: contests disappear at lock, so a list from yesterday is worse than none
+function dkAge() {
+  if (!S.dkWhen) return "";
+  const mins = Math.max(0, Math.round((Date.now() - new Date(S.dkWhen).getTime()) / 60000));
+  const txt = mins < 90 ? `${mins} min old` : mins < 1440 ? `${Math.round(mins / 60)} h old` : `${Math.round(mins / 1440)} days old`;
+  return `<div class="ticks"><span${mins > 720 ? ' style="color:var(--red)"' : ""}>Contest list ${txt}</span></div>`;
+}
 function dkOptions() {
   const { list } = dkMine();
   if (!list.length) return "";
@@ -524,7 +531,7 @@ function renderGen() {
     ${ctlField("Pool Size", `<select class="sel" data-cfg="pool" id="poolSel">${[250, 500, 1000, 1500, 2000, 5000].map(n => `<option value="${n}"${+S.cfg.pool === n ? " selected" : ""}>${n}</option>`).join("")}<option value="custom"${![250, 500, 1000, 1500, 2000, 5000].includes(+S.cfg.pool) ? " selected" : ""}>Custom: ${![250, 500, 1000, 1500, 2000, 5000].includes(+S.cfg.pool) ? S.cfg.pool : "…"}</option></select>`, true)}
     ${ctlField("Team Controls", `<button class="btn sec" id="btnTeams">Team Controls</button>`, true)}
     ${(mlb || fkey() === "nfl_cl" || fkey() === "cfb_cl") ? ctlField("Stack Type Exposures", `<div style="position:relative"><button class="btn sec" id="btnStacks">Stack Type Exposures ✎</button><div id="popStacks"></div></div>`, true) : ""}
-    ${ctlField(dkMine().filtered ? "My Contests" : "DraftKings Contest", `<select class="sel" id="dkPick"><option value="">${!S.dkLobby ? "None loaded" : dkMine().filtered ? "Pick one you entered…" : "Load entries to filter…"}</option>${dkOptions()}</select>`, true)}
+    ${ctlField(dkMine().filtered ? "My Contests" : "DraftKings Contest", `<select class="sel" id="dkPick"><option value="">${!S.dkLobby ? "None loaded" : dkMine().filtered ? "Pick one you entered…" : "Load entries to filter…"}</option>${dkOptions()}</select><label class="btn ghost" style="cursor:pointer;margin-top:6px;display:inline-block" title="Pick the file written by: npm run contests">${S.dkLobby ? "Refresh list" : "Load contest list"}<input type="file" id="fileLobby" accept=".json,application/json" hidden></label>${dkAge()}`, true)}
     <div class="f"><label>Contest Buy-in <span class="i">i</span></label><input class="txt" id="fee" type="number" min="0" step="1" value="${fee}"><div class="ticks"><span id="feeNote">$${fee} — ${feeLabel(fee)}</span></div></div>
     <div class="stamp">${S.projWhen ? "Projections loaded: " + esc(S.projWhen) : ""}${S.dkPicked ? "<br>" + esc(S.dkPicked) : ""}${S.contest ? "<br>Contest generated " + esc(S.contest.when) : ""}</div>
     <div class="f wide cta"><label>&nbsp;</label><button class="btn gen" id="btnGen"${S.pool && !S.busy ? "" : " disabled"}>${S.contest ? "Generate Lineups" : "Generate Lineups"}</button></div></div>`;
@@ -533,6 +540,17 @@ function renderGen() {
   $("#fee").addEventListener("input", e => { S.cfg.fee = +e.target.value; saveCfg();
     const n = $("#feeNote"); if (n) n.textContent = "$" + (+e.target.value || 0) + " — " + feeLabel(e.target.value); });
   $("#dkPick").addEventListener("change", e => { if (e.target.value) pickDkContest(e.target.value); else { S.dkTried = false; loadDkLobby(); } });
+  // the file written by `npm run contests`, loaded straight from disk so nothing has to be committed
+  $("#fileLobby").addEventListener("change", async e => {
+    const fl = e.target.files[0]; if (!fl) return;
+    try {
+      const j = JSON.parse(await readFile(fl));
+      const list = (j.contests || []).filter(c => c.gameType === "Classic" || !c.gameType);
+      if (!list.length) return setStatus("That file has no classic contests in it.", true);
+      S.dkLobby = list; S.dkWhen = j.fetched || new Date().toISOString(); S.dkTried = true;
+      setStatus(`${list.length} contests loaded${j.sport ? " for " + j.sport : ""}.`); render();
+    } catch { setStatus("That file is not a contest list.", true); }
+  });
   if (!S.dkLobby) loadDkLobby();
   $("#btnTeams").addEventListener("click", () => openModal("teams"));
   const bs = $("#btnStacks"); if (bs) bs.addEventListener("click", () => { S.pop = S.pop === "stacks" ? null : "stacks"; renderStackPop(); });

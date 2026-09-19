@@ -5,6 +5,9 @@
   "type": "module",
   "scripts": {
     "test": "node --test \"test/**/*.test.mjs\"",
-    "bench": "node bench/mlb-night-2026-09-10.mjs"
+    "bench": "node bench/mlb-night-2026-09-10.mjs",
+    "contests": "node bench/dk-contests.mjs CFB --payouts --max=40",
+    "contests:nfl": "node bench/dk-contests.mjs NFL --payouts --max=40",
+    "contests:mlb": "node bench/dk-contests.mjs MLB --payouts --max=40"
   }
 }
