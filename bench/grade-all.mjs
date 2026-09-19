@@ -13,12 +13,13 @@ import { listPost, readPost } from "./post-store.mjs";
 import { recoverContest } from "../src/engine/recover.mjs";
 import { buildModel, CSAME, COPP, MLBC, SIGMA_DEF, SIGMA_MAX } from "../src/engine/model.mjs";
 import { simulate, playerROI } from "../src/engine/sim.mjs";
+import { fitPayouts, paidCount } from "../src/engine/payouts.mjs";
 import { fieldProfile, genField } from "../src/engine/field.mjs";
 import { stackOf, stackTeams, sigOf, salOf, ownSum, assignSlots } from "../src/engine/lineups.mjs";
 import { mulberry32 } from "../src/engine/rng.mjs";
 import { featurize, gradeRules, spearman, RULES } from "../src/engine/select.mjs";
 
-const SEED = 1;
+const SEED = +((process.argv.find(a => a.startsWith("--seed=")) || "--seed=1").slice(7)) || 1;   // --seed=2 re-runs the same config on different draws, which measures the noise floor
 const mean = a => a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0;
 const topOf = (arr, k) => arr.map((v, i) => i).sort((a, b) => arr[b] - arr[a]).slice(0, k);
 const loose = s => nrm(s).split(" ").filter(w => w.length > 1).join(" ");
@@ -38,6 +39,32 @@ function refLookup(refDir, date, mlb) {
 export const feeTier = fee => fee < 50 ? "<$50" : fee < 200 ? "$50-199" : fee < 600 ? "$200-599" : "$600+";
 export const fieldSize = n => n < 300 ? "<300" : n < 1500 ? "300-1.5K" : n < 10000 ? "1.5K-10K" : "10K+";
 
+// The per-user entry cap. Stokastic sends it as maxPlayerEntries and bench/pull-stokastic stores it.
+// It equals the biggest block anyone actually entered in every contest checked, which looks like it
+// must be an observed count rather than the rule - it is not. DraftKings sets the cap at 3% of the
+// field (median 2.98% over 204 contests, capped at 150), so it takes odd values like 82 and 47, and
+// somebody maxes out essentially always. The lobby shows it as the M-badge: M88 on a 2,941 entry
+// contest, M9 on 309. Because it is a fixed share of the field it carries nothing that field size
+// does not already carry. Single entry is the one genuinely separate rule, and the name states it.
+// Prize pool and first place out of the contest name: "CFB $35K Late Night Snack [$10K to 1st]".
+// With the entry count and fee from the contest feed that is the whole payout curve, without the
+// user typing a field size, a rake and a top share and getting all three slightly wrong.
+export function prizesFromName(name) {
+  const s = String(name || "");
+  const money = t => { const m = String(t).match(/([\d.]+)\s*([KM]?)/i); if (!m) return null;
+    return +m[1] * (m[2].toUpperCase() === "K" ? 1e3 : m[2].toUpperCase() === "M" ? 1e6 : 1); };
+  const top = (s.match(/\$\s*([\d.]+\s*[KM]?)\s*to\s*1st/i) || [])[1];
+  const all = (s.match(/\$\s*([\d.]+\s*[KM]?)/i) || [])[1];
+  return { total: all ? money(all) : null, top: top ? money(top) : null };
+}
+
+export function capFromName(name) {
+  const s = String(name || "");
+  if (/single\s*entry/i.test(s)) return 1;
+  const m = s.match(/(\d+)\s*(?:entry|entries)\s*max/i) || s.match(/max\s*(\d+)\s*(?:entry|entries)/i);
+  return m ? +m[1] : null;
+}
+
 export function listContests() {
   const out = [];
   for (const dir of fs.readdirSync("data").sort()) {
@@ -52,7 +79,7 @@ export function listContests() {
     for (const file of listPost(sport)) {
       const j = readPost(file), c = j.contest; if (j.lineupsSkipped || !j.lineups.length) continue;
       const fkey = sport === "mlb" ? "mlb_cl" : sport === "cfb" ? "cfb_cl" : /showdown/i.test(c.type) ? "nfl_sd" : "nfl_cl";
-      out.push({ dir: `post/${sport}/${path.basename(file).replace(/\.json(\.gz)?$/, "")}`, sport, fkey, date: c.date, json: file, name: c.name, fee: c.fee, entries: c.entries, key: c.key, tier: feeTier(c.fee), size: fieldSize(c.entries) });
+      out.push({ dir: `post/${sport}/${path.basename(file).replace(/\.json(\.gz)?$/, "")}`, sport, fkey, date: c.date, json: file, name: c.name, fee: c.fee, entries: c.entries, key: c.key, tier: feeTier(c.fee), size: fieldSize(c.entries), cap: c.maxEntries != null ? c.maxEntries : capFromName(c.name) });
     }
   }
   return out;
@@ -121,7 +148,21 @@ export function matchToProjections(rc, file, fkey) {
 
 export function gradeContest(c, opts = {}) {
   const iters = opts.iters || 4000, rc = recover(c);
-  let { pool, entries } = rc; const { payouts, paid } = rc;
+  let { pool, entries } = rc; let { payouts, paid } = rc;
+  // --fitpay: price against the payout curve the APP fits from a typed field size, rake and top
+  // share, instead of the true one recovered from the contest. The difference is the accuracy the
+  // user loses by approximating the contest rather than pulling it.
+  if (opts.fitPay) {
+    const N0 = entries.length;
+    let prize = N0 * (1 - (opts.rake ?? 15) / 100), top = prize * (opts.topPct ?? 10) / 100;
+    if (opts.fitPay === "name") {   // prize pool and first place read off the contest name
+      const pr = prizesFromName(c.name), fee = c.fee || 1;
+      if (pr.total) prize = pr.total / fee;
+      if (pr.top) top = pr.top / fee;
+    }
+    payouts = fitPayouts(N0, prize, top, 22);
+    paid = paidCount(payouts);
+  }
   const pf = opts.proj === true ? projFileFor(c) : opts.proj || null, m = pf ? matchToProjections(rc, pf, c.fkey) : null;
   if (m) { pool = m.pool; entries = m.entries; }
   const P = pool.players, N = entries.length, lus = entries.map(e => e.lu);
@@ -259,7 +300,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   // --ctable=<file>: correlation tables fitted from real results (bench/fit-corr.mjs), merged over the defaults
   const LOADFILE = (args.find(a => a.startsWith("--load=")) || "").slice(7), LOADT = LOADFILE ? JSON.parse(fs.readFileSync(LOADFILE, "utf8")) : null;
   const PROJTILT = flag("projtilt");
+  // --dupefloor=0 off, =-1 the real duplicate share for that field size, =0.2 an explicit share
   const DUPEFLOOR = flag("dupefloor");
+  const dupeFloorOpt = DUPEFLOOR == null ? null : DUPEFLOOR < 0 ? true : DUPEFLOOR || false;
   const BEST = flag("best"), SHARPFRAC = flag("frac"), MINSAL = flag("minsal");   // sharp-mixture field
   const SECSTACK = args.includes("--sec");   // build the measured second team block in the CFB field   // --dupefloor=0 turns the generator's forced duplicates off
   // --sigtilt=-0.35 or --sigtilt=QB:-0.67,RB:-0.34,WR:-0.28: one exponent, or one per position
@@ -291,7 +334,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     // node bench/grade-all.mjs --field [iters-ignored] [filter]: generated field vs the real one
     console.log("contest".padEnd(40) + "N     stackTVD  dupes real/gen  salary real/gen   ownsum real/gen  expo gap | top stacks real/gen %");
     for (const c of shardList) {
-      const r = fieldCheck(c, { gen: Object.assign({}, DUPECAP ? { dupeCap: true } : {}, CONC != null ? { conc: CONC } : {}, DUPEFLOOR != null ? { dupeFloor: DUPEFLOOR || false } : {}, SECSTACK ? { secStack: true } : {}, BEST ? { best: BEST } : {}, SHARPFRAC != null ? { sharpFrac: SHARPFRAC } : {}, MINSAL ? { minSal: MINSAL } : {}) });
+      const r = fieldCheck(c, { gen: Object.assign({}, DUPECAP ? { dupeCap: true } : {}, CONC != null ? { conc: CONC } : {}, DUPEFLOOR != null ? { dupeFloor: dupeFloorOpt } : {}, SECSTACK ? { secStack: true } : {}, BEST ? { best: BEST } : {}, SHARPFRAC != null ? { sharpFrac: SHARPFRAC } : {}, MINSAL ? { minSal: MINSAL } : {}) });
       console.log(r.dir.padEnd(40) + String(r.N).padEnd(6) + r.tvd.toFixed(2).padEnd(10) + `${r.dupReal}/${r.dupGen}`.padEnd(16) + `${r.salReal.toFixed(0)}/${r.salGen.toFixed(0)}`.padEnd(18) + `${r.ownReal.toFixed(0)}/${r.ownGen.toFixed(0)}`.padEnd(17) + r.gap.toFixed(1).padEnd(9) + "| " + r.top);
       console.log("".padEnd(46) + "largest exposure misses: " + r.worst.map(w => `${w.name} ${w.real.toFixed(0)}→${w.gen.toFixed(0)}`).join(", ") + ` (${r.ms} ms)`);
     }
@@ -300,7 +343,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const rows = [];
   for (const c of shardList) {
     if (VENDOR && !vendorMap[c.key]) continue;   // only contests with a vendor file, so A/B runs pair up
-    const r = gradeContest(c, Object.assign({ iters: ITERS }, VENDOR ? { proj: vendorMap[c.key].file } : {}, MODEL ? { model: MODEL } : {}, NOSD ? { model: Object.assign({}, MODEL || {}, { ignoreFileSigma: true }) } : {}, GENFIELD ? { genField: true, batch: BATCH, gen: Object.assign({}, DUPECAP ? { dupeCap: true } : {}, CONC != null ? { conc: CONC } : {}, DUPEFLOOR != null ? { dupeFloor: DUPEFLOOR || false } : {}, SECSTACK ? { secStack: true } : {}, BEST ? { best: BEST } : {}, SHARPFRAC != null ? { sharpFrac: SHARPFRAC } : {}, MINSAL ? { minSal: MINSAL } : {}, ORACLE ? { oracleOwn: true } : {}) } : {}, ROWS ? { rows: true } : {})); rows.push(r);
+    const r = gradeContest(c, Object.assign({ iters: ITERS }, VENDOR ? { proj: vendorMap[c.key].file } : {}, MODEL ? { model: MODEL } : {}, NOSD ? { model: Object.assign({}, MODEL || {}, { ignoreFileSigma: true }) } : {}, args.includes("--fitpay") ? { fitPay: true } : args.includes("--fitpay-name") ? { fitPay: "name" } : {}, GENFIELD ? { genField: true, batch: BATCH, gen: Object.assign({}, DUPECAP ? { dupeCap: true } : {}, CONC != null ? { conc: CONC } : {}, DUPEFLOOR != null ? { dupeFloor: dupeFloorOpt } : {}, SECSTACK ? { secStack: true } : {}, BEST ? { best: BEST } : {}, SHARPFRAC != null ? { sharpFrac: SHARPFRAC } : {}, MINSAL ? { minSal: MINSAL } : {}, ORACLE ? { oracleOwn: true } : {}) } : {}, ROWS ? { rows: true } : {})); rows.push(r);
     if (ROWS && r.entryRows) { fs.appendFileSync(ROWS, r.entryRows.map(x => JSON.stringify(x)).join("\n") + "\n"); delete r.entryRows; }
     console.log(`\n=== ${c.dir} [${c.fkey}] ===`);
     console.log(`  ${r.N} entries of ${r.rows} rows, ${r.paid} paid, field ROI ${r.fieldROI.toFixed(0)}%; ${r.players} players, ${r.teams} teams, ${r.games} games; unmatched ${r.unmatched.length}${r.unmatched.length ? " (" + r.unmatched.slice(0, 5).join(", ") + ")" : ""}; projection residual ${r.resid.toFixed(2)} FP/lineup; sim ${r.ms} ms`);

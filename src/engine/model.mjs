@@ -140,7 +140,12 @@ export function buildModel(pool, opts = {}) {
   const pTilt = opts.projTilt ?? PROJ_TILT[sport] ?? 0, pRef = opts.projTiltRef ?? SIGMA_TILT_REF[sport] ?? 11.5;
   let mu = null;
   if (pTilt) { mu = new Float64Array(n); for (let i = 0; i < n; i++) { const pr = P[i].proj; mu[i] = pr > 0 ? pr * Math.pow(Math.max(3, pr) / pRef, pTilt) : pr; } }
+  const tail = opts.tail === false ? null : (opts.tail || TAIL[sport] || null);
+  const tc = tail ? tail.c : 0, ta = tail ? tail.a : 0;
   const sig = new Float64Array(n); for (let i = 0; i < n; i++) sig[i] = sigmaFor(P[i], sport, opts.sigmaMax, sigmaDef, opts.ignoreFileSigma, tilt, tiltRef);
+  // put the mean back: the bend only adds mass above c, so every centre is scaled down to match
+  if (ta) { const base = mu; mu = new Float64Array(n);
+    for (let i = 0; i < n; i++) { const pr = base ? base[i] : P[i].proj; mu[i] = pr > 0 ? pr * tailFactor(sig[i], tc, ta) : pr; } }
   if (n > cholMax) {
     const tbl = (opts.load && opts.load[sport]) || LOAD[sport], L = [];   // opts.load: grade alternative factor loadings without editing the table
     for (const p of P) {
@@ -148,7 +153,7 @@ export function buildModel(pool, opts = {}) {
       const ss = l[0] * l[0] + l[1] * l[1] + l[2] * l[2];
       L.push({ g: l[0], t: l[1], o: l[2], e: Math.sqrt(Math.max(0.02, 1 - ss)) });
     }
-    return { type: "factor", L, sig, n, mu };
+    return { type: "factor", L, sig, n, mu, tc, ta };
   }
   const tables = opts.tables || (sport === "cfb" ? { CSAME: CSAME_CFB, COPP: COPP_CFB, MLBC } : null);
   const C = []; for (let i = 0; i < n; i++) C.push(new Float64Array(n));
@@ -166,28 +171,72 @@ export function buildModel(pool, opts = {}) {
     let sum = D[i][j]; for (let k = 0; k < j; k++) sum -= Lm[i][k] * Lm[j][k];
     if (i === j) Lm[i][j] = Math.sqrt(Math.max(sum, 1e-9)); else Lm[i][j] = sum / (Lm[j][j] || 1e-9);
   }
-  return { type: "chol", L: Lm, sig, n, mu };
+  return { type: "chol", L: Lm, sig, n, mu, tc, ta };
+}
+
+// A lognormal draw gets the cash line right and the winning score badly wrong: over 60 pulled college
+// contests the bar the sim expected to WIN came in 15.9 points under what actually won, while its
+// cash line was within a point (bench/winning-score.mjs). Scaling sigma fixes the top only by
+// widening the middle too, which pushes the cash line out; scaling correlation does almost nothing.
+// What is missing is a fatter right tail at the same centre, which is what football scoring looks
+// like - most players land near projection and occasionally one goes off.
+// TAIL bends the standard normal upward beyond c standard deviations: z + a(z-c)^2. Below c nothing
+// changes at all, so the cash line is untouched, and the mean is put back by tailFactor so the draw
+// stays mean-preserving. Cost is one comparison per player per draw.
+// Empty on purpose, and the reasoning is worth keeping. The sim's expected WINNING score came in
+// 15.9 points under what actually won across 60 contests while its cash line was within a point
+// (bench/winning-score.mjs), which looks like a tail that is too thin. Two things say otherwise.
+// bench/fit-tail.mjs measures the real residual quantiles: the gap to the normal saturates around
+// +0.78 from the 90th percentile up instead of diverging, and the median sits at -0.264 rather than
+// 0, which is the signature of a plain mean-preserving lognormal with sigma about 1.3x ours - no
+// bend, just more spread. And grading that wider sigma is a disaster for what the app is for:
+// lineup rank correlation 0.229 -> 0.165, player 0.425 -> 0.362, cash hits -4.9 per contest.
+// The resolution is that the sim under-disperses the field and the candidate equally, so the
+// comparison that sets ROI stays consistent - which is why predicted-minus-actual ROI is already
+// within 0.1 of zero. A simulated score and a real score are different distributions, and the gap
+// between them is not by itself a pricing error. The tight sigma is shrinkage against noisy
+// projections, and grading keeps choosing it.
+export const TAIL = {};
+// capped at 5 sigma: a quadratic bend left unbounded sends a 15-point projection to four figures
+export const BEND_MAX = 5;
+export function bendZ(z, c, a) { if (!a || z <= c) return z; const d = z - c; return Math.min(BEND_MAX, z + a * d * d); }
+// E[exp(sg*bend(z) - sg^2/2)] by Simpson over the normal density, cached: sigma takes few distinct
+// values in a pool, so this runs a handful of times per contest and never inside the draw loop.
+const facCache = new Map();
+export function tailFactor(sg, c, a) {
+  if (!a) return 1;
+  const key = sg.toFixed(4) + "|" + c + "|" + a;
+  const hit = facCache.get(key); if (hit !== undefined) return hit;
+  const lo = -6, hi = 9, n = 600, h = (hi - lo) / n, k = 1 / Math.sqrt(2 * Math.PI);
+  let s = 0;
+  for (let i = 0; i <= n; i++) {
+    const z = lo + i * h, w = i === 0 || i === n ? 1 : (i % 2 ? 4 : 2);
+    s += w * k * Math.exp(-z * z / 2) * Math.exp(sg * bendZ(z, c, a) - sg * sg / 2);
+  }
+  const e = s * h / 3, f = e > 0 ? 1 / e : 1;
+  facCache.set(key, f);
+  return f;
 }
 
 // mu overrides the projection the draw is centred on, for grading a recalibration of the projections
 // themselves. The draw is mean-preserving, so mu is exactly the player's expected score.
-export function toScore(p, z, sg, mu) {
+export function toScore(p, z, sg, mu, tc, ta) {
   const m = mu == null ? p.proj : mu;
   if (m <= 0) return 0;
   if (p.pos === "DST") { const sd = p.sd && p.sd > 0 ? p.sd : Math.max(2, m * 0.8); return Math.max(-4, m + sd * z); }
-  return m * Math.exp(sg * z - sg * sg / 2);
+  return m * Math.exp(sg * (ta ? bendZ(z, tc, ta) : z) - sg * sg / 2);
 }
 
 // Fill `out` with one correlated draw of every player's score.
 export function drawScores(model, pool, rng, out, scratch) {
-  const P = pool.players, n = model.n, sig = model.sig, mu = model.mu;
+  const P = pool.players, n = model.n, sig = model.sig, mu = model.mu, tc = model.tc, ta = model.ta;
   if (model.type === "chol") {
     const z = scratch.z;
     for (let j = 0; j < n; j++) z[j] = rng.gauss();
     for (let j = 0; j < n; j++) {
       let s = 0; const Lj = model.L[j];
       for (let k = 0; k <= j; k++) s += Lj[k] * z[k];
-      out[j] = toScore(P[j], s, sig[j], mu ? mu[j] : undefined);
+      out[j] = toScore(P[j], s, sig[j], mu ? mu[j] : undefined, tc, ta);
     }
   } else {
     const gF = scratch.gF, tF = scratch.tF, teams = pool.teams;
@@ -196,7 +245,7 @@ export function drawScores(model, pool, rng, out, scratch) {
     for (let j = 0; j < n; j++) {
       const p = P[j], l = model.L[j], oppTi = teams.indexOf(p.opp);
       const s = l.g * gF[p.gi || 0] + l.t * tF[p.ti < 0 ? 0 : p.ti] + (oppTi >= 0 ? l.o * tF[oppTi] : 0) + l.e * rng.gauss();
-      out[j] = toScore(p, s, sig[j], mu ? mu[j] : undefined);
+      out[j] = toScore(p, s, sig[j], mu ? mu[j] : undefined, tc, ta);
     }
   }
 }
