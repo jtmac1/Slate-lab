@@ -9,7 +9,7 @@ import { listPost } from "./post-store.mjs";
 import { loadPulled } from "./grade-all.mjs";
 import { stackOf, sigOf } from "../src/engine/lineups.mjs";
 const [dir, key, bf, YOU = "jtmac1999"] = process.argv.slice(2);
-const file = listPost("mlb", f => f.includes(key))[0]; if (!file) { console.error("no pulled contest " + key); process.exit(1); }
+const file = fs.readdirSync("data/post").flatMap(sp => listPost(sp, f => f.includes(key)))[0];   // any sport if (!file) { console.error("no pulled contest " + key); process.exit(1); }
 const rc = loadPulled(file), { pool, entries, contest } = rc, P = pool.players, f = pool.format, N = entries.length;
 const B = JSON.parse(fs.readFileSync(path.join(dir, bf), "utf8"));
 const A = parseCSV(fs.readFileSync(path.join(dir, "actuals.csv"), "utf8")), act = {}, actT = {}, dupName = {};

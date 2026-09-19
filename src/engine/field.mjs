@@ -43,7 +43,15 @@ function genFieldNFL(pool, n, o, rng, log) {
   const P = pool.players, f = pool.format, np = P.length, teams = pool.teams;
   const cfb = f.key === "cfb_cl";
   // stack shares: NFL defaults, or the CFB mix measured on 74 pulled DK fields (bench, 2026-09-18)
-  const st = Object.assign(cfb ? { 1: 43, 2: 32, 3: 8, bring: 50, twoQB: 95 } : { 1: 45, 2: 25, 3: 5, bring: 25 }, o.nflStacks || {});
+  // College stack shapes depend on how many games are on the slate: with two games everyone stacks
+  // deep and brings back, with twelve most lineups are QB+1. Measured on 233k entries in 277 pulled
+  // contests (bench, 2026-09-19). NFL classic keeps its single set.
+  const ng = pool.games.length;
+  const cfbSt = ng <= 2 ? { 1: 7, 2: 50, 3: 43, bring: 85, twoQB: 90 }
+    : ng <= 5 ? { 1: 23, 2: 54, 3: 20, bring: 59, twoQB: 89 }
+    : ng <= 9 ? { 1: 45, 2: 41, 3: 7, bring: 45, twoQB: 86 }
+    : { 1: 51, 2: 31, 3: 3, bring: 42, twoQB: 91 };
+  const st = Object.assign(cfb ? cfbSt : { 1: 45, 2: 25, 3: 5, bring: 25 }, o.nflStacks || {});
   const t = concTargets(P, o.conc, p => f.sport === "mlb" ? (p.isP ? "P" : "H") : p.pos, p => p.own), w = new Float64Array(np);
   for (let i = 0; i < np; i++) w[i] = Math.max(t[i], 0.0005);
   const qbs = P.filter(p => p.pos === "QB" && p.own > 0), byTeamPass = {}, byTeamAll = {};

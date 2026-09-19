@@ -17,8 +17,9 @@ const STACK_TYPES = ["5-3", "5-2-1", "5-x", "4-4", "4-3-1", "4-2-x", "4-x", "3-3
 const STACK_DEF = { "5-3": 23, "5-2-1": 29, "5-x": 11, "4-4": 4, "4-3-1": 8, "4-2-x": 5, "4-x": 2, "3-3-x": 3 };
 const NFL_DEF = { 1: 45, 2: 25, 3: 5, bring: 25 };
 // CFB stack shares measured on 74 pulled DK fields (bench, 2026-09-18); the superflex second QB is handled by the generator
-const CFB_DEF = { 1: 43, 2: 32, 3: 8, bring: 50 };
-const stackDef = () => F().sport === "cfb" ? CFB_DEF : NFL_DEF;
+// college stack shares follow the slate size (see src/engine/field.mjs)
+const cfbDefFor = g => g <= 2 ? { 1: 7, 2: 50, 3: 43, bring: 85 } : g <= 5 ? { 1: 23, 2: 54, 3: 20, bring: 59 } : g <= 9 ? { 1: 45, 2: 41, 3: 7, bring: 45 } : { 1: 51, 2: 31, 3: 3, bring: 42 };
+const stackDef = () => F().sport === "cfb" ? cfbDefFor(S.pool ? S.pool.games.length : 12) : NFL_DEF;
 // Marquee conc 1.0 is the graded default (src/engine/field.mjs); the other two bracket it
 const ARCH = [{ conc: 0.85, minSal: 47500, boost: 0.6, label: "Low Stakes" }, { conc: 1.0, minSal: 49000, boost: 1.0, label: "Marquee" }, { conc: 1.25, minSal: 49300, boost: 1.5, label: "High Stakes" }];
 const S = {
