@@ -20,8 +20,10 @@ import { compact, writePost, postFile } from "./post-store.mjs";
 const API = "https://app-api-dfs-prod-main.azurewebsites.net/api/contests/";
 const args = process.argv.slice(2), flags = args.filter(a => a.startsWith("--")), pos = args.filter(a => !a.startsWith("--"));
 const [from, to = from, sportArg = ""] = pos;
-const ISLAND = flags.includes("--island"), MAX = flags.includes("--max") ? +args[args.indexOf("--max") + 1] : Infinity, SLATE = flags.includes("--slate") ? args[args.indexOf("--slate") + 1] : null, TYPE = flags.includes("--type") ? args[args.indexOf("--type") + 1] : null, MINFEE = flags.includes("--minfee") ? +args[args.indexOf("--minfee") + 1] : 0, SKIPBIG = flags.includes("--skip-big"), PAR = flags.includes("--par") ? Math.max(1, +args[args.indexOf("--par") + 1] || 1) : 1;
-if (!from && !SLATE) { console.error("usage: node bench/pull-stokastic.mjs <from> [to] [sport] [--island] [--max N]"); process.exit(1); }
+const ISLAND = flags.includes("--island"), MAX = flags.includes("--max") ? +args[args.indexOf("--max") + 1] : Infinity, SLATE = flags.includes("--slate") ? args[args.indexOf("--slate") + 1] : null,
+  SLATES = flags.includes("--slates") ? JSON.parse(fs.readFileSync(args[args.indexOf("--slates") + 1], "utf8")) : null,
+  SHARD = ((args.find(a => a.startsWith("--shard=")) || "").slice(8) || "").split("/").map(Number), TYPE = flags.includes("--type") ? args[args.indexOf("--type") + 1] : null, MINFEE = flags.includes("--minfee") ? +args[args.indexOf("--minfee") + 1] : 0, SKIPBIG = flags.includes("--skip-big"), PAR = flags.includes("--par") ? Math.max(1, +args[args.indexOf("--par") + 1] || 1) : 1;
+if (!from && !SLATE && !SLATES) { console.error("usage: node bench/pull-stokastic.mjs <from> [to] [sport] [--island] [--max N]"); process.exit(1); }
 const money = s => +String(s).replace(/[$,]/g, "") || 0, sleep = ms => new Promise(r => setTimeout(r, ms));
 const weekday = d => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(d + "T12:00:00Z").getUTCDay()];
 
@@ -39,12 +41,29 @@ for (const r of rows) {
   g.mine.push({ entry: r[2], place: +r[6], points: +r[7], won: money(r[8]) + money(r[9]) });
 }
 let list = Object.values(C).sort((a, b) => a.date.localeCompare(b.date) || b.fee - a.fee);
+// --slates=<json array of slate ids>: every contest Stokastic simulated on each of those slates
+if (SLATES) {
+  let ids = SLATES; if (SHARD.length === 2 && SHARD[1] > 1) ids = ids.filter((x, i) => i % SHARD[1] === SHARD[0]);
+  console.log(ids.length + " slates to scan");
+  list = [];
+  for (const id of ids) {
+    try {
+      const sc = await (await fetch(API + "getSimulatedContests?slateId=" + id)).json();
+      for (const c of sc) {
+        if (c.site !== "DK" || /Satellite/i.test(c.name)) continue;
+        list.push({ key: String(c.siteContestId), sport: c.sport, type: c.type === "SHOWDOWN" ? "Showdown" : "Classic", date: c.startTime.slice(0, 10), lock: c.startTime.slice(11, 16), name: c.name.trim(), entries: c.entryCount, fee: c.entryFee, paid: 0, maxEntries: c.maxPlayerEntries, mine: [] });
+      }
+    } catch { /* a slate that no longer answers is skipped */ }
+    await sleep(120);
+  }
+  const seen = new Set(); list = list.filter(c => !seen.has(c.key) && seen.add(c.key));
+}
 if (SLATE) {
   // every contest Stokastic simulated on the slate, entered or not (places paid unknown here: 0)
   const sc = await (await fetch(API + "getSimulatedContests?slateId=" + SLATE)).json();
   list = sc.filter(c => c.site === "DK" && !/Satellite/i.test(c.name)).map(c => ({ key: String(c.siteContestId), sport: c.sport, type: c.type === "SHOWDOWN" ? "Showdown" : "Classic", date: c.startTime.slice(0, 10), lock: c.startTime.slice(11, 16), name: c.name.trim(), entries: c.entryCount, fee: c.entryFee, paid: 0, maxEntries: c.maxPlayerEntries, mine: [] })).sort((a, b) => b.fee - a.fee);
 }
-console.log(SLATE ? `${list.length} contests Stokastic simulated on slate ${SLATE}` : `${list.length} contests entered ${from}${to !== from ? " to " + to : ""}${sportArg ? " (" + sportArg + ")" : ""}${ISLAND ? ", island games" : ""} in ${hist}`);
+console.log(SLATES ? `${list.length} contests across the listed slates` : SLATE ? `${list.length} contests Stokastic simulated on slate ${SLATE}` : `${list.length} contests entered ${from}${to !== from ? " to " + to : ""}${sportArg ? " (" + sportArg + ")" : ""}${ISLAND ? ", island games" : ""} in ${hist}`);
 
 const get = async q => { const r = await fetch(API + q); if (!r.ok) throw new Error(`${r.status} ${q.slice(0, 40)}`); return r.json(); };
 let pulled = 0, skipped = 0, failed = 0, bytes = 0;

@@ -11,12 +11,18 @@ export const COPP = { "QB|QB": 0.25, "QB|RB": 0.05, "QB|WR": 0.20, "QB|TE": 0.15
 // hitSame 0.22 and hitter sigma 0.70 (2026-09-16, bench/sim-variance.mjs + compare-grades.mjs over 212 pulled
 // contests): real lineups spread 27.8 FP around projection, the old 0.15/0.60 model drew 20.8; the wider
 // model lifted the gated rule's realized top-10% ROI +11pp at a cost in player-ROI rank correlation.
+// College football correlations, fitted from 403 finished games and 19,083 player pairs
+// (bench/fit-corr.mjs, 2026-09-19): college stacks move together far less than NFL ones.
+// Graded on 277 pulled CFB contests: lineup rank correlation 0.183 -> 0.204, player ROI
+// 0.391 -> 0.415, cash hits +1.1 per contest, realized money unchanged.
+export const CSAME_CFB = Object.assign({}, CSAME, { "QB|RB": 0.097, "QB|WR": 0.192, "RB|RB": 0.150, "RB|WR": -0.019, "WR|WR": 0.126 });
+export const COPP_CFB = Object.assign({}, COPP, { "QB|QB": 0.099, "QB|RB": 0.021, "QB|WR": 0.008, "RB|RB": -0.017, "RB|WR": 0.000, "WR|WR": 0.038 });
 export const MLBC = { hitSame: 0.22, hitOppSameGame: 0.10, hitOwnPitcher: 0.05, hitOppPitcher: -0.20,
   pitchPitchSameGame: -0.12, orderBonus: 0.08 };
 export const LOAD = {
   nfl: { QB: [0.30, 0.70, 0.10], RB: [0.20, 0.48, 0.05], WR: [0.28, 0.62, 0.10], TE: [0.25, 0.55, 0.10], K: [0.20, 0.45, 0.05], DST: [-0.15, 0.30, -0.55] },
   mlb: { HIT: [0.25, 0.52, 0.08], PIT: [-0.30, 0.18, -0.55] },
-  cfb: { QB: [0.30, 0.70, 0.10], RB: [0.20, 0.48, 0.05], WR: [0.28, 0.62, 0.10] }
+  cfb: { QB: [0.332, 0.456, -0.013], RB: [-0.056, 0.311, 0.043], WR: [0.284, 0.159, -0.129] }
 };
 const POSES = ["QB", "RB", "WR", "TE", "K", "DST"];
 function ckey(a, b) { let i = POSES.indexOf(a), j = POSES.indexOf(b); if (i < 0) i = 99; if (j < 0) j = 99; return (i <= j ? a : b) + "|" + (i <= j ? b : a); }
@@ -105,7 +111,7 @@ export function buildModel(pool, opts = {}) {
   const sigmaDef = opts.sigmaDef || SIGMA_DEF[pool.format.key] || SIGMA_DEF[sport];
   const sig = new Float64Array(n); for (let i = 0; i < n; i++) sig[i] = sigmaFor(P[i], sport, opts.sigmaMax, sigmaDef, opts.ignoreFileSigma);
   if (n > cholMax) {
-    const tbl = LOAD[sport], L = [];
+    const tbl = (opts.load && opts.load[sport]) || LOAD[sport], L = [];   // opts.load: grade alternative factor loadings without editing the table
     for (const p of P) {
       const l = sport === "mlb" ? (p.isP ? tbl.PIT : tbl.HIT) : (tbl[p.pos] || [0.22, 0.50, 0.05]);
       const ss = l[0] * l[0] + l[1] * l[1] + l[2] * l[2];
@@ -113,8 +119,9 @@ export function buildModel(pool, opts = {}) {
     }
     return { type: "factor", L, sig, n };
   }
+  const tables = opts.tables || (sport === "cfb" ? { CSAME: CSAME_CFB, COPP: COPP_CFB, MLBC } : null);
   const C = []; for (let i = 0; i < n; i++) C.push(new Float64Array(n));
-  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) C[i][j] = i === j ? 1 : corrOf(P[i], P[j], sport, pool.games.length, opts.tables);
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) C[i][j] = i === j ? 1 : corrOf(P[i], P[j], sport, pool.games.length, tables);
   const e = jacobi(C, n), D = [];
   for (let i = 0; i < n; i++) D.push(new Float64Array(n));
   for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {

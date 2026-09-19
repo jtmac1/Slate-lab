@@ -19,12 +19,15 @@ const [dir, entriesArg = "1000", pctArg = "10", rakeArg = "15", pickArg = "20", 
 const N = +entriesArg, PCT = +pctArg, RAKE = +rakeArg, PICK = +pickArg, SEED = +seedArg, ITERS = +itersArg;
 const file = fs.readdirSync(dir).find(f => /Data_Hub_Projections\.csv$/i.test(f)) || fs.readdirSync(dir).find(f => /\.csv$/i.test(f));
 const all = parseCSV(fs.readFileSync(path.join(dir, file), "utf8")), headers = all[0], rows = all.slice(1).filter(r => r.length > 1);
-const pool = buildPool(headers, rows, "mlb_cl"), P = pool.players, f = pool.format;
+// format from the folder name: data/<date>-<sport>-<slate>
+const base = path.basename(dir), FKEY = /-cfb-/.test(base) ? "cfb_cl" : /-nfl-/.test(base) ? (/sd|showdown/.test(base) ? "nfl_sd" : "nfl_cl") : "mlb_cl";
+const pool = buildPool(headers, rows, FKEY), P = pool.players, f = pool.format;
 const dkId = {}; const idCol = headers.findIndex(h => /^dk id$/i.test(h)); if (idCol >= 0) rows.forEach((r, i) => { const p = P.find(q => q.name === r[headers.findIndex(h => /^player$/i.test(h))]); if (p) dkId[p.i] = r[idCol]; });
 console.log(`${file}: ${P.length} players (${P.filter(p => p.proj > 0).length} projected), ${pool.teams.length} teams, ${pool.games.length} games; source "${pool.src}"`);
 
 // Contest Generator, Marquee archetype (conc 1.0, minSal 49000, boost 1.0, 3 rounds), measured stack mix
-const opt = Object.assign({ conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3 }, mlbStackOpt());
+const FOOTBALL_STACKS = { cfb_cl: { 1: 43, 2: 32, 3: 8, bring: 50 }, nfl_cl: { 1: 45, 2: 25, 3: 5, bring: 25 } };
+const opt = Object.assign({ conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3 }, f.sport === "mlb" ? mlbStackOpt() : { nflStacks: FOOTBALL_STACKS[FKEY] || FOOTBALL_STACKS.nfl_cl });
 let t0 = Date.now();
 const g = genField(pool, N, opt, mulberry32(SEED));
 const field = g.field, sig = {}; for (const l of field) { const k = sigOf(l, f); sig[k] = (sig[k] || 0) + 1; }
@@ -53,7 +56,7 @@ const pr = playerROI(res, P, f).filter(p => p.exp >= 1);
 console.log(`\n=== player ROI (field exposure >= 1%) top 15 ===`); pr.slice(0, 15).forEach(p => console.log(`  ${p.name.padEnd(24)} ${p.pos.padEnd(6)} ${p.team.padEnd(4)} exp ${p.exp.toFixed(1).padStart(5)}%  proj own ${(P[p.id].own || 0).toFixed(1).padStart(5)}%  ROI ${p.roi >= 0 ? "+" : ""}${p.roi.toFixed(0)}%`));
 console.log(`\n=== player ROI bottom 8 ===`); pr.slice(-8).forEach(p => console.log(`  ${p.name.padEnd(24)} ${p.pos.padEnd(6)} ${p.team.padEnd(4)} exp ${p.exp.toFixed(1).padStart(5)}%  proj own ${(P[p.id].own || 0).toFixed(1).padStart(5)}%  ROI ${p.roi.toFixed(0)}%`));
 
-const out = { built: new Date().toISOString(), file, entries: N, pctToFirst: PCT, rake: RAKE, seed: SEED, iters: res.iters, model: "hitSame 0.22 / hitter sigma 0.70", rule: DEFAULT_RULE,
+const out = { built: new Date().toISOString(), file, entries: N, pctToFirst: PCT, rake: RAKE, seed: SEED, iters: res.iters, model: FKEY, rule: DEFAULT_RULE,
   picks: picks.map((i, k) => ({ rank: k + 1, ...pickRow(i) })), roiPicks: roiPicks.map((i, k) => ({ rank: k + 1, ...pickRow(i) })),
   playerROI: pr.map(p => ({ name: p.name, pos: p.pos, team: p.team, exp: +p.exp.toFixed(2), projOwn: +(P[p.id].own || 0).toFixed(2), roi: +p.roi.toFixed(1) })),
   field: res.rows.map(r => ({ names: names(r.lu), teams: teamsOf(r.lu), ids: r.lu.map(id => dkId[id] || null), roi: +r.roi.toFixed(1), cash: +r.cash.toFixed(3), t10: +r.t10.toFixed(3), proj: +r.projFP.toFixed(2), own: +r.own.toFixed(1), sal: r.sal, dup: r.dupN, stack: r.stack, score: r.score > -1e8 ? +r.score.toFixed(1) : null })) };
