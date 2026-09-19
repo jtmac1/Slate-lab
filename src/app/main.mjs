@@ -41,7 +41,7 @@ const S = {
   dk: { entries: [], ids: {}, name: "", dupes: true, sort: "fee" }, gate: store.get("gate", 50),
   cfg: Object.assign({
     pool: 500, pct: 10, payMode: "pct", entries: 500, fee: 20, payText: "", rake: 15,
-    fee: 20, conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3, seed: 1, stacks: Object.assign({}, STACK_DEF),
+    conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3, seed: 1, stacks: Object.assign({}, STACK_DEF),
     wP: 50, wO: 50, n: 20, obj: "blend", rand: 18, maxExp: 60, bMinSal: 0, minUniq: 1, stackSize: 0, force: "", exclude: "",
     iters: 5000, simSeed: 1, rvDate: new Date().toISOString().slice(0, 10), rvName: "", uniques: 0
   }, store.get("cfg", {}), (s => s && JSON.stringify(s) === JSON.stringify({ "5-3": 17, "5-2-1": 25, "5-x": 15, "4-4": 5, "4-3-1": 10, "4-2-x": 0, "4-x": 10, "3-3-x": 2 }) ? { stacks: Object.assign({}, STACK_DEF) } : {})(store.get("cfg", {}).stacks)),   // saved copies of the old default move to the measured mix
