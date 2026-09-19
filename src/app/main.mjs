@@ -486,10 +486,25 @@ async function loadDkLobby() {
     render();
   } catch { /* no file yet: the typed buy-in still works */ }
 }
+// Only the contests you are actually in. Entry Manager gives the contest id for every entry, so the
+// lobby is filtered to those; matching falls back to the contest name because a CSV exported from a
+// different slate still names the contest. With no entries loaded the whole lobby is offered.
+function dkMine() {
+  const all = S.dkLobby || [];
+  const ents = (S.dk && S.dk.entries) || [];
+  if (!all.length || !ents.length) return { list: all, filtered: false };
+  const ids = new Set(ents.map(e => String(e.cid || "").trim()).filter(Boolean));
+  const names = new Set(ents.map(e => String(e.contest || "").trim().toLowerCase()).filter(Boolean));
+  const mine = all.filter(c => ids.has(String(c.id)) || names.has(String(c.name || "").trim().toLowerCase()));
+  return mine.length ? { list: mine, filtered: true } : { list: all, filtered: false };
+}
 function dkOptions() {
-  if (!S.dkLobby || !S.dkLobby.length) return "";
-  return S.dkLobby.slice(0, 120).map(c =>
-    `<option value="${c.id}">${esc(c.name.slice(0, 46))} — $${c.fee}, ${(c.field || 0).toLocaleString()} entries${c.payText ? " ✓" : ""}</option>`).join("");
+  const { list } = dkMine();
+  if (!list.length) return "";
+  return list.slice(0, 120).map(c => {
+    const n = ((S.dk && S.dk.entries) || []).filter(e => String(e.cid) === String(c.id)).length;
+    return `<option value="${c.id}">${esc(c.name.slice(0, 44))} — $${c.fee}, ${(c.field || 0).toLocaleString()} entries${n ? `, ${n} of yours` : ""}${c.payText ? " ✓" : ""}</option>`;
+  }).join("");
 }
 function pickDkContest(id) {
   const c = (S.dkLobby || []).find(x => String(x.id) === String(id));
@@ -509,7 +524,7 @@ function renderGen() {
     ${ctlField("Pool Size", `<select class="sel" data-cfg="pool" id="poolSel">${[250, 500, 1000, 1500, 2000, 5000].map(n => `<option value="${n}"${+S.cfg.pool === n ? " selected" : ""}>${n}</option>`).join("")}<option value="custom"${![250, 500, 1000, 1500, 2000, 5000].includes(+S.cfg.pool) ? " selected" : ""}>Custom: ${![250, 500, 1000, 1500, 2000, 5000].includes(+S.cfg.pool) ? S.cfg.pool : "…"}</option></select>`, true)}
     ${ctlField("Team Controls", `<button class="btn sec" id="btnTeams">Team Controls</button>`, true)}
     ${(mlb || fkey() === "nfl_cl" || fkey() === "cfb_cl") ? ctlField("Stack Type Exposures", `<div style="position:relative"><button class="btn sec" id="btnStacks">Stack Type Exposures ✎</button><div id="popStacks"></div></div>`, true) : ""}
-    ${ctlField("DraftKings Contest", `<select class="sel" id="dkPick"><option value="">${S.dkLobby ? "Pick a contest…" : "None loaded"}</option>${dkOptions()}</select>`, true)}
+    ${ctlField(dkMine().filtered ? "My Contests" : "DraftKings Contest", `<select class="sel" id="dkPick"><option value="">${!S.dkLobby ? "None loaded" : dkMine().filtered ? "Pick one you entered…" : "Load entries to filter…"}</option>${dkOptions()}</select>`, true)}
     <div class="f"><label>Contest Buy-in <span class="i">i</span></label><input class="txt" id="fee" type="number" min="0" step="1" value="${fee}"><div class="ticks"><span id="feeNote">$${fee} — ${feeLabel(fee)}</span></div></div>
     <div class="stamp">${S.projWhen ? "Projections loaded: " + esc(S.projWhen) : ""}${S.dkPicked ? "<br>" + esc(S.dkPicked) : ""}${S.contest ? "<br>Contest generated " + esc(S.contest.when) : ""}</div>
     <div class="f wide cta"><label>&nbsp;</label><button class="btn gen" id="btnGen"${S.pool && !S.busy ? "" : " disabled"}>${S.contest ? "Generate Lineups" : "Generate Lineups"}</button></div></div>`;
