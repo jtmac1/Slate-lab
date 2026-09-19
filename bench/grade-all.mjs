@@ -13,7 +13,7 @@ import { listPost, readPost } from "./post-store.mjs";
 import { recoverContest } from "../src/engine/recover.mjs";
 import { buildModel, CSAME, COPP, MLBC, SIGMA_DEF, SIGMA_MAX } from "../src/engine/model.mjs";
 import { simulate, playerROI } from "../src/engine/sim.mjs";
-import { genField } from "../src/engine/field.mjs";
+import { fieldProfile, genField } from "../src/engine/field.mjs";
 import { stackOf, stackTeams, sigOf, salOf, ownSum, assignSlots } from "../src/engine/lineups.mjs";
 import { mulberry32 } from "../src/engine/rng.mjs";
 import { featurize, gradeRules, spearman, RULES } from "../src/engine/select.mjs";
@@ -132,7 +132,7 @@ export function gradeContest(c, opts = {}) {
   if (opts.genField) {
     // the app's situation: real entries scored against a GENERATED field (not against each other),
     // in batches like a multi-entry user, so the field generator is part of what gets graded
-    const f = pool.format, opt = Object.assign({ conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3 }, f.sport === "mlb" ? mlbStackOpt() : { nflStacks: NFL_DEF }, opts.gen || {});
+    const f = pool.format, opt = Object.assign({ conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3 }, f.sport === "mlb" ? mlbStackOpt() : { nflStacks: NFL_DEF }, fieldProfile(c.fee, f.key), opts.gen || {});
     // oracleOwn: build the field on ACTUAL ownership instead of projected - an upper bound on what a perfect ownership projection would buy
     const gpool = opts.gen && opts.gen.oracleOwn ? Object.assign({}, pool, { players: P.map(q => Object.assign({}, q, { own: q.actOwn != null ? q.actOwn : q.own, fown: q.actOwn != null ? q.actOwn : q.fown })) }) : pool;
     const gen = genField(gpool, N, opt, mulberry32(SEED)).field, B = opts.batch || 50, rows = [];
@@ -203,7 +203,7 @@ export function fieldCheck(c, opts = {}) {
     if (kept.length >= rc.entries.length * 0.8) { pool = pp; entries = kept; }
   }
   const P = pool.players, f = pool.format, N = entries.length, real = entries.map(e => e.lu);
-  const opt = Object.assign({ conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3 }, f.sport === "mlb" ? mlbStackOpt() : { nflStacks: NFL_DEF }, opts.gen || {});
+  const opt = Object.assign({ conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3 }, f.sport === "mlb" ? mlbStackOpt() : { nflStacks: NFL_DEF }, fieldProfile(c.fee, f.key), opts.gen || {});
   const t0 = Date.now(), gen = genField(pool, N, opt, mulberry32(SEED)).field, ms = Date.now() - t0;
   const dist = lus => { const d = {}; for (const l of lus) { const k = stackOf(l, P, f); d[k] = (d[k] || 0) + 1 / lus.length; } return d; };
   const dr = dist(real), dg = dist(gen), keys = [...new Set(Object.keys(dr).concat(Object.keys(dg)))];
@@ -259,7 +259,14 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   // --ctable=<file>: correlation tables fitted from real results (bench/fit-corr.mjs), merged over the defaults
   const LOADFILE = (args.find(a => a.startsWith("--load=")) || "").slice(7), LOADT = LOADFILE ? JSON.parse(fs.readFileSync(LOADFILE, "utf8")) : null;
   const PROJTILT = flag("projtilt");
-  const SIGTILT = flag("sigtilt"), SIGREF = flag("sigref");   // sigma scaled by (proj/ref)^tilt, graded against a flat sigma
+  const DUPEFLOOR = flag("dupefloor");
+  const BEST = flag("best"), SHARPFRAC = flag("frac"), MINSAL = flag("minsal");   // sharp-mixture field
+  const SECSTACK = args.includes("--sec");   // build the measured second team block in the CFB field   // --dupefloor=0 turns the generator's forced duplicates off
+  // --sigtilt=-0.35 or --sigtilt=QB:-0.67,RB:-0.34,WR:-0.28: one exponent, or one per position
+  const SIGTILTRAW = (args.find(a => a.startsWith("--sigtilt=")) || "").slice(10);
+  const SIGTILT = !SIGTILTRAW ? null : SIGTILTRAW.includes(":")
+    ? Object.fromEntries(SIGTILTRAW.split(",").filter(Boolean).map(kv => { const [k, v] = kv.split(":"); return [k, +v]; })) : +SIGTILTRAW;
+  const SIGREF = flag("sigref");   // sigma scaled by (proj/ref)^tilt, graded against a flat sigma
   const CHOLMAX = flag("cholmax");   // force the factor model (0) or the pairwise matrix (large), as the app would use them
   const CTFILE = (args.find(a => a.startsWith("--ctable=")) || "").slice(9), CT = CTFILE ? JSON.parse(fs.readFileSync(CTFILE, "utf8")) : null;
   const nflSigma = Object.assign({}, SIGMA_DEF.nfl), cfbSigma = Object.assign({}, SIGMA_DEF.cfb);
@@ -274,7 +281,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const VENDOR = args.includes("--vendor"), vendorMap = VENDOR ? Object.fromEntries(fs.readdirSync("data/vendor").flatMap(k => { const m = path.join("data/vendor", k, "map.json"); return fs.existsSync(m) ? Object.entries(JSON.parse(fs.readFileSync(m, "utf8"))) : []; })) : {};
   const ROWS = (args.find(a => a.startsWith("--rows=")) || "").slice(7); if (ROWS) fs.writeFileSync(ROWS, "");
   const GENFIELD = args.includes("--genfield"), BATCH = flag("batch") || 50, MINFEE = flag("minfee") || 0, MAXFEE = flag("maxfee") || 1e9, MAXN = flag("maxentries") || 1e9, ORACLE = args.includes("--oracleown"), SHARD = (args.find(a => a.startsWith("--shard=")) || "").slice(8).split("/").map(Number);
-  if (MODEL) console.log(`model overrides:${CT ? ` fitted correlations from ${CTFILE} (${Object.keys(CT.CSAME || {}).length} same-team, ${Object.keys(CT.COPP || {}).length} opposing)` : ""} MLB hitSame ${MODEL.tables.MLBC.hitSame} hitter ${sigmaDef.OF} pitcher ${sigmaDef.P} | NFL ${JSON.stringify(nflSigma)} | CFB ${JSON.stringify(cfbSigma)} | corr x${CORR != null ? CORR : 1} sigmaMax ${MODEL.sigmaMax}${SIGTILT != null ? ` | sigma tilt ${SIGTILT} around ${SIGREF || 11.5}` : ``}${PROJTILT != null ? ` | proj tilt ${PROJTILT}` : ``}`);
+  if (MODEL) console.log(`model overrides:${CT ? ` fitted correlations from ${CTFILE} (${Object.keys(CT.CSAME || {}).length} same-team, ${Object.keys(CT.COPP || {}).length} opposing)` : ""} MLB hitSame ${MODEL.tables.MLBC.hitSame} hitter ${sigmaDef.OF} pitcher ${sigmaDef.P} | NFL ${JSON.stringify(nflSigma)} | CFB ${JSON.stringify(cfbSigma)} | corr x${CORR != null ? CORR : 1} sigmaMax ${MODEL.sigmaMax}${SIGTILT != null ? ` | sigma tilt ${JSON.stringify(SIGTILT)} around ${SIGREF || 11.5}` : ``}${PROJTILT != null ? ` | proj tilt ${PROJTILT}` : ``}`);
   const contests = listContests().filter(c => (!FILTER || c.dir.includes(FILTER) || c.fkey.includes(FILTER)) && (!MINFEE || (c.fee || 0) >= MINFEE) && ((c.fee || 0) <= MAXFEE) && ((c.entries || 0) <= MAXN));
   // --shard=k/n: take every n-th contest starting at k (0-based) so several processes can split a run; merge with bench/merge-json.mjs
   const shardList = SHARD.length === 2 && SHARD[1] > 1 ? contests.filter((c, i) => i % SHARD[1] === SHARD[0]) : contests;
@@ -284,7 +291,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     // node bench/grade-all.mjs --field [iters-ignored] [filter]: generated field vs the real one
     console.log("contest".padEnd(40) + "N     stackTVD  dupes real/gen  salary real/gen   ownsum real/gen  expo gap | top stacks real/gen %");
     for (const c of shardList) {
-      const r = fieldCheck(c, { gen: Object.assign({}, DUPECAP ? { dupeCap: true } : {}, CONC != null ? { conc: CONC } : {}) });
+      const r = fieldCheck(c, { gen: Object.assign({}, DUPECAP ? { dupeCap: true } : {}, CONC != null ? { conc: CONC } : {}, DUPEFLOOR != null ? { dupeFloor: DUPEFLOOR || false } : {}, SECSTACK ? { secStack: true } : {}, BEST ? { best: BEST } : {}, SHARPFRAC != null ? { sharpFrac: SHARPFRAC } : {}, MINSAL ? { minSal: MINSAL } : {}) });
       console.log(r.dir.padEnd(40) + String(r.N).padEnd(6) + r.tvd.toFixed(2).padEnd(10) + `${r.dupReal}/${r.dupGen}`.padEnd(16) + `${r.salReal.toFixed(0)}/${r.salGen.toFixed(0)}`.padEnd(18) + `${r.ownReal.toFixed(0)}/${r.ownGen.toFixed(0)}`.padEnd(17) + r.gap.toFixed(1).padEnd(9) + "| " + r.top);
       console.log("".padEnd(46) + "largest exposure misses: " + r.worst.map(w => `${w.name} ${w.real.toFixed(0)}→${w.gen.toFixed(0)}`).join(", ") + ` (${r.ms} ms)`);
     }
@@ -293,7 +300,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const rows = [];
   for (const c of shardList) {
     if (VENDOR && !vendorMap[c.key]) continue;   // only contests with a vendor file, so A/B runs pair up
-    const r = gradeContest(c, Object.assign({ iters: ITERS }, VENDOR ? { proj: vendorMap[c.key].file } : {}, MODEL ? { model: MODEL } : {}, NOSD ? { model: Object.assign({}, MODEL || {}, { ignoreFileSigma: true }) } : {}, GENFIELD ? { genField: true, batch: BATCH, gen: Object.assign({}, DUPECAP ? { dupeCap: true } : {}, CONC != null ? { conc: CONC } : {}, ORACLE ? { oracleOwn: true } : {}) } : {}, ROWS ? { rows: true } : {})); rows.push(r);
+    const r = gradeContest(c, Object.assign({ iters: ITERS }, VENDOR ? { proj: vendorMap[c.key].file } : {}, MODEL ? { model: MODEL } : {}, NOSD ? { model: Object.assign({}, MODEL || {}, { ignoreFileSigma: true }) } : {}, GENFIELD ? { genField: true, batch: BATCH, gen: Object.assign({}, DUPECAP ? { dupeCap: true } : {}, CONC != null ? { conc: CONC } : {}, DUPEFLOOR != null ? { dupeFloor: DUPEFLOOR || false } : {}, SECSTACK ? { secStack: true } : {}, BEST ? { best: BEST } : {}, SHARPFRAC != null ? { sharpFrac: SHARPFRAC } : {}, MINSAL ? { minSal: MINSAL } : {}, ORACLE ? { oracleOwn: true } : {}) } : {}, ROWS ? { rows: true } : {})); rows.push(r);
     if (ROWS && r.entryRows) { fs.appendFileSync(ROWS, r.entryRows.map(x => JSON.stringify(x)).join("\n") + "\n"); delete r.entryRows; }
     console.log(`\n=== ${c.dir} [${c.fkey}] ===`);
     console.log(`  ${r.N} entries of ${r.rows} rows, ${r.paid} paid, field ROI ${r.fieldROI.toFixed(0)}%; ${r.players} players, ${r.teams} teams, ${r.games} games; unmatched ${r.unmatched.length}${r.unmatched.length ? " (" + r.unmatched.slice(0, 5).join(", ") + ")" : ""}; projection residual ${r.resid.toFixed(2)} FP/lineup; sim ${r.ms} ms`);

@@ -7,6 +7,7 @@ import { buildLineups } from "../engine/build.mjs";
 import { stkSlates, stkUpdateInfo, stkProjections, stkToCSV, stkTime, stkEastern, hhmm } from "../engine/stokastic.mjs";
 import { featurize, selectScore, gradeRules, DEFAULT_RULE } from "../engine/select.mjs";
 import { recoverContest } from "../engine/recover.mjs";
+import { fieldProfile } from "../engine/field.mjs";
 import { sigmaFor } from "../engine/model.mjs";
 import { $, $$, esc, copyText, readFile, download } from "./ui.mjs";
 import * as store from "./store.mjs";
@@ -21,7 +22,17 @@ const NFL_DEF = { 1: 45, 2: 25, 3: 5, bring: 25 };
 const cfbDefFor = g => g <= 2 ? { 1: 7, 2: 50, 3: 43, bring: 85 } : g <= 5 ? { 1: 23, 2: 54, 3: 20, bring: 59 } : g <= 9 ? { 1: 45, 2: 41, 3: 7, bring: 45 } : { 1: 51, 2: 31, 3: 3, bring: 42 };
 const stackDef = () => F().sport === "cfb" ? cfbDefFor(S.pool ? S.pool.games.length : 12) : NFL_DEF;
 // Marquee conc 1.0 is the graded default (src/engine/field.mjs); the other two bracket it
-const ARCH = [{ conc: 0.85, minSal: 47500, boost: 0.6, label: "Low Stakes" }, { conc: 1.0, minSal: 49000, boost: 1.0, label: "Marquee" }, { conc: 1.25, minSal: 49300, boost: 1.5, label: "High Stakes" }];
+// How tough the opponents are is set by what the contest costs, fitted on 200 pulled college
+// contests (fieldProfile in src/engine/field.mjs). Sports without a fitted curve keep the old
+// three-preset spread, now read off the same price ramp instead of a slider position.
+const ARCH = [{ conc: 0.85, minSal: 47500, boost: 0.6 }, { conc: 1.0, minSal: 49000, boost: 1.0 }, { conc: 1.25, minSal: 49300, boost: 1.5 }];
+const archFor = fee => {
+  const f = +fee || 0, p = fieldProfile(fee, F().key);
+  // college has a fitted curve, graded with the middle preset s boost; the other sports keep the
+  // three presets the slider used to pick, now chosen by price instead of by slider position
+  return p ? Object.assign({}, ARCH[1], p) : (f < 10 ? ARCH[0] : f < 50 ? ARCH[1] : ARCH[2]);
+};
+const feeLabel = fee => { const f = +fee || 0; return f < 10 ? "soft field" : f < 50 ? "mixed field" : "sharp field"; };
 const S = {
   view: "hub", league: store.get("league", "mlb"), type: store.get("type", "classic"), stk: store.get("stk", { slates: [], slateId: null, proj: null, own: null, checked: null, loadedProj: null }),
   projText: store.get("projText", ""), projName: store.get("projName", ""), projWhen: store.get("projWhen", ""), tsWhen: store.get("tsWhen", ""), tsText: store.get("tsText", ""),
@@ -30,7 +41,7 @@ const S = {
   dk: { entries: [], ids: {}, name: "", dupes: true, sort: "fee" }, gate: store.get("gate", 50),
   cfg: Object.assign({
     pool: 500, pct: 10, payMode: "pct", entries: 500, fee: 20, payText: "", rake: 15,
-    arch: 1, conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3, seed: 1, stacks: Object.assign({}, STACK_DEF),
+    fee: 20, conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3, seed: 1, stacks: Object.assign({}, STACK_DEF),
     wP: 50, wO: 50, n: 20, obj: "blend", rand: 18, maxExp: 60, bMinSal: 0, minUniq: 1, stackSize: 0, force: "", exclude: "",
     iters: 5000, simSeed: 1, rvDate: new Date().toISOString().slice(0, 10), rvName: "", uniques: 0
   }, store.get("cfg", {}), (s => s && JSON.stringify(s) === JSON.stringify({ "5-3": 17, "5-2-1": 25, "5-x": 15, "4-4": 5, "4-3-1": 10, "4-2-x": 0, "4-x": 10, "3-3-x": 2 }) ? { stacks: Object.assign({}, STACK_DEF) } : {})(store.get("cfg", {}).stacks)),   // saved copies of the old default move to the measured mix
@@ -169,7 +180,7 @@ function effectivePool() {
 }
 async function generateContest() {
   if (!S.pool || S.busy) return;
-  const c = S.cfg, N = Math.max(2, Math.round(+c.pool || 2)), f = F(), a = ARCH[+c.arch] || ARCH[1];
+  const c = S.cfg, N = Math.max(2, Math.round(+c.pool || 2)), f = F(), a = archFor(c.fee);
   const opt = Object.assign({ conc: a.conc, minSal: a.minSal, boost: a.boost, rounds: Math.max(0, Math.round(+c.rounds || 0)), stackTeams: S.share && Object.keys(S.share).length ? S.share : null }, f.sport === "mlb" ? stacksToOpt() : { nflStacks: Object.assign({}, stackDef(), c.nflStacks || {}) });
   S.busy = "gen"; S.view = "gen"; render(); setStatus(`Simulating slate — building ${N.toLocaleString()} entries…`); prog(5);
   try {
@@ -455,17 +466,18 @@ function mainHub() {
 
 /* ---------- Contest Generator ---------- */
 function renderGen() {
-  const mlb = F().sport === "mlb", a = +S.cfg.arch;
+  const mlb = F().sport === "mlb", fee = +S.cfg.fee || 20;
   $("#ctl").innerHTML = `<div class="ctl gen">${commonCtl()}
     ${ctlField("Pool Size", `<select class="sel" data-cfg="pool" id="poolSel">${[250, 500, 1000, 1500, 2000, 5000].map(n => `<option value="${n}"${+S.cfg.pool === n ? " selected" : ""}>${n}</option>`).join("")}<option value="custom"${![250, 500, 1000, 1500, 2000, 5000].includes(+S.cfg.pool) ? " selected" : ""}>Custom: ${![250, 500, 1000, 1500, 2000, 5000].includes(+S.cfg.pool) ? S.cfg.pool : "…"}</option></select>`, true)}
     ${ctlField("Team Controls", `<button class="btn sec" id="btnTeams">Team Controls</button>`, true)}
     ${(mlb || fkey() === "nfl_cl" || fkey() === "cfb_cl") ? ctlField("Stack Type Exposures", `<div style="position:relative"><button class="btn sec" id="btnStacks">Stack Type Exposures ✎</button><div id="popStacks"></div></div>`, true) : ""}
-    <div class="f slider"><label>Contest Archetype <span class="i">i</span></label><input type="range" min="0" max="2" step="1" value="${a}" id="arch"><div class="ticks"><span>Low Stakes</span><span>Marquee</span><span>High Stakes</span></div></div>
+    <div class="f"><label>Contest Buy-in <span class="i">i</span></label><input class="txt" id="fee" type="number" min="0" step="1" value="${fee}"><div class="ticks"><span id="feeNote">$${fee} — ${feeLabel(fee)}</span></div></div>
     <div class="stamp">${S.projWhen ? "Projections loaded: " + esc(S.projWhen) : ""}${S.contest ? "<br>Contest generated " + esc(S.contest.when) : ""}</div>
     <div class="f wide cta"><label>&nbsp;</label><button class="btn gen" id="btnGen"${S.pool && !S.busy ? "" : " disabled"}>${S.contest ? "Generate Lineups" : "Generate Lineups"}</button></div></div>`;
   wireCommon();
   $("#poolSel").addEventListener("change", e => { if (e.target.value === "custom") { const v = prompt("Pool size (exact number of entries):", S.cfg.pool); if (v && +v >= 2) S.cfg.pool = Math.round(+v); saveCfg(); render(); } });
-  $("#arch").addEventListener("input", e => { S.cfg.arch = +e.target.value; saveCfg(); });
+  $("#fee").addEventListener("input", e => { S.cfg.fee = +e.target.value; saveCfg();
+    const n = $("#feeNote"); if (n) n.textContent = "$" + (+e.target.value || 0) + " — " + feeLabel(e.target.value); });
   $("#btnTeams").addEventListener("click", () => openModal("teams"));
   const bs = $("#btnStacks"); if (bs) bs.addEventListener("click", () => { S.pop = S.pop === "stacks" ? null : "stacks"; renderStackPop(); });
   $("#btnGen").addEventListener("click", generateContest);

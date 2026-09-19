@@ -54,6 +54,10 @@ export const SIGMA_DEF = {
 // lineup rank correlation 0.208 -> 0.229 and cash hits +1.1 per contest, both halves, nothing worse.
 // -0.55 kept lifting lineup rank but cost player rank correlation significantly, so the measured
 // exponent is also the stop. NFL and MLB are untilted until the same measurement is made there.
+// One exponent for every position, not one each: bench/fit-sigma.mjs measures QB -0.67, RB -0.34,
+// WR -0.28, and grading those (and a shrunk QB -0.50, RB -0.34, WR -0.30) lifted rank correlation a
+// little but moved realized money down in every cut, including the gated rule the app ranks on.
+// sigmaFor still accepts a per-position object, so --sigtilt=QB:-0.5,... regrades it on new data.
 export const SIGMA_TILT = { cfb: -0.35 }, SIGMA_TILT_REF = { cfb: 11.5 };
 // Projections run hot on small numbers and cold on large ones: over the same college player-games the
 // actual/projected ratio falls from 1.064 below 10 points to about 0.95 above 15. PROJ_TILT is the
@@ -75,8 +79,9 @@ export function sigmaFor(p, sport, sigmaMax, sigmaDef, ignoreFile, tilt, tiltRef
   }
   const def = sigmaDef || SIGMA_DEF[sport] || SIGMA_DEF.nfl;
   const base = def[p.pos] || 0.72;
-  if (!tilt || !(p.proj > 0)) return base;
-  return Math.min(cap, base * Math.pow(Math.max(3, p.proj) / (tiltRef || 11.5), tilt));
+  const e = typeof tilt === "object" && tilt ? (tilt[p.pos] || 0) : tilt;   // one exponent, or one per position
+  if (!e || !(p.proj > 0)) return base;
+  return Math.min(cap, base * Math.pow(Math.max(3, p.proj) / (tiltRef || 11.5), e));
 }
 
 export function corrOf(p, q, sport, nGames, tables) {

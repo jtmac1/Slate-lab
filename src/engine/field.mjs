@@ -14,10 +14,37 @@ const DEF = {
   oppPitcherPenalty: 0.15, stackTeams: null, sample: 2500,
   dupeCap: true    // MLB: hold exact-copy lineups to the real field's duplicate share (dupeTarget)
 };
-// Share of entries that duplicate another entry in real DK MLB fields, by field size
-// (bench/grade-all.mjs --field over 217 pulled contests, 2026-09-16: 2.1% under 300 entries,
-// 1.3% at 300-1.5K, 3.1% at 1.5K-10K). Left alone the generator runs 2.5-4.5x that.
-export function dupeTarget(n) { return n < 300 ? 0.021 : n < 1500 ? 0.013 : 0.031; }
+// How tough the opponents are depends on what the contest costs. Measured on 200 pulled college
+// contests (bench/field-strength.mjs): against one fixed generator the real field runs 2.6 projected
+// points WEAKER than it under $10 and 2.5 points STRONGER at $50, while its summed ownership swings
+// from 12 points under to 18 points over. Cheap fields are soft and scattered, expensive fields are
+// strong and chalky, and it stops moving above about $50 - a $1,000 college contest is no tougher
+// than a $50 one. The two ends are fitted, the middle is interpolated on log price.
+// Strength is the only field property that has ever improved how the sim PRICES a lineup. Matching
+// the real field's ownership, its duplicate share and its stack shapes each failed.
+const FEE_LO = 5, FEE_HI = 50;
+export function fieldProfile(fee, fkey) {
+  if (fkey !== "cfb_cl") return null;   // measured for college only; other sports keep their defaults
+  const f = Math.max(0.25, +fee || FEE_LO);
+  const t = Math.max(0, Math.min(1, (Math.log10(f) - Math.log10(FEE_LO)) / (Math.log10(FEE_HI) - Math.log10(FEE_LO))));
+  // skill: [share, candidate lineups considered]. A few heavy optimizers plus a larger semi-serious
+  // class matches both the field's average strength and the top of it; sharpening everyone equally
+  // matches the average and flattens the top, which is the half that wins tournaments.
+  const skill = t > 0.02 ? [[0.05 * t, 40], [0.25 * t, 3]] : null;
+  return { conc: 0.95 + 0.15 * t, minSal: Math.round(49000 + 350 * t), skill };
+}
+
+// Share of entries that duplicate another entry in real DK fields, by field size. MLB from 217
+// pulled contests (2026-09-16: 2.1% under 300 entries, 1.3% at 300-1.5K, 3.1% at 1.5K-10K), where
+// the generator left alone runs 2.5-4.5x that and the quota pulls it back down.
+// College is a different world: 280 pulled contests (2026-09-19) duplicate at 12.4% / 15.6% / 27.3%,
+// several times the baseball rate, because a college slate has far fewer lineups worth building.
+// The baseball quota applied to college was cutting duplicates to a third of the real share.
+const DUPE = { cfb: [0.124, 0.156, 0.273] };
+export function dupeTarget(n, sport, floorOnly) {
+  const d = DUPE[sport]; if (d) return n < 300 ? d[0] : n < 1500 ? d[1] : d[2];
+  return floorOnly ? 0 : n < 300 ? 0.021 : n < 1500 ? 0.013 : 0.031;
+}
 
 // Projected ownership under-calls chalk in real fields: on the 2026-09-11 Mega 8s, players
 // projected 15-30% came in at 25% and those above 30% at 48%, while everyone under 15% landed
@@ -47,10 +74,22 @@ function genFieldNFL(pool, n, o, rng, log) {
   // deep and brings back, with twelve most lineups are QB+1. Measured on 233k entries in 277 pulled
   // contests (bench, 2026-09-19). NFL classic keeps its single set.
   const ng = pool.games.length;
-  const cfbSt = ng <= 2 ? { 1: 7, 2: 50, 3: 43, bring: 85, twoQB: 90 }
-    : ng <= 5 ? { 1: 23, 2: 54, 3: 20, bring: 59, twoQB: 89 }
-    : ng <= 9 ? { 1: 45, 2: 41, 3: 7, bring: 45, twoQB: 86 }
-    : { 1: 51, 2: 31, 3: 3, bring: 42, twoQB: 91 };
+  // sec: the SECOND team block, off unless o.secStack asks for it. Real college lineups nearly always
+  // carry one and the generator has no mechanism for it - it builds the quarterback stack and then
+  // fills every other slot independently, which is why the pooled field check under-builds 4-3-1 by 8
+  // points and 3-3-1-1 by 5 and over-builds scattered shapes by the same. Shares measured from 233k
+  // real entries (bench/stack-second.mjs). Building the block closes most of that gap: stack shape
+  // distance 0.220 -> 0.172, and duplicates rise on their own from 5.2% to 6.2% against a real 16.7%,
+  // which is the right way to get them. It still does not ship. Graded on 280 contests against a
+  // generated field it left rank correlation unmoved (0.251 -> 0.251, 0.444 -> 0.445) and pulled
+  // top-decile realized ROI 30% -> 25%, negative in both window halves.
+  // That is the third time a measurably more realistic field has failed to price lineups better,
+  // after building the field on realized ownership and after forcing the real duplicate share. The
+  // shape of the opponent field is evidently not what the sim's edge rests on. Reachable with --sec.
+  const cfbSt = ng <= 2 ? { 1: 7, 2: 50, 3: 43, bring: 85, twoQB: 90, sec: { 1: 1, 2: 54, 3: 45 } }
+    : ng <= 5 ? { 1: 23, 2: 54, 3: 20, bring: 59, twoQB: 89, sec: { 1: 9, 2: 72, 3: 19 } }
+    : ng <= 9 ? { 1: 45, 2: 41, 3: 7, bring: 45, twoQB: 86, sec: { 1: 23, 2: 69, 3: 8 } }
+    : { 1: 51, 2: 31, 3: 3, bring: 42, twoQB: 91, sec: { 1: 38, 2: 58, 3: 4 } };
   const st = Object.assign(cfb ? cfbSt : { 1: 45, 2: 25, 3: 5, bring: 25 }, o.nflStacks || {});
   const t = concTargets(P, o.conc, p => f.sport === "mlb" ? (p.isP ? "P" : "H") : p.pos, p => p.own), w = new Float64Array(np);
   for (let i = 0; i < np; i++) w[i] = Math.max(t[i], 0.0005);
@@ -69,8 +108,25 @@ function genFieldNFL(pool, n, o, rng, log) {
     let tot = 0, m = 0; for (const p of list) { if (used[p.i]) continue; const ww = w[p.i] * (mul ? mul(p) : 1); if (ww <= 0) continue; tot += ww; cum[m] = tot; pick[m] = p.i; m++; }
     return m ? pick[rng.pickCum(cum, m)] : -1;
   }
+  // o.best with o.sharpFrac: a real field is a mixture, not one kind of entrant. Most entries are
+  // casual, a minority come off optimizers, and that mixture is what gives the real field a fatter
+  // right tail than ours - at matched player exposures its 99th percentile lineup projects 2.5
+  // points higher than ours. o.sharpFrac of the entries keep the strongest of o.best candidates by
+  // projected points; the rest are drawn as before. Applying it to every entry instead raises the
+  // mean but flattens the tail, which is the wrong shape.
+  // o.skill: how many candidate lineups each entrant considers, as [share, candidates] pairs, with
+  // everyone else taking the first lineup they build. A real field holds three kinds of entrant, not
+  // two, and the shape matters: sharpening every entry a little matches the field's average strength
+  // but flattens its top, and the top is who wins. A small class of heavy optimizers alongside a
+  // larger semi-serious class matches both, for a quarter of the cost of sharpening half the field.
+  const skill = o.skill || (o.best > 1 ? [[o.sharpFrac == null ? 1 : o.sharpFrac, Math.round(o.best)]] : null);
+  const pickSkill = () => { if (!skill) return 1; let u = rng();
+    for (const [p, m] of skill) { if (u < p) return Math.max(1, Math.round(m)); u -= p; }
+    return 1; };
+  const anySkill = !!(skill && skill.some(s => s[1] > 1));
   function draw(count, cnt) {
-    const out = []; let tries = 0; const max = count * 60;
+    const out = []; let tries = 0; const max = count * 60 * (skill ? Math.max(...skill.map(s => s[1])) : 1);
+    let hold = null, heldTries = 0, curM = 1;
     struct.k = {}; struct.bring = 0; struct.n = 0;
     while (out.length < count && tries < max) {
       tries++;
@@ -84,6 +140,26 @@ function genFieldNFL(pool, n, o, rng, log) {
       if (cfb && rng() < twoQbP) { const q2 = pickWeighted(qbs, used, p => p.team === team ? 0 : 1); if (q2 >= 0) { used[q2] = 1; ids.push(q2); sal += P[q2].sal; left.SFLEX--; } }
       for (let j = 0; j < k; j++) { const id = pickWeighted(byTeamAll[team] || [], used, p => p.pos === "RB" ? 0.35 : 1); if (id < 0) break; take(P[id]); }
       if (k > 0 && rng() < bringP && byTeamAll[opp]) { const id = pickWeighted(byTeamAll[opp], used, p => p.pos === "RB" ? 0.4 : 1); if (id >= 0) { take(P[id]); bring = true; } }
+      // second team block: extend the bring-back when there is one, otherwise open a block on
+      // another team, chosen by how much projected ownership is sitting on it
+      const slotsLeft = () => left.QB + left.RB + left.WR + (left.TE || 0) + (left.DST || 0) + left.FLEX + (left.SFLEX || 0);
+      if (cfb && o.secStack && st.sec && slotsLeft() > 1) {
+        const want = pickFrom(st.sec, rng, 3);
+        let sTeam = bring ? opp : null, have = bring ? 1 : 0;
+        if (!sTeam) {
+          let tot = 0, m = 0;
+          for (const tm of teams) {
+            if (tm === team || !(byTeamAll[tm] || []).length) continue;
+            let ww = 0; for (const p of byTeamAll[tm]) if (!used[p.i]) ww += Math.max(0, p.own);
+            if (ww <= 0) continue; tot += ww; cum[m] = tot; pick[m] = teams.indexOf(tm); m++;
+          }
+          if (m) sTeam = teams[pick[rng.pickCum(cum, m)]];
+        }
+        if (sTeam) for (let j = have; j < want && slotsLeft() > 1; j++) {
+          const id = pickWeighted(byTeamAll[sTeam] || [], used, p => p.pos === "RB" ? 0.5 : 1);
+          if (id < 0) break; take(P[id]);
+        }
+      }
       // fill the rest slot by slot under the salary window
       let ok = true; const order = cfb ? ["RB", "WR", "FLEX", "SFLEX"] : ["RB", "WR", "TE", "DST", "FLEX"];
       let remaining = order.reduce((s, x) => s + left[x] * minBy[x], 0);
@@ -100,6 +176,18 @@ function genFieldNFL(pool, n, o, rng, log) {
       if (!ok || ids.length !== f.slots.length || sal > f.cap || sal < o.minSal) continue;
       const lu = assignSlots(ids, P, f); if (!lu) continue;
       if (!lineupOK(lu, P, f, teams)) continue;
+      if (anySkill) {
+        if (!hold && heldTries === 0) curM = pickSkill();
+        if (curM > 1) {
+          const pv = lu.reduce((s, id) => s + (P[id].proj || 0), 0);
+          if (!hold || pv > hold.pv) hold = { lu, pv };
+          if (++heldTries < curM) continue;
+          const win = hold; hold = null; heldTries = 0;
+          out.push(win.lu); for (const id of win.lu) cnt[id]++;
+          continue;
+        }
+        heldTries = 0;
+      }
       out.push(lu); for (const id of lu) cnt[id]++;
       // record what actually landed, since the fill stage can add teammates on its own
       let kObs = 0, bObs = false;
@@ -128,7 +216,9 @@ function genFieldNFL(pool, n, o, rng, log) {
     o.minSal -= 500; const more = draw(n - field.length, cnt); for (const lu of more) field.push(lu);
     lines.push(`salary floor relaxed to ${o.minSal}: +${more.length} entries`);
   }
-  lines.push(`final: ${field.length} entries, mean ownership gap ${gap(t, cnt, field.length || 1, np).toFixed(2)} pts`);
+  const share = typeof o.dupeFloor === "number" ? o.dupeFloor : o.dupeFloor === true ? dupeTarget(field.length, f.sport, true) : 0;
+  const made = share ? addDuplicates(field, P, f, rng, share, cnt, cnt) : 0;
+  lines.push(`final: ${field.length} entries, mean ownership gap ${gap(t, cnt, field.length || 1, np).toFixed(2)} pts${made ? `, ${made} duplicates added to reach ${(100 * share).toFixed(1)}%` : ""}`);
   if (log) lines.forEach(log);
   return { field, expo: cnt, cC: new Float64Array(np), cF: cnt, log: lines };
 }
@@ -261,7 +351,7 @@ function genFieldMLB(pool, n, o, rng, log) {
     lines.push(`round ${r + 1}: ${got.length} trial lineups, mean ownership gap ${gap(t, cnt, got.length, np).toFixed(2)} pts`);
     calibrate(w, t, cnt, got.length, np); calibrateStructure(got.length);
   }
-  const dd = o.dupeCap ? { sigs: new Set(), dupes: 0, allow: Math.round(n * (typeof o.dupeCap === "number" ? o.dupeCap : dupeTarget(n))) } : null;
+  const dd = o.dupeCap ? { sigs: new Set(), dupes: 0, allow: Math.round(n * (typeof o.dupeCap === "number" ? o.dupeCap : dupeTarget(n, pool.format.sport))) } : null;
   const cnt = new Float64Array(np), field = draw(n, cnt, dd);
   // A real field has every entry filled. If the salary window rejects too much (small slate,
   // stack-heavy mix), relax the floor in steps and top the field up rather than come up short.
@@ -285,6 +375,41 @@ function stackMul(p, st, boost, sport) {
   }
   return 1;
 }
+// Real fields duplicate far more than a generator does, because the same few lineups occur to many
+// people at once. The football path has no natural source of that, so copies are added on purpose:
+// entries chosen at random are replaced by copies of existing lineups, with the chalkiest lineups
+// most likely to be copied, until the duplicate share matches the real one for that field size.
+// Off unless o.dupeFloor asks for it, because matching reality here made the sim worse. It closed
+// the gap exactly as intended (college generated 5.2% -> 16.1% against a real 16.7%, every field
+// size within 1.3 points, with stack shape, salary and exposure accuracy untouched), but graded on
+// 280 CFB contests against a generated field it cost lineup rank correlation 0.251 -> 0.249 and
+// player 0.444 -> 0.442, both significant and both halves, with realized money flat to slightly
+// down. It is the same lesson as building the field on realized ownership: a field that copies
+// reality more closely is not the same thing as a field that ranks lineups better. Reachable with
+// --dupefloor for regrading on new data.
+function addDuplicates(field, P, f, rng, share, cC, cF) {
+  const n = field.length, want = Math.round(n * share);
+  if (!(want > 0) || n < 4) return 0;
+  const seen = new Set(); let have = 0;
+  for (const lu of field) { const sg = sigOf(lu, f); if (seen.has(sg)) have++; else seen.add(sg); }
+  let need = want - have; if (need <= 0) return 0;
+  // chalk weight: a lineup's summed projected ownership, the same thing that makes people collide
+  const own = field.map(lu => { let s = 0; for (let z = 0; z < lu.length; z++) { const p = P[lu[z]]; s += (f.mult && z === 0 ? (p.cown ?? p.own) : p.own) || 0; } return s; });
+  const cum = new Float64Array(n); let tot = 0;
+  for (let i = 0; i < n; i++) { tot += Math.pow(Math.max(0.01, own[i]), 3); cum[i] = tot; }
+  const dec = (lu) => lu.forEach((id, z) => { if (f.mult && z === 0) cC[id]--; else cF[id]--; });
+  const inc = (lu) => lu.forEach((id, z) => { if (f.mult && z === 0) cC[id]++; else cF[id]++; });
+  let made = 0;
+  for (let guard = 0; need > 0 && guard < n * 4; guard++) {
+    const src = rng.pickCum(cum, n), dst = Math.floor(rng() * n);
+    if (dst === src) continue;
+    if (sigOf(field[dst], f) === sigOf(field[src], f)) continue;   // already a copy of the source
+    dec(field[dst]); field[dst] = field[src].slice(); inc(field[dst]);
+    need--; made++;
+  }
+  return made;
+}
+
 function genFieldSlots(pool, n, o, rng, log) {
   const P = pool.players, f = pool.format, np = P.length, ns = f.slots.length, teams = pool.teams;
   const el = [], cheap = [];
