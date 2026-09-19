@@ -26,7 +26,7 @@ const dkId = s => (s || "").match(/\((\d+)\)/)?.[1] || "";
 const esc = v => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
 // the Data Hub export layout the app already parses (MLB), or an NFL layout its column mapper reads
 export function stkToCSV(proj, sport = "mlb") {
-  if (String(sport).toLowerCase() === "nfl") {
+  if (["nfl", "cfb"].includes(String(sport).toLowerCase())) {
     const rows = proj.map(p => [p.name, p.salary, p.position, p.team, p.opponent, p.projection, p.value, 100 * (p.ownership || 0), p.cptOwnership != null ? 100 * p.cptOwnership : "", p.stdDev ?? "", p.projectedTeamTotal ?? "", p.injuryStatus && p.injuryStatus !== "Unknown" ? p.injuryStatus : "", dkId(p.nameAndId), dkId(p.captainNameAndId)].map(esc).join(","));
     return [STK_HEADER_NFL].concat(rows).join("\n") + "\n";
   }

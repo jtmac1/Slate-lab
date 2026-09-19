@@ -34,25 +34,28 @@ export function genField(pool, n, opt, rng, log) {
   const o = Object.assign({}, DEF, opt || {});
   if (o.minSal >= pool.format.cap) o.minSal = pool.format.cap - 2000;
   if (pool.format.sport === "mlb") return genFieldMLB(pool, n, o, rng, log);
-  if (pool.format.key === "nfl_cl") return genFieldNFL(pool, n, o, rng, log);
+  if (pool.format.key === "nfl_cl" || pool.format.key === "cfb_cl") return genFieldNFL(pool, n, o, rng, log);
   return genFieldSlots(pool, n, o, rng, log);
 }
 
 /* ---------- NFL classic: QB-stack driven (QB+1 / QB+2 / QB+3, optional bring-back) ---------- */
 function genFieldNFL(pool, n, o, rng, log) {
   const P = pool.players, f = pool.format, np = P.length, teams = pool.teams;
-  const st = Object.assign({ 1: 45, 2: 25, 3: 5, bring: 25 }, o.nflStacks || {});
+  const cfb = f.key === "cfb_cl";
+  // stack shares: NFL defaults, or the CFB mix measured on 74 pulled DK fields (bench, 2026-09-18)
+  const st = Object.assign(cfb ? { 1: 43, 2: 32, 3: 8, bring: 50, twoQB: 95 } : { 1: 45, 2: 25, 3: 5, bring: 25 }, o.nflStacks || {});
   const t = concTargets(P, o.conc, p => f.sport === "mlb" ? (p.isP ? "P" : "H") : p.pos, p => p.own), w = new Float64Array(np);
   for (let i = 0; i < np; i++) w[i] = Math.max(t[i], 0.0005);
   const qbs = P.filter(p => p.pos === "QB" && p.own > 0), byTeamPass = {}, byTeamAll = {};
   for (const p of P) { if (p.own <= 0 || p.isP) continue; if (p.pos === "WR" || p.pos === "TE" || p.pos === "RB") { (byTeamAll[p.team] = byTeamAll[p.team] || []).push(p); if (p.pos !== "RB") (byTeamPass[p.team] = byTeamPass[p.team] || []).push(p); } }
+  const twoQbP = cfb ? Math.max(0, Math.min(100, st.twoQB)) / 100 : 0;
   const kTot = Math.max(0, st[1]) + Math.max(0, st[2]) + Math.max(0, st[3]);
   const wantK = { 0: Math.max(0, 100 - kTot), 1: st[1], 2: st[2], 3: st[3] }, kDist = Object.assign({}, wantK);
   let bringP = Math.max(0, Math.min(100, st.bring)) / 100; const wantBring = bringP;
-  const need = { QB: 1, RB: 2, WR: 3, TE: 1, DST: 1, FLEX: 1 };
+  const need = cfb ? { QB: 1, RB: 2, WR: 3, FLEX: 1, SFLEX: 1 } : { QB: 1, RB: 2, WR: 3, TE: 1, DST: 1, FLEX: 1 };
   const cum = new Float64Array(np), pick = new Int32Array(np);
-  const minCost = pos => { let m = Infinity; for (const p of P) if (p.own >= 0 && (pos === "FLEX" ? ["RB", "WR", "TE"].includes(p.pos) : p.pos === pos) && p.sal < m) m = p.sal; return m === Infinity ? 0 : m; };
-  const minBy = { QB: minCost("QB"), RB: minCost("RB"), WR: minCost("WR"), TE: minCost("TE"), DST: minCost("DST"), FLEX: minCost("FLEX") };
+  const minCost = pos => { let m = Infinity; for (const p of P) if (p.own >= 0 && eligible(p, pos, f) && p.sal < m) m = p.sal; return m === Infinity ? 0 : m; };
+  const minBy = Object.fromEntries(Object.keys(need).map(k => [k, minCost(k)]));
   const struct = { k: {}, bring: 0, n: 0 };
   function pickWeighted(list, used, mul) {
     let tot = 0, m = 0; for (const p of list) { if (used[p.i]) continue; const ww = w[p.i] * (mul ? mul(p) : 1); if (ww <= 0) continue; tot += ww; cum[m] = tot; pick[m] = p.i; m++; }
@@ -68,17 +71,19 @@ function genFieldNFL(pool, n, o, rng, log) {
       const qb = pickWeighted(qbs, used); if (qb < 0) continue;
       used[qb] = 1; ids.push(qb); sal += P[qb].sal; left.QB = 0;
       const team = P[qb].team, opp = P[qb].opp; let bring = false;
-      const take = p => { used[p.i] = 1; ids.push(p.i); sal += p.sal; const slot = left[p.pos] > 0 ? p.pos : "FLEX"; if (left[slot] > 0) left[slot]--; };
+      const take = p => { used[p.i] = 1; ids.push(p.i); sal += p.sal; const slot = left[p.pos] > 0 ? p.pos : (left.FLEX > 0 && eligible(p, "FLEX", f)) ? "FLEX" : "SFLEX"; if (left[slot] > 0) left[slot]--; };
+      // CFB superflex: most real lineups carry a second quarterback
+      if (cfb && rng() < twoQbP) { const q2 = pickWeighted(qbs, used, p => p.team === team ? 0 : 1); if (q2 >= 0) { used[q2] = 1; ids.push(q2); sal += P[q2].sal; left.SFLEX--; } }
       for (let j = 0; j < k; j++) { const id = pickWeighted(byTeamAll[team] || [], used, p => p.pos === "RB" ? 0.35 : 1); if (id < 0) break; take(P[id]); }
       if (k > 0 && rng() < bringP && byTeamAll[opp]) { const id = pickWeighted(byTeamAll[opp], used, p => p.pos === "RB" ? 0.4 : 1); if (id >= 0) { take(P[id]); bring = true; } }
       // fill the rest slot by slot under the salary window
-      let ok = true; const order = ["RB", "WR", "TE", "DST", "FLEX"];
+      let ok = true; const order = cfb ? ["RB", "WR", "FLEX", "SFLEX"] : ["RB", "WR", "TE", "DST", "FLEX"];
       let remaining = order.reduce((s, x) => s + left[x] * minBy[x], 0);
       for (const slot of order) {
         while (left[slot] > 0) {
           remaining -= minBy[slot];
           const hiB = f.cap - sal - remaining, isLast = remaining <= 0, loB = isLast ? o.minSal - sal : -Infinity;
-          const id = pickWeighted(P, used, p => { if (p.own <= 0 && !(p.sal <= loB)) return 0; const okPos = slot === "FLEX" ? ["RB", "WR", "TE"].includes(p.pos) : p.pos === slot; if (!okPos || p.sal > hiB || p.sal < loB) return 0; if (p.pos === "DST" && (p.team === opp || p.opp === team)) return 0.4; return 1; });
+          const id = pickWeighted(P, used, p => { if (p.own <= 0 && !(p.sal <= loB)) return 0; const okPos = eligible(p, slot, f); if (!okPos || p.sal > hiB || p.sal < loB) return 0; if (cfb && slot === "SFLEX" && p.pos === "QB") return 0.6; if (p.pos === "DST" && (p.team === opp || p.opp === team)) return 0.4; return 1; });
           if (id < 0) { ok = false; break; }
           used[id] = 1; ids.push(id); sal += P[id].sal; left[slot]--;
         }

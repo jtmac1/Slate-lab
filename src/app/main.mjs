@@ -16,6 +16,9 @@ const STACK_TYPES = ["5-3", "5-2-1", "5-x", "4-4", "4-3-1", "4-2-x", "4-x", "3-3
 // MLB stack mix measured from seven real DK main-slate fields, 2026-09-06 to 09-12 ($67K-$350K contests).
 const STACK_DEF = { "5-3": 23, "5-2-1": 29, "5-x": 11, "4-4": 4, "4-3-1": 8, "4-2-x": 5, "4-x": 2, "3-3-x": 3 };
 const NFL_DEF = { 1: 45, 2: 25, 3: 5, bring: 25 };
+// CFB stack shares measured on 74 pulled DK fields (bench, 2026-09-18); the superflex second QB is handled by the generator
+const CFB_DEF = { 1: 43, 2: 32, 3: 8, bring: 50 };
+const stackDef = () => F().sport === "cfb" ? CFB_DEF : NFL_DEF;
 // Marquee conc 1.0 is the graded default (src/engine/field.mjs); the other two bracket it
 const ARCH = [{ conc: 0.85, minSal: 47500, boost: 0.6, label: "Low Stakes" }, { conc: 1.0, minSal: 49000, boost: 1.0, label: "Marquee" }, { conc: 1.25, minSal: 49300, boost: 1.5, label: "High Stakes" }];
 const S = {
@@ -36,7 +39,7 @@ const S = {
   ts: {}, review: { files: {}, result: null, history: store.get("reviewHistory", []) },
   busy: null, modal: null, pop: null, stackExpo: false, ctlOpen: true
 };
-const fkey = () => S.league === "nfl" ? (S.type === "showdown" ? "nfl_sd" : "nfl_cl") : "mlb_cl";
+const fkey = () => S.league === "nfl" ? (S.type === "showdown" ? "nfl_sd" : "nfl_cl") : S.league === "cfb" ? "cfb_cl" : "mlb_cl";
 const F = () => FORMATS[fkey()];
 // "DK_MLB_Main_Data_Hub_Projections.csv" -> "MLB Main slate"; "DK_NFL_Early_..." -> "NFL Early slate"
 function slateLabel(name) {
@@ -166,7 +169,7 @@ function effectivePool() {
 async function generateContest() {
   if (!S.pool || S.busy) return;
   const c = S.cfg, N = Math.max(2, Math.round(+c.pool || 2)), f = F(), a = ARCH[+c.arch] || ARCH[1];
-  const opt = Object.assign({ conc: a.conc, minSal: a.minSal, boost: a.boost, rounds: Math.max(0, Math.round(+c.rounds || 0)), stackTeams: S.share && Object.keys(S.share).length ? S.share : null }, f.sport === "mlb" ? stacksToOpt() : { nflStacks: Object.assign({}, NFL_DEF, c.nflStacks || {}) });
+  const opt = Object.assign({ conc: a.conc, minSal: a.minSal, boost: a.boost, rounds: Math.max(0, Math.round(+c.rounds || 0)), stackTeams: S.share && Object.keys(S.share).length ? S.share : null }, f.sport === "mlb" ? stacksToOpt() : { nflStacks: Object.assign({}, stackDef(), c.nflStacks || {}) });
   S.busy = "gen"; S.view = "gen"; render(); setStatus(`Simulating slate — building ${N.toLocaleString()} entries…`); prog(5);
   try {
     const t0 = performance.now(), pool = effectivePool(), seed = +c.seed || 1;
@@ -186,8 +189,9 @@ async function generateContest() {
   S.busy = null; if (window.innerWidth <= 700) S.ctlOpen = false; render();
 }
 function stackTypeOf(l, P, f) {
-  if (f.sport === "nfl" && !f.mult) {
-    const qb = l.map(id => P[id]).find(p => p.pos === "QB"); if (!qb) return "No QB";
+  if ((f.sport === "nfl" || f.sport === "cfb") && !f.mult) {
+    const qbs = l.map(id => P[id]).filter(p => p.pos === "QB"); if (!qbs.length) return "No QB";
+    const qb = qbs.length === 1 ? qbs[0] : qbs.slice().sort((a, b) => l.filter(id => P[id] !== b && P[id].team === b.team).length - l.filter(id => P[id] !== a && P[id].team === a.team).length || b.sal - a.sal)[0];
     let k = 0, bring = false;
     for (const id of l) { const p = P[id]; if (p === qb || p.pos === "DST" || p.pos === "K") continue; if (p.team === qb.team) k++; else if (p.team === qb.opp) bring = true; }
     return (k ? "QB+" + Math.min(3, k) : "No stack") + (k && bring ? " +opp" : "");
@@ -280,7 +284,7 @@ async function gradeReview() {
   S.busy = "review"; render(); setStatus(F().sport === "nfl" ? "Matching teams from the loaded projections…" : "Looking up teams and opponents from the MLB stats API…"); prog(5);
   try {
     let teamOf = null, teamNote = "";
-    if (F().sport === "nfl") {
+    if (F().sport === "nfl" || F().sport === "cfb") {
       // Teams and real positions (showdown files only say CPT/FLEX) come from the projections loaded on the Data Hub, if any.
       const pool = S.pool && S.pool.format && S.pool.format.sport === "nfl" ? S.pool : null;
       if (pool) { const byKey = {}; for (const p of pool.players) byKey[p.key] = { team: p.team, opp: p.opp, pos: p.pos, ceil: p.ceil, sd: p.sd }; teamOf = nm => byKey[nrm(nm)] || null; }
@@ -321,13 +325,13 @@ function renderMain() { ({ hub: mainHub, gen: mainGen, sim: mainSim, review: mai
 const sel = (k, opts, attrs = "") => `<select class="sel" data-cfg="${k}" ${attrs}>${opts.map(o => `<option value="${o[0]}"${String(S.cfg[k]) === String(o[0]) ? " selected" : ""}>${o[1]}</option>`).join("")}</select>`;
 const ctlField = (label, inner, info, cls) => `<div class="f${cls ? " " + cls : ""}"><label>${label}${info ? '<span class="i">i</span>' : ""}</label>${inner}</div>`;
 function commonCtl() {
-  return ctlField("League", `<select class="sel" id="league"><option value="mlb"${S.league === "mlb" ? " selected" : ""}>⚾ MLB</option><option value="nfl"${S.league === "nfl" ? " selected" : ""}>🏈 NFL</option></select>`) +
+  return ctlField("League", `<select class="sel" id="league"><option value="mlb"${S.league === "mlb" ? " selected" : ""}>⚾ MLB</option><option value="nfl"${S.league === "nfl" ? " selected" : ""}>🏈 NFL</option><option value="cfb"${S.league === "cfb" ? " selected" : ""}>🏈 CFB</option></select>`) +
     ctlField("Site", `<select class="sel"><option>DraftKings</option></select>`, false, "site") +
     ctlField("Type", `<select class="sel" id="type"><option value="classic"${S.type === "classic" ? " selected" : ""}>Classic</option>${S.league === "nfl" ? `<option value="showdown"${S.type === "showdown" ? " selected" : ""}>Showdown</option>` : ""}</select>`) +
     ctlField("Slate", `<select class="sel" style="min-width:200px"><option>${S.pool ? esc(S.projName || "Loaded projections") : "No projections loaded"}</option></select>`, true, "wide");
 }
 function wireCommon() {
-  $("#league").addEventListener("change", e => { S.league = e.target.value; if (S.league === "mlb") S.type = "classic"; store.set("league", S.league); store.set("type", S.type); reloadPool(); });
+  $("#league").addEventListener("change", e => { S.league = e.target.value; if (S.league === "mlb" || S.league === "cfb") S.type = "classic"; S.cfg.nflStacks = null; saveCfg(); /* stack shares are per sport */ store.set("league", S.league); store.set("type", S.type); reloadPool(); });
   $("#type").addEventListener("change", e => { S.type = e.target.value; store.set("type", S.type); reloadPool(); });
   $$("[data-cfg]").forEach(el => { const k = el.getAttribute("data-cfg"); if (el.tagName !== "SELECT") el.value = S.cfg[k] ?? ""; el.addEventListener("change", () => { S.cfg[k] = el.type === "checkbox" ? el.checked : el.value; saveCfg(); if (el.hasAttribute("data-rr")) render(); }); });
 }
@@ -454,7 +458,7 @@ function renderGen() {
   $("#ctl").innerHTML = `<div class="ctl gen">${commonCtl()}
     ${ctlField("Pool Size", `<select class="sel" data-cfg="pool" id="poolSel">${[250, 500, 1000, 1500, 2000, 5000].map(n => `<option value="${n}"${+S.cfg.pool === n ? " selected" : ""}>${n}</option>`).join("")}<option value="custom"${![250, 500, 1000, 1500, 2000, 5000].includes(+S.cfg.pool) ? " selected" : ""}>Custom: ${![250, 500, 1000, 1500, 2000, 5000].includes(+S.cfg.pool) ? S.cfg.pool : "…"}</option></select>`, true)}
     ${ctlField("Team Controls", `<button class="btn sec" id="btnTeams">Team Controls</button>`, true)}
-    ${(mlb || fkey() === "nfl_cl") ? ctlField("Stack Type Exposures", `<div style="position:relative"><button class="btn sec" id="btnStacks">Stack Type Exposures ✎</button><div id="popStacks"></div></div>`, true) : ""}
+    ${(mlb || fkey() === "nfl_cl" || fkey() === "cfb_cl") ? ctlField("Stack Type Exposures", `<div style="position:relative"><button class="btn sec" id="btnStacks">Stack Type Exposures ✎</button><div id="popStacks"></div></div>`, true) : ""}
     <div class="f slider"><label>Contest Archetype <span class="i">i</span></label><input type="range" min="0" max="2" step="1" value="${a}" id="arch"><div class="ticks"><span>Low Stakes</span><span>Marquee</span><span>High Stakes</span></div></div>
     <div class="stamp">${S.projWhen ? "Projections loaded: " + esc(S.projWhen) : ""}${S.contest ? "<br>Contest generated " + esc(S.contest.when) : ""}</div>
     <div class="f wide cta"><label>&nbsp;</label><button class="btn gen" id="btnGen"${S.pool && !S.busy ? "" : " disabled"}>${S.contest ? "Generate Lineups" : "Generate Lineups"}</button></div></div>`;
@@ -470,12 +474,12 @@ function renderGen() {
 function renderStackPop() {
   const el = $("#popStacks"); if (!el) return; if (S.pop !== "stacks") { el.innerHTML = ""; return; }
   if (F().sport === "nfl") {
-    const ns = S.cfg.nflStacks = Object.assign({}, NFL_DEF, S.cfg.nflStacks || {}); const tot = [1, 2, 3].reduce((s, k) => s + Math.max(0, +ns[k] || 0), 0);
+    const ns = S.cfg.nflStacks = Object.assign({}, stackDef(), S.cfg.nflStacks || {}); const tot = [1, 2, 3].reduce((s, k) => s + Math.max(0, +ns[k] || 0), 0);
     const row = (k, lab) => `<tr><td><b>${lab}</b></td><td><span class="step"><button class="m" data-ns="${k}|-1">−</button><input data-nsv="${k}" value="${+ns[k] || 0}">%<button class="p" data-ns="${k}|1">+</button></span></td></tr>`;
     el.innerHTML = `<div class="pop"><h4>Stack Type Exposures</h4><div class="hint">Adjust stack exposures and ensure the desired total is 100% or less. The remainder has no QB stack.</div><table><thead><tr><th>Stack Type</th><th>Desired Exposure</th></tr></thead><tbody>${row(1, "QB + 1")}${row(2, "QB + 2")}${row(3, "QB + 3")}</tbody></table><div class="tot"><span>Total</span><span style="color:${tot > 100 ? "#ff8a8a" : ""}">${tot}%</span></div><table><tbody>${row("bring", "Includes Opposing Player")}</tbody></table><div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px"><button class="btn ghost" id="stDef">Restore Defaults</button><button class="btn" id="stApply">Apply</button></div></div>`;
     $$("#popStacks [data-ns]").forEach(b => b.addEventListener("click", () => { const [k, d] = b.getAttribute("data-ns").split("|"); ns[k] = Math.max(0, (+ns[k] || 0) + (+d)); renderStackPop(); }));
     $$("#popStacks [data-nsv]").forEach(i => i.addEventListener("change", () => { ns[i.getAttribute("data-nsv")] = Math.max(0, +i.value || 0); renderStackPop(); }));
-    $("#stDef").addEventListener("click", () => { S.cfg.nflStacks = Object.assign({}, NFL_DEF); renderStackPop(); });
+    $("#stDef").addEventListener("click", () => { S.cfg.nflStacks = Object.assign({}, stackDef()); renderStackPop(); });
     $("#stApply").addEventListener("click", () => { saveCfg(); S.pop = null; renderStackPop(); setStatus("Stack exposures saved — regenerate to apply."); });
     return;
   }
@@ -504,8 +508,8 @@ function mainGen() {
   } else if (t === "stacks") {
     const cnt = {}; c.rk.st.forEach(k => cnt[k] = (cnt[k] || 0) + 1);
     let rows;
-    if (f.sport === "nfl" && !f.mult) {
-      const ns = Object.assign({}, NFL_DEF, S.cfg.nflStacks || {}), base = k => Object.keys(cnt).filter(x => x.startsWith(k)).reduce((s, x) => s + cnt[x], 0);
+    if ((f.sport === "nfl" || f.sport === "cfb") && !f.mult) {
+      const ns = Object.assign({}, stackDef(), S.cfg.nflStacks || {}), base = k => Object.keys(cnt).filter(x => x.startsWith(k)).reduce((s, x) => s + cnt[x], 0);
       const stacked = ["QB+1", "QB+2", "QB+3"].reduce((s, k) => s + base(k), 0), bring = Object.keys(cnt).filter(x => x.endsWith("+opp")).reduce((s, x) => s + cnt[x], 0);
       rows = [{ k: "QB + 1", fp: base("QB+1") / N * 100, want: +ns[1] || 0 }, { k: "QB + 2", fp: base("QB+2") / N * 100, want: +ns[2] || 0 }, { k: "QB + 3", fp: base("QB+3") / N * 100, want: +ns[3] || 0 },
         { k: "No QB stack", fp: (N - stacked) / N * 100, want: Math.max(0, 100 - [1, 2, 3].reduce((s, k) => s + (+ns[k] || 0), 0)) }, { k: "Includes opposing player (of stacked)", fp: stacked ? bring / stacked * 100 : 0, want: +ns.bring || 0 }];
@@ -646,7 +650,7 @@ function renderQF() {
 /* ---------- Review ---------- */
 function renderReview() {
   const rv = S.review, have = k => rv.files[k] ? "✓" : "—";
-  $("#ctl").innerHTML = `<div class="ctl">${ctlField("League", `<select class="sel" id="league"><option value="mlb"${S.league === "mlb" ? " selected" : ""}>⚾ MLB</option><option value="nfl"${S.league === "nfl" ? " selected" : ""}>🏈 NFL</option></select>`)}${ctlField("Slate date", `<input type="date" class="txt" data-cfg="rvDate" style="width:150px">`)}${ctlField("Contest name", `<input type="text" class="txt" data-cfg="rvName" style="width:240px" placeholder="e.g. 09-10 $30K Perfect Game">`)}<div class="f"><label>Post-contest files &nbsp;<span class="hint">Lineups ${have("lineup")} · Players ${have("player")} · Stacks ${have("stack")}</span></label><label class="btn sec" style="cursor:pointer">Upload Post-Contest CSVs<input type="file" id="fileRv" accept=".csv,text/csv,text/plain,text/comma-separated-values,application/vnd.ms-excel" hidden multiple></label></div><div class="f wide cta"><label>&nbsp;</label><button class="btn gen" id="btnGrade"${rv.files.lineup && rv.files.player && !S.busy ? "" : " disabled"}>Grade Selection Rules</button></div></div>`;
+  $("#ctl").innerHTML = `<div class="ctl">${ctlField("League", `<select class="sel" id="league"><option value="mlb"${S.league === "mlb" ? " selected" : ""}>⚾ MLB</option><option value="nfl"${S.league === "nfl" ? " selected" : ""}>🏈 NFL</option><option value="cfb"${S.league === "cfb" ? " selected" : ""}>🏈 CFB</option></select>`)}${ctlField("Slate date", `<input type="date" class="txt" data-cfg="rvDate" style="width:150px">`)}${ctlField("Contest name", `<input type="text" class="txt" data-cfg="rvName" style="width:240px" placeholder="e.g. 09-10 $30K Perfect Game">`)}<div class="f"><label>Post-contest files &nbsp;<span class="hint">Lineups ${have("lineup")} · Players ${have("player")} · Stacks ${have("stack")}</span></label><label class="btn sec" style="cursor:pointer">Upload Post-Contest CSVs<input type="file" id="fileRv" accept=".csv,text/csv,text/plain,text/comma-separated-values,application/vnd.ms-excel" hidden multiple></label></div><div class="f wide cta"><label>&nbsp;</label><button class="btn gen" id="btnGrade"${rv.files.lineup && rv.files.player && !S.busy ? "" : " disabled"}>Grade Selection Rules</button></div></div>`;
   $("#league").addEventListener("change", e => { S.league = e.target.value; store.set("league", S.league); render(); });
   $$("[data-cfg]").forEach(el => { const k = el.getAttribute("data-cfg"); el.value = S.cfg[k] ?? ""; el.addEventListener("change", () => { S.cfg[k] = el.value; saveCfg(); }); });
   $("#fileRv").addEventListener("change", async e => { for (const fl of Array.from(e.target.files)) { const t = await readFile(fl), h = t.slice(0, 400).toLowerCase(); if (h.includes("sim lineup roi")) rv.files.lineup = t; else if (h.includes("sim player roi")) rv.files.player = t; else if (h.includes("stack roi")) rv.files.stack = t; else setStatus("Not a post-contest file: " + fl.name, true); } render(); });

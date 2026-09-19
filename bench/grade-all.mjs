@@ -51,7 +51,7 @@ export function listContests() {
   if (fs.existsSync("data/post")) for (const sport of fs.readdirSync("data/post").sort()) {
     for (const file of listPost(sport)) {
       const j = readPost(file), c = j.contest; if (j.lineupsSkipped || !j.lineups.length) continue;
-      const fkey = sport === "mlb" ? "mlb_cl" : /showdown/i.test(c.type) ? "nfl_sd" : "nfl_cl";
+      const fkey = sport === "mlb" ? "mlb_cl" : sport === "cfb" ? "cfb_cl" : /showdown/i.test(c.type) ? "nfl_sd" : "nfl_cl";
       out.push({ dir: `post/${sport}/${path.basename(file).replace(/\.json(\.gz)?$/, "")}`, sport, fkey, date: c.date, json: file, name: c.name, fee: c.fee, entries: c.entries, key: c.key, tier: feeTier(c.fee), size: fieldSize(c.entries) });
     }
   }
@@ -62,7 +62,7 @@ export function listContests() {
 // by DK player id. Pool ownership is the PROJECTED ownership (what the app has at lock);
 // actual ownership is kept as actOwn.
 export function loadPulled(file) {
-  const j = readPost(file), c = j.contest, f = FORMATS[c.sport === "MLB" ? "mlb_cl" : /showdown/i.test(c.type) ? "nfl_sd" : "nfl_cl"];
+  const j = readPost(file), c = j.contest, f = FORMATS[c.sport === "MLB" ? "mlb_cl" : c.sport === "CFB" ? "cfb_cl" : /showdown/i.test(c.type) ? "nfl_sd" : "nfl_cl"];
   const P = [], byId = {}, sd = !!f.mult;
   // showdown: the API lists a CPT row and a FLEX row per player (positions "CPT"/"FLEX"); real positions from the NFL reference
   const ref = sd ? refLookup("data/nfl-ref", c.date, false) : null;
@@ -126,7 +126,8 @@ export function gradeContest(c, opts = {}) {
   if (m) { pool = m.pool; entries = m.entries; }
   const P = pool.players, N = entries.length, lus = entries.map(e => e.lu);
   const t0 = Date.now();
-  const model = buildModel(pool, opts.model || {});
+  const mo = Object.assign({}, opts.model || {}); if (mo.sigmaBy) { mo.sigmaDef = mo.sigmaBy[pool.format.key] || mo.sigmaBy[pool.format.sport] || null; delete mo.sigmaBy; }
+  const model = buildModel(pool, mo);
   let res;
   if (opts.genField) {
     // the app's situation: real entries scored against a GENERATED field (not against each other),
@@ -255,18 +256,19 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const HS = flag("hitsame"), HSIG = flag("hsig"), PSIG = flag("psig"), SMAX = flag("smax"), CONC = flag("conc");
   // NFL: --nflsig=QB:0.45,WR:0.5,RB:0.42,TE:0.55,DST:0.65 (per-position sigma) and --corr=0.8 (scale every CSAME/COPP entry)
   const NFLSIG = (args.find(a => a.startsWith("--nflsig=")) || "").slice(9), CORR = flag("corr");
-  const nflSigma = Object.assign({}, SIGMA_DEF.nfl); for (const kv of NFLSIG.split(",").filter(Boolean)) { const [k, v] = kv.split(":"); nflSigma[k] = +v; }
+  const nflSigma = Object.assign({}, SIGMA_DEF.nfl), cfbSigma = Object.assign({}, SIGMA_DEF.cfb);
+  for (const kv of NFLSIG.split(",").filter(Boolean)) { const [k, v] = kv.split(":"); nflSigma[k] = +v; if (k in cfbSigma) cfbSigma[k] = +v; }
   const scaleT = t => CORR != null ? Object.fromEntries(Object.entries(t).map(([k, v]) => [k, v * CORR])) : t;
   const sigmaDef = Object.assign({}, SIGMA_DEF.mlb); if (HSIG != null) for (const k of ["C", "1B", "2B", "3B", "SS", "OF"]) sigmaDef[k] = HSIG; if (PSIG != null) for (const k of ["P", "SP", "RP"]) sigmaDef[k] = PSIG;
-  const isNFL = FILTER.startsWith("nfl") || /nfl/.test(FILTER);
-  const MODEL = (HS != null || HSIG != null || PSIG != null || SMAX != null || NFLSIG || CORR != null) ? { tables: { CSAME: scaleT(CSAME), COPP: scaleT(COPP), MLBC: Object.assign({}, MLBC, HS != null ? { hitSame: HS } : {}) }, sigmaDef: isNFL ? nflSigma : sigmaDef, sigmaMax: SMAX != null ? SMAX : SIGMA_MAX } : null;
+  const isNFL = /nfl|cfb/.test(FILTER);   // football: --nflsig positions apply to CFB too (its base table is SIGMA_DEF.cfb)
+  const MODEL = (HS != null || HSIG != null || PSIG != null || SMAX != null || NFLSIG || CORR != null) ? { tables: { CSAME: scaleT(CSAME), COPP: scaleT(COPP), MLBC: Object.assign({}, MLBC, HS != null ? { hitSame: HS } : {}) }, sigmaBy: { mlb: sigmaDef, nfl: nflSigma, cfb: cfbSigma }, sigmaMax: SMAX != null ? SMAX : SIGMA_MAX } : null;
   // --genfield [--batch=50] [--dupecap] [--minfee=200]: grade the generator too (real entries vs a generated field)
   // --vendor: grade on the recovered Stokastic pre-lock file (vendor Std Dev path) when bench/stk-vendor-files.mjs found one
   const NOSD = args.includes("--nosd");   // with --vendor: same file, but default sigmas instead of its Std Dev
   const VENDOR = args.includes("--vendor"), vendorMap = VENDOR ? Object.fromEntries(fs.readdirSync("data/vendor").flatMap(k => { const m = path.join("data/vendor", k, "map.json"); return fs.existsSync(m) ? Object.entries(JSON.parse(fs.readFileSync(m, "utf8"))) : []; })) : {};
   const ROWS = (args.find(a => a.startsWith("--rows=")) || "").slice(7); if (ROWS) fs.writeFileSync(ROWS, "");
   const GENFIELD = args.includes("--genfield"), BATCH = flag("batch") || 50, MINFEE = flag("minfee") || 0, MAXFEE = flag("maxfee") || 1e9, MAXN = flag("maxentries") || 1e9, ORACLE = args.includes("--oracleown"), SHARD = (args.find(a => a.startsWith("--shard=")) || "").slice(8).split("/").map(Number);
-  if (MODEL) console.log(isNFL ? `model overrides (NFL): sigma ${JSON.stringify(nflSigma)}, corr x${CORR != null ? CORR : 1}, sigmaMax ${MODEL.sigmaMax}` : `model overrides: hitSame ${MODEL.tables.MLBC.hitSame}, hitter sigma ${sigmaDef.OF}, pitcher sigma ${sigmaDef.P}, sigmaMax ${MODEL.sigmaMax}`);
+  if (MODEL) console.log(`model overrides: MLB hitSame ${MODEL.tables.MLBC.hitSame} hitter ${sigmaDef.OF} pitcher ${sigmaDef.P} | NFL ${JSON.stringify(nflSigma)} | CFB ${JSON.stringify(cfbSigma)} | corr x${CORR != null ? CORR : 1} sigmaMax ${MODEL.sigmaMax}`);
   const contests = listContests().filter(c => (!FILTER || c.dir.includes(FILTER) || c.fkey.includes(FILTER)) && (!MINFEE || (c.fee || 0) >= MINFEE) && ((c.fee || 0) <= MAXFEE) && ((c.entries || 0) <= MAXN));
   // --shard=k/n: take every n-th contest starting at k (0-based) so several processes can split a run; merge with bench/merge-json.mjs
   const shardList = SHARD.length === 2 && SHARD[1] > 1 ? contests.filter((c, i) => i % SHARD[1] === SHARD[0]) : contests;

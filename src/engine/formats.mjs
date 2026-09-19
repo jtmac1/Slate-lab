@@ -7,6 +7,10 @@ export const FORMATS = {
   nfl_cl: { key: "nfl_cl", label: "NFL Classic", sport: "nfl",
     slots: ["QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "DST"], cap: 50000,
     flexPos: ["RB", "WR", "TE"], minGames: 2 },
+  // DraftKings college football: no TE/K/DST, a FLEX (RB/WR) and a superflex that can take a second QB
+  cfb_cl: { key: "cfb_cl", label: "CFB Classic", sport: "cfb",
+    slots: ["QB", "RB", "RB", "WR", "WR", "WR", "FLEX", "SFLEX"], cap: 50000,
+    flexPos: ["RB", "WR"], sflexPos: ["QB", "RB", "WR"], minGames: 2 },
   mlb_cl: { key: "mlb_cl", label: "MLB Classic", sport: "mlb",
     slots: ["P", "P", "C", "1B", "2B", "3B", "SS", "OF", "OF", "OF"], cap: 50000,
     maxHitPerTeam: 5, minGames: 2 }
@@ -32,7 +36,7 @@ export function detect(headers) {
   const s = headers.map(x => String(x).toLowerCase().trim());
   if (s.includes("cpt gpp score")) return "Stokastic showdown";
   if (s.includes("p(expl)")) return "Stokastic MLB";
-  if (s.includes("cpt dk id")) return "Stokastic Data Hub NFL";
+  if (s.includes("cpt dk id")) return "Stokastic Data Hub";
   if (s.includes("cpt ownership %")) return "Blick showdown";
   if (s.includes("cpt proj") && s.includes("total own")) return "ETR showdown";
   if (s.includes("bat pos.")) return "Data Hub MLB";
@@ -124,6 +128,7 @@ export function buildPool(headers, rows, fkey, map) {
 export function eligible(p, slot, f) {
   if (f.anySlot) return true;
   if (slot === "FLEX" && f.flexPos) return f.flexPos.includes(p.pos);
+  if (slot === "SFLEX" && f.sflexPos) return f.sflexPos.includes(p.pos);
   if (slot === "P") return p.isP;
   return p.posList.includes(slot);
 }

@@ -15,7 +15,8 @@ export const MLBC = { hitSame: 0.22, hitOppSameGame: 0.10, hitOwnPitcher: 0.05, 
   pitchPitchSameGame: -0.12, orderBonus: 0.08 };
 export const LOAD = {
   nfl: { QB: [0.30, 0.70, 0.10], RB: [0.20, 0.48, 0.05], WR: [0.28, 0.62, 0.10], TE: [0.25, 0.55, 0.10], K: [0.20, 0.45, 0.05], DST: [-0.15, 0.30, -0.55] },
-  mlb: { HIT: [0.25, 0.52, 0.08], PIT: [-0.30, 0.18, -0.55] }
+  mlb: { HIT: [0.25, 0.52, 0.08], PIT: [-0.30, 0.18, -0.55] },
+  cfb: { QB: [0.30, 0.70, 0.10], RB: [0.20, 0.48, 0.05], WR: [0.28, 0.62, 0.10] }
 };
 const POSES = ["QB", "RB", "WR", "TE", "K", "DST"];
 function ckey(a, b) { let i = POSES.indexOf(a), j = POSES.indexOf(b); if (i < 0) i = 99; if (j < 0) j = 99; return (i <= j ? a : b) + "|" + (i <= j ? b : a); }
@@ -31,7 +32,11 @@ export const SIGMA_DEF = {
   // Showdown: 0.82x the classic values (2026-09-17, bench/sd-variance.mjs + grade-all over 272 pulled
   // showdowns): the classic sigmas drew lineup spread ~20% wider than realized; at 0.82x the spread and
   // the 30-point tail match, and lineup rank correlation with actual rose 0.082 -> 0.125 (both halves).
-  nfl_sd: { QB: 0.45, RB: 0.42, WR: 0.50, TE: 0.55, K: 0.55, DST: 0.65 }
+  nfl_sd: { QB: 0.45, RB: 0.42, WR: 0.50, TE: 0.55, K: 0.55, DST: 0.65 },
+  // CFB: 0.7x the NFL classic values (2026-09-18, bench/grade-all over 74 pulled DK CFB fields): tighter graded
+  // monotonically better on lineup and player rank correlation and cash hits (0.081 -> 0.170 Spearman at 0.7x);
+  // 0.55x kept improving rank but cost the gated rule 9 points of realized top-10% ROI, so 0.7x is the stop.
+  cfb: { QB: 0.385, RB: 0.35, WR: 0.42 }
 };
 export function sigmaFor(p, sport, sigmaMax, sigmaDef, ignoreFile) {
   const cap = sigmaMax ?? SIGMA_MAX;
