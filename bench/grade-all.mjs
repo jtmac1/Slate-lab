@@ -19,6 +19,8 @@ import { stackOf, stackTeams, sigOf, salOf, ownSum, assignSlots } from "../src/e
 import { mulberry32 } from "../src/engine/rng.mjs";
 import { featurize, gradeRules, spearman, RULES } from "../src/engine/select.mjs";
 
+const DK_PAY = {};
+for (const sp of ["cfb", "nfl", "mlb"]) { const f = "data/dk-pay/" + sp + ".json"; if (fs.existsSync(f)) DK_PAY[sp] = JSON.parse(fs.readFileSync(f, "utf8")); }
 const SEED = +((process.argv.find(a => a.startsWith("--seed=")) || "--seed=1").slice(7)) || 1;   // --seed=2 re-runs the same config on different draws, which measures the noise floor
 const mean = a => a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0;
 const topOf = (arr, k) => arr.map((v, i) => i).sort((a, b) => arr[b] - arr[a]).slice(0, k);
@@ -152,7 +154,11 @@ export function gradeContest(c, opts = {}) {
   // --fitpay: price against the payout curve the APP fits from a typed field size, rake and top
   // share, instead of the true one recovered from the contest. The difference is the accuracy the
   // user loses by approximating the contest rather than pulling it.
-  if (opts.fitPay) {
+  // --dkpay: the real posted payout table, cached from DraftKings by bench/dk-payouts.mjs
+  if (opts.dkPay) {
+    const t = (DK_PAY[c.sport] || {})[c.key];
+    if (t && t.length) { payouts = Float64Array.from(t); paid = payouts.filter(x => x > 0).length; }
+  } else if (opts.fitPay) {
     const N0 = entries.length;
     let prize = N0 * (1 - (opts.rake ?? 15) / 100), top = prize * (opts.topPct ?? 10) / 100;
     if (opts.fitPay === "name") {   // prize pool and first place read off the contest name
@@ -343,7 +349,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const rows = [];
   for (const c of shardList) {
     if (VENDOR && !vendorMap[c.key]) continue;   // only contests with a vendor file, so A/B runs pair up
-    const r = gradeContest(c, Object.assign({ iters: ITERS }, VENDOR ? { proj: vendorMap[c.key].file } : {}, MODEL ? { model: MODEL } : {}, NOSD ? { model: Object.assign({}, MODEL || {}, { ignoreFileSigma: true }) } : {}, args.includes("--fitpay") ? { fitPay: true } : args.includes("--fitpay-name") ? { fitPay: "name" } : {}, GENFIELD ? { genField: true, batch: BATCH, gen: Object.assign({}, DUPECAP ? { dupeCap: true } : {}, CONC != null ? { conc: CONC } : {}, DUPEFLOOR != null ? { dupeFloor: dupeFloorOpt } : {}, SECSTACK ? { secStack: true } : {}, BEST ? { best: BEST } : {}, SHARPFRAC != null ? { sharpFrac: SHARPFRAC } : {}, MINSAL ? { minSal: MINSAL } : {}, ORACLE ? { oracleOwn: true } : {}) } : {}, ROWS ? { rows: true } : {})); rows.push(r);
+    const r = gradeContest(c, Object.assign({ iters: ITERS }, VENDOR ? { proj: vendorMap[c.key].file } : {}, MODEL ? { model: MODEL } : {}, NOSD ? { model: Object.assign({}, MODEL || {}, { ignoreFileSigma: true }) } : {}, args.includes("--dkpay") ? { dkPay: true } : args.includes("--fitpay") ? { fitPay: true } : args.includes("--fitpay-name") ? { fitPay: "name" } : {}, GENFIELD ? { genField: true, batch: BATCH, gen: Object.assign({}, DUPECAP ? { dupeCap: true } : {}, CONC != null ? { conc: CONC } : {}, DUPEFLOOR != null ? { dupeFloor: dupeFloorOpt } : {}, SECSTACK ? { secStack: true } : {}, BEST ? { best: BEST } : {}, SHARPFRAC != null ? { sharpFrac: SHARPFRAC } : {}, MINSAL ? { minSal: MINSAL } : {}, ORACLE ? { oracleOwn: true } : {}) } : {}, ROWS ? { rows: true } : {})); rows.push(r);
     if (ROWS && r.entryRows) { fs.appendFileSync(ROWS, r.entryRows.map(x => JSON.stringify(x)).join("\n") + "\n"); delete r.entryRows; }
     console.log(`\n=== ${c.dir} [${c.fkey}] ===`);
     console.log(`  ${r.N} entries of ${r.rows} rows, ${r.paid} paid, field ROI ${r.fieldROI.toFixed(0)}%; ${r.players} players, ${r.teams} teams, ${r.games} games; unmatched ${r.unmatched.length}${r.unmatched.length ? " (" + r.unmatched.slice(0, 5).join(", ") + ")" : ""}; projection residual ${r.resid.toFixed(2)} FP/lineup; sim ${r.ms} ms`);

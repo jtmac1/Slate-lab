@@ -464,6 +464,44 @@ function mainHub() {
     $$("#main select[data-map]").forEach(s => s.addEventListener("change", () => { const map = Object.assign({}, S.pool.map), k = s.getAttribute("data-map"); if (s.value === "") delete map[k]; else map[k] = +s.value; S.mapOverride = { name: S.projName, map }; loadProjections(S.projText, S.projName); render(); })); $("#bot").innerHTML = ""; }
 }
 
+/* ---------- DraftKings contest list ----------
+   bench/dk-contests.mjs writes data/dk-lobby/<sport>.json from DraftKings' own lobby: every live
+   contest with its field size, entry fee, per-user cap, prize pool, and for the larger ones the
+   exact payout table. Picking one here replaces three numbers that were previously typed and
+   guessed. It is a local step rather than something this page does itself because DraftKings sends
+   no CORS headers and returns 403 to any browser origin; the file it writes is same-origin.
+   The payout table matters more than it sounds: graded over 140 contests, the curve fitted from a
+   typed field size and rake moves an individual lineup's ROI by 13.3 points against the real table,
+   and the real table cuts that to 3.1. */
+const dkSport = () => ({ mlb: "mlb", nfl: "nfl", cfb: "cfb" })[S.league] || "cfb";
+async function loadDkLobby() {
+  if (S.dkTried) return;
+  S.dkTried = true;
+  try {
+    const r = await fetch(`data/dk-lobby/${dkSport()}.json`, { cache: "no-store" });
+    if (!r.ok) return;
+    const j = await r.json();
+    S.dkLobby = (j.contests || []).filter(c => c.gameType === "Classic" || !c.gameType);
+    S.dkWhen = j.fetched || "";
+    render();
+  } catch { /* no file yet: the typed buy-in still works */ }
+}
+function dkOptions() {
+  if (!S.dkLobby || !S.dkLobby.length) return "";
+  return S.dkLobby.slice(0, 120).map(c =>
+    `<option value="${c.id}">${esc(c.name.slice(0, 46))} — $${c.fee}, ${(c.field || 0).toLocaleString()} entries${c.payText ? " ✓" : ""}</option>`).join("");
+}
+function pickDkContest(id) {
+  const c = (S.dkLobby || []).find(x => String(x.id) === String(id));
+  if (!c) return;
+  S.cfg.fee = c.fee || S.cfg.fee;
+  if (c.field >= 2) { S.cfg.pool = Math.round(c.field); S.cfg.entries = Math.round(c.field); }
+  if (c.payText) { S.cfg.payMode = "custom"; S.cfg.payText = c.payText; }
+  S.dkPicked = `${c.name} — $${c.fee}, ${(c.field || 0).toLocaleString()} entries, ${c.payText ? "real payout table" : "payout estimated"}`;
+  saveCfg(); render();
+  setStatus(c.payText ? "Contest loaded with its real payout table." : "Contest loaded; payouts estimated for this one.");
+}
+
 /* ---------- Contest Generator ---------- */
 function renderGen() {
   const mlb = F().sport === "mlb", fee = +S.cfg.fee || 20;
@@ -471,13 +509,16 @@ function renderGen() {
     ${ctlField("Pool Size", `<select class="sel" data-cfg="pool" id="poolSel">${[250, 500, 1000, 1500, 2000, 5000].map(n => `<option value="${n}"${+S.cfg.pool === n ? " selected" : ""}>${n}</option>`).join("")}<option value="custom"${![250, 500, 1000, 1500, 2000, 5000].includes(+S.cfg.pool) ? " selected" : ""}>Custom: ${![250, 500, 1000, 1500, 2000, 5000].includes(+S.cfg.pool) ? S.cfg.pool : "…"}</option></select>`, true)}
     ${ctlField("Team Controls", `<button class="btn sec" id="btnTeams">Team Controls</button>`, true)}
     ${(mlb || fkey() === "nfl_cl" || fkey() === "cfb_cl") ? ctlField("Stack Type Exposures", `<div style="position:relative"><button class="btn sec" id="btnStacks">Stack Type Exposures ✎</button><div id="popStacks"></div></div>`, true) : ""}
+    ${ctlField("DraftKings Contest", `<select class="sel" id="dkPick"><option value="">${S.dkLobby ? "Pick a contest…" : "None loaded"}</option>${dkOptions()}</select>`, true)}
     <div class="f"><label>Contest Buy-in <span class="i">i</span></label><input class="txt" id="fee" type="number" min="0" step="1" value="${fee}"><div class="ticks"><span id="feeNote">$${fee} — ${feeLabel(fee)}</span></div></div>
-    <div class="stamp">${S.projWhen ? "Projections loaded: " + esc(S.projWhen) : ""}${S.contest ? "<br>Contest generated " + esc(S.contest.when) : ""}</div>
+    <div class="stamp">${S.projWhen ? "Projections loaded: " + esc(S.projWhen) : ""}${S.dkPicked ? "<br>" + esc(S.dkPicked) : ""}${S.contest ? "<br>Contest generated " + esc(S.contest.when) : ""}</div>
     <div class="f wide cta"><label>&nbsp;</label><button class="btn gen" id="btnGen"${S.pool && !S.busy ? "" : " disabled"}>${S.contest ? "Generate Lineups" : "Generate Lineups"}</button></div></div>`;
   wireCommon();
   $("#poolSel").addEventListener("change", e => { if (e.target.value === "custom") { const v = prompt("Pool size (exact number of entries):", S.cfg.pool); if (v && +v >= 2) S.cfg.pool = Math.round(+v); saveCfg(); render(); } });
   $("#fee").addEventListener("input", e => { S.cfg.fee = +e.target.value; saveCfg();
     const n = $("#feeNote"); if (n) n.textContent = "$" + (+e.target.value || 0) + " — " + feeLabel(e.target.value); });
+  $("#dkPick").addEventListener("change", e => { if (e.target.value) pickDkContest(e.target.value); else { S.dkTried = false; loadDkLobby(); } });
+  if (!S.dkLobby) loadDkLobby();
   $("#btnTeams").addEventListener("click", () => openModal("teams"));
   const bs = $("#btnStacks"); if (bs) bs.addEventListener("click", () => { S.pop = S.pop === "stacks" ? null : "stacks"; renderStackPop(); });
   $("#btnGen").addEventListener("click", generateContest);
