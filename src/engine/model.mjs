@@ -39,12 +39,31 @@ export const SIGMA_DEF = {
   // showdowns): the classic sigmas drew lineup spread ~20% wider than realized; at 0.82x the spread and
   // the 30-point tail match, and lineup rank correlation with actual rose 0.082 -> 0.125 (both halves).
   nfl_sd: { QB: 0.45, RB: 0.42, WR: 0.50, TE: 0.55, K: 0.55, DST: 0.65 },
-  // CFB: 0.7x the NFL classic values (2026-09-18, bench/grade-all over 74 pulled DK CFB fields): tighter graded
-  // monotonically better on lineup and player rank correlation and cash hits (0.081 -> 0.170 Spearman at 0.7x);
-  // 0.55x kept improving rank but cost the gated rule 9 points of realized top-10% ROI, so 0.7x is the stop.
-  cfb: { QB: 0.385, RB: 0.35, WR: 0.42 }
+  // CFB: the 0.7x-NFL level that graded best, but with the position shape measured from real results.
+  // 3,951 college player-games (bench/game-logs.mjs) put the log-residual spread at QB 0.65, RB 0.84,
+  // WR 0.81 - backs are the most volatile position in college, and the old table made them the least.
+  // Rescaling that shape to the graded level and grading it on the same 277 contests (2026-09-19):
+  // player ROI rank correlation 0.415 -> 0.421 (significant in both window halves), top-decile realized
+  // ROI 32% -> 36%, gated rule 31% -> 37%, nothing significantly worse.
+  cfb: { QB: 0.327, RB: 0.421, WR: 0.406 }
 };
-export function sigmaFor(p, sport, sigmaMax, sigmaDef, ignoreFile) {
+// Spread shrinks as the projection grows: over 3,951 college player-games the log-residual sd runs
+// 0.90 at a 5-10 point projection down to 0.59 above 20, which is very close to proj^-0.35. tilt is
+// that exponent, applied around a reference projection so the average player keeps his graded sigma.
+// Sigma tilt by sport. Graded on 280 pulled CFB contests (2026-09-19) against a flat sigma:
+// lineup rank correlation 0.208 -> 0.229 and cash hits +1.1 per contest, both halves, nothing worse.
+// -0.55 kept lifting lineup rank but cost player rank correlation significantly, so the measured
+// exponent is also the stop. NFL and MLB are untilted until the same measurement is made there.
+export const SIGMA_TILT = { cfb: -0.35 }, SIGMA_TILT_REF = { cfb: 11.5 };
+// Projections run hot on small numbers and cold on large ones: over the same college player-games the
+// actual/projected ratio falls from 1.064 below 10 points to about 0.95 above 15. PROJ_TILT is the
+// exponent of that shrink toward the middle, and it is empty on purpose. Grading the measured -0.09 on
+// 280 CFB contests (2026-09-19) was worse on every quality metric in both window halves: lineup rank
+// correlation 0.229 -> 0.216, player 0.425 -> 0.414, cash hits -1.1 per contest. It only moved the sim
+// closer to Stokastic, which is not the target. Kept as a graded negative, reachable with --projtilt.
+export const PROJ_TILT = {};
+
+export function sigmaFor(p, sport, sigmaMax, sigmaDef, ignoreFile, tilt, tiltRef) {
   const cap = sigmaMax ?? SIGMA_MAX;
   // MLB uses the calibrated per-position values: vendor std dev puts nearly every hitter on the
   // cap anyway and made pitchers too volatile (bench ablation on 2026-09-10 and 09-11, both worse).
@@ -55,7 +74,9 @@ export function sigmaFor(p, sport, sigmaMax, sigmaDef, ignoreFile) {
     if (d > 0) { const s = z - Math.sqrt(d); if (s > 0.05 && s < 2) return s; }
   }
   const def = sigmaDef || SIGMA_DEF[sport] || SIGMA_DEF.nfl;
-  return def[p.pos] || 0.72;
+  const base = def[p.pos] || 0.72;
+  if (!tilt || !(p.proj > 0)) return base;
+  return Math.min(cap, base * Math.pow(Math.max(3, p.proj) / (tiltRef || 11.5), tilt));
 }
 
 export function corrOf(p, q, sport, nGames, tables) {
@@ -109,7 +130,12 @@ export function buildModel(pool, opts = {}) {
   const P = pool.players, sport = pool.format.sport, n = P.length, cholMax = opts.cholMax ?? 220;
   // default sigmas are per format when a format table exists (showdown), else per sport
   const sigmaDef = opts.sigmaDef || SIGMA_DEF[pool.format.key] || SIGMA_DEF[sport];
-  const sig = new Float64Array(n); for (let i = 0; i < n; i++) sig[i] = sigmaFor(P[i], sport, opts.sigmaMax, sigmaDef, opts.ignoreFileSigma);
+  const tilt = opts.sigmaTilt ?? SIGMA_TILT[sport] ?? 0, tiltRef = opts.sigmaTiltRef ?? SIGMA_TILT_REF[sport];
+  // projTilt: projections shrunk toward the middle by (proj/ref)^e, measured from real results
+  const pTilt = opts.projTilt ?? PROJ_TILT[sport] ?? 0, pRef = opts.projTiltRef ?? SIGMA_TILT_REF[sport] ?? 11.5;
+  let mu = null;
+  if (pTilt) { mu = new Float64Array(n); for (let i = 0; i < n; i++) { const pr = P[i].proj; mu[i] = pr > 0 ? pr * Math.pow(Math.max(3, pr) / pRef, pTilt) : pr; } }
+  const sig = new Float64Array(n); for (let i = 0; i < n; i++) sig[i] = sigmaFor(P[i], sport, opts.sigmaMax, sigmaDef, opts.ignoreFileSigma, tilt, tiltRef);
   if (n > cholMax) {
     const tbl = (opts.load && opts.load[sport]) || LOAD[sport], L = [];   // opts.load: grade alternative factor loadings without editing the table
     for (const p of P) {
@@ -117,7 +143,7 @@ export function buildModel(pool, opts = {}) {
       const ss = l[0] * l[0] + l[1] * l[1] + l[2] * l[2];
       L.push({ g: l[0], t: l[1], o: l[2], e: Math.sqrt(Math.max(0.02, 1 - ss)) });
     }
-    return { type: "factor", L, sig, n };
+    return { type: "factor", L, sig, n, mu };
   }
   const tables = opts.tables || (sport === "cfb" ? { CSAME: CSAME_CFB, COPP: COPP_CFB, MLBC } : null);
   const C = []; for (let i = 0; i < n; i++) C.push(new Float64Array(n));
@@ -135,25 +161,28 @@ export function buildModel(pool, opts = {}) {
     let sum = D[i][j]; for (let k = 0; k < j; k++) sum -= Lm[i][k] * Lm[j][k];
     if (i === j) Lm[i][j] = Math.sqrt(Math.max(sum, 1e-9)); else Lm[i][j] = sum / (Lm[j][j] || 1e-9);
   }
-  return { type: "chol", L: Lm, sig, n };
+  return { type: "chol", L: Lm, sig, n, mu };
 }
 
-export function toScore(p, z, sg) {
-  if (p.proj <= 0) return 0;
-  if (p.pos === "DST") { const sd = p.sd && p.sd > 0 ? p.sd : Math.max(2, p.proj * 0.8); return Math.max(-4, p.proj + sd * z); }
-  return p.proj * Math.exp(sg * z - sg * sg / 2);
+// mu overrides the projection the draw is centred on, for grading a recalibration of the projections
+// themselves. The draw is mean-preserving, so mu is exactly the player's expected score.
+export function toScore(p, z, sg, mu) {
+  const m = mu == null ? p.proj : mu;
+  if (m <= 0) return 0;
+  if (p.pos === "DST") { const sd = p.sd && p.sd > 0 ? p.sd : Math.max(2, m * 0.8); return Math.max(-4, m + sd * z); }
+  return m * Math.exp(sg * z - sg * sg / 2);
 }
 
 // Fill `out` with one correlated draw of every player's score.
 export function drawScores(model, pool, rng, out, scratch) {
-  const P = pool.players, n = model.n, sig = model.sig;
+  const P = pool.players, n = model.n, sig = model.sig, mu = model.mu;
   if (model.type === "chol") {
     const z = scratch.z;
     for (let j = 0; j < n; j++) z[j] = rng.gauss();
     for (let j = 0; j < n; j++) {
       let s = 0; const Lj = model.L[j];
       for (let k = 0; k <= j; k++) s += Lj[k] * z[k];
-      out[j] = toScore(P[j], s, sig[j]);
+      out[j] = toScore(P[j], s, sig[j], mu ? mu[j] : undefined);
     }
   } else {
     const gF = scratch.gF, tF = scratch.tF, teams = pool.teams;
@@ -162,7 +191,7 @@ export function drawScores(model, pool, rng, out, scratch) {
     for (let j = 0; j < n; j++) {
       const p = P[j], l = model.L[j], oppTi = teams.indexOf(p.opp);
       const s = l.g * gF[p.gi || 0] + l.t * tF[p.ti < 0 ? 0 : p.ti] + (oppTi >= 0 ? l.o * tF[oppTi] : 0) + l.e * rng.gauss();
-      out[j] = toScore(p, s, sig[j]);
+      out[j] = toScore(p, s, sig[j], mu ? mu[j] : undefined);
     }
   }
 }
