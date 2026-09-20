@@ -22,16 +22,29 @@ const DEF = {
 // than a $50 one. The two ends are fitted, the middle is interpolated on log price.
 // Strength is the only field property that has ever improved how the sim PRICES a lineup. Matching
 // the real field's ownership, its duplicate share and its stack shapes each failed.
-const FEE_LO = 5, FEE_HI = 50;
-export function fieldProfile(fee, fkey) {
+const FEE_LO = 5, FEE_HI = 50, SIZE_LO = 200, SIZE_HI = 3000, SIZE_ADJ = 0;
+export function fieldProfile(fee, fkey, fieldN) {
   if (fkey !== "cfb_cl") return null;   // measured for college only; other sports keep their defaults
   const f = Math.max(0.25, +fee || FEE_LO);
   const t = Math.max(0, Math.min(1, (Math.log10(f) - Math.log10(FEE_LO)) / (Math.log10(FEE_HI) - Math.log10(FEE_LO))));
   // skill: [share, candidate lineups considered]. A few heavy optimizers plus a larger semi-serious
   // class matches both the field's average strength and the top of it; sharpening everyone equally
   // matches the average and flattens the top, which is the half that wins tournaments.
-  const skill = t > 0.02 ? [[0.05 * t, 40], [0.25 * t, 3]] : null;
-  return { conc: 0.95 + 0.15 * t, minSal: Math.round(49000 + 350 * t), skill };
+  //
+  // Field size looked like an obvious second axis and is not one. With the price curve applied the
+  // real field still runs 0.75 projected points STRONGER than ours under 300 entries and 1.17 WEAKER
+  // above 1500, summed ownership swinging 12 points across the same range, cleanly monotonic
+  // (bench/field-strength.mjs --bysize over 200 contests). Correcting it made pricing worse:
+  // per-contest error 11.1 -> 12.3 and the level -0.1% -> -0.9%. Most likely the sim already feels
+  // field size directly - it scores a field of exactly N entries against a payout curve that scales
+  // with N - so adjusting opponent strength by N again double counts it.
+  // SIZE_ADJ is the strength of the correction and is 0 on purpose; raise it to regrade on new data.
+  const N = +fieldN > 1 ? +fieldN : 0;
+  const u = N ? Math.max(0, Math.min(1, (Math.log10(N) - Math.log10(SIZE_LO)) / (Math.log10(SIZE_HI) - Math.log10(SIZE_LO)))) : 0.5;
+  const g = SIZE_ADJ * 2 * (0.5 - u);   // +1 for a small field, -1 for a large one, before damping
+  const sc = Math.max(0, 1 + 0.45 * g);
+  const skill = t > 0.02 ? [[0.05 * t * sc, 40], [0.25 * t * sc, 3]] : null;
+  return { conc: 0.95 + 0.15 * t + 0.06 * g, minSal: Math.round(49000 + 350 * t + 60 * g), skill };
 }
 
 // Share of entries that duplicate another entry in real DK fields, by field size. MLB from 217

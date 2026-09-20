@@ -5,7 +5,7 @@
 // projected points, the top of that distribution, and salary used - and splits it by entry fee.
 //   node bench/field-strength.mjs cfb_cl [--n=60] [--best=40 --frac=0.08 --minsal=49300] [--bytier]
 import { listContests, loadPulled } from "./grade-all.mjs";
-import { genField } from "../src/engine/field.mjs";
+import { fieldProfile, genField } from "../src/engine/field.mjs";
 import { mulberry32 } from "../src/engine/rng.mjs";
 const FKEY = process.argv[2] || "cfb_cl";
 const flag = k => { const a = process.argv.find(x => x.startsWith(`--${k}=`)); return a ? +a.slice(k.length + 3) : null; };
@@ -15,7 +15,11 @@ const MINSAL = flag("minsal"), BEST = flag("best"), FRAC = flag("frac"), CONC = 
 const SKILLRAW = (process.argv.find(a => a.startsWith("--skill=")) || "").slice(8);
 const SKILL = SKILLRAW ? SKILLRAW.split(",").map(x => x.split(":").map(Number)) : null;
 
-const TIERS = [["under $10", 0, 10], ["$10-49", 10, 50], ["$50-199", 50, 200], ["$200+", 200, 1e9]];
+const BYSIZE = process.argv.includes("--bysize");
+const TIERS = BYSIZE
+  ? [["under 300", 0, 300], ["300-1500", 300, 1500], ["1500-5000", 1500, 5000], ["5000+", 5000, 1e9]]
+  : [["under $10", 0, 10], ["$10-49", 10, 50], ["$50-199", 50, 200], ["$200+", 200, 1e9]];
+const tierKey = c => BYSIZE ? (c.entries || 0) : (c.fee || 0);
 const q = (a, p) => { const s = a.slice().sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(s.length * p))]; };
 const mean = a => a.reduce((x, y) => x + y, 0) / (a.length || 1);
 const blank = () => ({ n: 0, dp: [], dp99: [], ds: [], dOwn: [] });
@@ -26,7 +30,8 @@ for (const c of listContests().filter(c => c.json && c.fkey === FKEY)) {
   const { pool, entries } = loadPulled(c.json);
   if (entries.length < 50) continue;
   const P = pool.players;
-  const opts = Object.assign({}, SEC ? { secStack: true } : {}, MINSAL ? { minSal: MINSAL } : {},
+  // the contest own price profile first, so what is left over is the part price cannot explain
+  const opts = Object.assign({}, fieldProfile(c.fee, FKEY, entries.length), SEC ? { secStack: true } : {}, MINSAL ? { minSal: MINSAL } : {},
     BEST ? { best: BEST } : {}, FRAC != null ? { sharpFrac: FRAC } : {}, CONC != null ? { conc: CONC } : {}, SKILL ? { skill: SKILL } : {});
   const { field } = genField(pool, entries.length, opts, mulberry32(12345 + done));
   if (!field.length) continue;
@@ -37,7 +42,7 @@ for (const c of listContests().filter(c => c.json && c.fkey === FKEY)) {
   const row = { dp: mean(rp) - mean(gp), dp99: q(rp, 0.99) - q(gp, 0.99),
     ds: mean(entries.map(e => salOf(e.lu))) - mean(field.map(salOf)),
     dOwn: mean(entries.map(e => ownOf(e.lu))) - mean(field.map(ownOf)) };
-  const ti = TIERS.findIndex(t => (c.fee || 0) >= t[1] && (c.fee || 0) < t[2]);
+  const ti = TIERS.findIndex(t => tierKey(c) >= t[1] && tierKey(c) < t[2]);
   for (const a of [all, ti >= 0 ? tiers[ti] : null]) { if (!a) continue; a.n++; for (const k of ["dp", "dp99", "ds", "dOwn"]) a[k].push(row[k]); }
   done++;
 }

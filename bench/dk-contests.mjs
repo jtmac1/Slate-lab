@@ -1,6 +1,7 @@
 // Every live DraftKings contest for a sport, with the exact payout table for the ones you care
 // about, so a slate and a contest can be picked instead of typing a field size and a rake.
-//   node bench/dk-contests.mjs CFB [--minfee=5] [--payouts] [--max=40]
+//   node bench/dk-contests.mjs CFB [--minfee=5] [--payouts] [--max=40] [--entries=DKEntries.csv]
+//   npm run contests -- --entries=C:/path/DKEntries.csv
 // Writes data/dk-lobby/<sport>.json: { fetched, draftGroups:[...], contests:[{id, name, fee, field,
 // entered, cap, prizePool, draftGroup, start, payouts?}] }
 //
@@ -14,7 +15,22 @@ import { dkPayouts } from "./dk-payouts.mjs";
 
 const SPORT = (process.argv[2] || "CFB").toUpperCase();
 const flag = k => { const a = process.argv.find(x => x.startsWith(`--${k}=`)); return a ? +a.slice(k.length + 3) : null; };
+const str = k => { const a = process.argv.find(x => x.startsWith(`--${k}=`)); return a ? a.slice(k.length + 3) : null; };
 const MINFEE = flag("minfee") ?? 0, MAXPAY = flag("max") ?? 40, WANT_PAY = process.argv.includes("--payouts");
+// --entries=DKEntries.csv: fetch the real payout table for every contest you are actually in,
+// which is what the picker filters to anyway. The largest contests are fetched as well so the list
+// is still useful before any entries exist.
+const ENTRIES = str("entries");
+const mineIds = new Set();
+if (ENTRIES && fs.existsSync(ENTRIES)) {
+  for (const line of fs.readFileSync(ENTRIES, "utf8").split(/\r?\n/)) {
+    const cell = line.split(",");
+    if (cell.length > 2 && /^\d+$/.test((cell[0] || "").trim()) && /^\d+$/.test((cell[2] || "").trim())) mineIds.add(cell[2].trim());
+  }
+  console.log(`${ENTRIES}: ${mineIds.size} distinct contests entered`);
+} else if (ENTRIES) {
+  console.log(`${ENTRIES} not found; falling back to the largest contests`);
+}
 
 const j = await (await fetch(`https://www.draftkings.com/lobby/getcontests?sport=${SPORT}`)).json();
 const groups = (j.DraftGroups || []).map(g => ({
@@ -37,8 +53,10 @@ for (const g of groups.slice(0, 8)) {
 
 // the payout table only for the biggest contests, since each is its own request
 if (WANT_PAY) {
-  const pick = all.slice(0, MAXPAY);
-  console.log(`\nfetching payout tables for the ${pick.length} largest`);
+  const mine = all.filter(c => mineIds.has(String(c.id)));
+  const rest = all.filter(c => !mineIds.has(String(c.id))).slice(0, MAXPAY);
+  const pick = mine.concat(rest);
+  console.log(`\nfetching payout tables: ${mine.length} you entered, ${rest.length} largest others`);
   let ok = 0;
   for (const c of pick) {
     try {

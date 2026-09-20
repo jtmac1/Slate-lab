@@ -27,7 +27,7 @@ const stackDef = () => F().sport === "cfb" ? cfbDefFor(S.pool ? S.pool.games.len
 // three-preset spread, now read off the same price ramp instead of a slider position.
 const ARCH = [{ conc: 0.85, minSal: 47500, boost: 0.6 }, { conc: 1.0, minSal: 49000, boost: 1.0 }, { conc: 1.25, minSal: 49300, boost: 1.5 }];
 const archFor = fee => {
-  const f = +fee || 0, p = fieldProfile(fee, F().key);
+  const f = +fee || 0, p = fieldProfile(fee, F().key, S.cfg.pool);
   // college has a fitted curve, graded with the middle preset s boost; the other sports keep the
   // three presets the slider used to pick, now chosen by price instead of by slider position
   return p ? Object.assign({}, ARCH[1], p) : (f < 10 ? ARCH[0] : f < 50 ? ARCH[1] : ARCH[2]);

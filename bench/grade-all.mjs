@@ -179,7 +179,7 @@ export function gradeContest(c, opts = {}) {
   if (opts.genField) {
     // the app's situation: real entries scored against a GENERATED field (not against each other),
     // in batches like a multi-entry user, so the field generator is part of what gets graded
-    const f = pool.format, opt = Object.assign({ conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3 }, f.sport === "mlb" ? mlbStackOpt() : { nflStacks: NFL_DEF }, fieldProfile(c.fee, f.key), opts.gen || {});
+    const f = pool.format, opt = Object.assign({ conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3 }, f.sport === "mlb" ? mlbStackOpt() : { nflStacks: NFL_DEF }, fieldProfile(c.fee, f.key, entries.length), opts.gen || {});
     // oracleOwn: build the field on ACTUAL ownership instead of projected - an upper bound on what a perfect ownership projection would buy
     const gpool = opts.gen && opts.gen.oracleOwn ? Object.assign({}, pool, { players: P.map(q => Object.assign({}, q, { own: q.actOwn != null ? q.actOwn : q.own, fown: q.actOwn != null ? q.actOwn : q.fown })) }) : pool;
     const gen = genField(gpool, N, opt, mulberry32(SEED)).field, B = opts.batch || 50, rows = [];
@@ -250,7 +250,7 @@ export function fieldCheck(c, opts = {}) {
     if (kept.length >= rc.entries.length * 0.8) { pool = pp; entries = kept; }
   }
   const P = pool.players, f = pool.format, N = entries.length, real = entries.map(e => e.lu);
-  const opt = Object.assign({ conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3 }, f.sport === "mlb" ? mlbStackOpt() : { nflStacks: NFL_DEF }, fieldProfile(c.fee, f.key), opts.gen || {});
+  const opt = Object.assign({ conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3 }, f.sport === "mlb" ? mlbStackOpt() : { nflStacks: NFL_DEF }, fieldProfile(c.fee, f.key, entries.length), opts.gen || {});
   const t0 = Date.now(), gen = genField(pool, N, opt, mulberry32(SEED)).field, ms = Date.now() - t0;
   const dist = lus => { const d = {}; for (const l of lus) { const k = stackOf(l, P, f); d[k] = (d[k] || 0) + 1 / lus.length; } return d; };
   const dr = dist(real), dg = dist(gen), keys = [...new Set(Object.keys(dr).concat(Object.keys(dg)))];
