@@ -32,7 +32,7 @@ for (const f of (fs.existsSync(logDir) ? fs.readdirSync(logDir).filter(f => f.en
   }
 }
 const mean = a => a.reduce((x, y) => x + y, 0) / (a.length || 1);
-const out = { pick1: [], pick3: [], rand1: [], all: [], field: [], cash1: [], cashAll: [], cashField: [], med1: [], medAll: [], pct: [] };
+const out = { pick1: [], pick3: [], rand1: [], all: [], field: [], cash1: [], cashAll: [], cashField: [], med1: [], medAll: [], pct: [], pctAll: [] };
 let used = 0;
 for (const c of listContests().filter(c => c.json && c.fkey === FKEY)) {
   if (used >= LIM) break;
@@ -71,8 +71,10 @@ for (const c of listContests().filter(c => c.json && c.fkey === FKEY)) {
   out.cashAll.push(mean(act.map(v=>roiOf(v)>-100?1:0)));
   out.cashField.push(scored.filter(e=>e.actROI>-100).length/scored.length);
   out.med1.push(roiOf(act[rank[0].i])); out.medAll.push(med(act.map(roiOf)));
-  { let r = 0; const sc = act[rank[0].i]; while (r < fieldScores.length && fieldScores[r] > sc) r++;
-    out.pct.push(r / fieldScores.length); }
+  const pctOf = sc => { let r = 0; while (r < fieldScores.length && fieldScores[r] > sc) r++; return r / fieldScores.length; };
+  out.pct.push(pctOf(act[rank[0].i]));
+  // the control that matters: the SAME built lineups, chosen at random instead of by the sim
+  for (const v of act) out.pctAll.push(pctOf(v));
   out.pick1.push(roiOf(act[rank[0].i]));
   out.pick3.push(mean(rank.slice(0, 3).map(x => roiOf(act[x.i]))));
   out.rand1.push(mean(act.map(roiOf)));
@@ -138,12 +140,15 @@ for (const [lab, arr] of [["the sim top pick", out.pick1], ["the sim top 3", out
 {
   const tiers = [[0.001, "top 0.1%"], [0.01, "top 1%"], [0.05, "top 5%"], [0.10, "top 10%"]];
   console.log("\nhow often the pick reaches each tier, over " + out.pct.length + " contests");
-  console.log("  tier".padEnd(14) + "expected".padEnd(11) + "observed".padEnd(11) + "ratio".padEnd(9) + "z");
+  console.log("  tier".padEnd(12) + "vs chance".padEnd(10) + "observed".padEnd(10) + "ratio".padEnd(9) + "z".padEnd(8) + "vs a built LU".padEnd(12) + "ratio".padEnd(9) + "z");
   for (const [q, lab] of tiers) {
     const hits = out.pct.filter(x => x <= q).length, n = out.pct.length, exp = q * n;
     const z = (hits - exp) / Math.sqrt(Math.max(1e-9, n * q * (1 - q)));
-    console.log("  " + lab.padEnd(14) + exp.toFixed(1).padEnd(11) + String(hits).padEnd(11)
-      + (exp > 0 ? (hits / exp).toFixed(1) + "x" : "-").padEnd(9) + z.toFixed(1));
+    const baseRate = out.pctAll.filter(x => x <= q).length / out.pctAll.length;
+    const expB = baseRate * n, zB = expB > 0 ? (hits - expB) / Math.sqrt(Math.max(1e-9, n * baseRate * (1 - baseRate))) : 0;
+    console.log("  " + lab.padEnd(12) + exp.toFixed(1).padEnd(10) + String(hits).padEnd(10)
+      + (exp > 0 ? (hits / exp).toFixed(1) + "x" : "-").padEnd(9) + z.toFixed(1).padEnd(8)
+      + expB.toFixed(1).padEnd(12) + (expB > 0 ? (hits / expB).toFixed(1) + "x" : "-").padEnd(9) + zB.toFixed(1));
   }
 }
 const beat = out.pick1.filter((v, i) => v > out.rand1[i]).length;
