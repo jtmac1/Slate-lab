@@ -53,7 +53,9 @@ for (const c of listContests().filter(c => c.json && c.fkey === FKEY)) {
 
   const model = buildModel(pool, {});
   const res = simulate({ pool, model, field: gen, lineups: gen, payouts, entries: N, fee: 1, iters: ITERS, rng: mulberry32(5 + O.n), fieldMode: true });
-  const feats = featurize(gen, P, pool.format, res.rows);
+  const projOf = lu => lu.reduce((t, id) => t + (P[id].proj || 0), 0);
+  const ownOf = lu => lu.reduce((t, id) => t + (P[id].own || 0), 0);
+  const feats = featurize(res.rows.map((r, i) => ({ proj: projOf(gen[i]), roi: r.roi, cash: r.cash, t10: r.t10, avgRank: r.avgRank, own: ownOf(gen[i]) })));
   const rank = feats.map((f, i) => ({ i, s: scoreOf(f) })).sort((a, b) => b.s - a.s);
 
   const fieldScores = scored.map(e => e.actFP).sort((a, b) => b - a);
@@ -72,7 +74,7 @@ for (const c of listContests().filter(c => c.json && c.fkey === FKEY)) {
   // can the sim rank these lineups at all? correlate its own numbers with what they actually scored
   O.rRoi.push(spearman(feats.map(f => f.roi), act));
   O.rScore.push(spearman(feats.map(scoreOf), act));
-  O.rProj.push(spearman(gen.map(l => l.reduce((s2, id) => s2 + (P[id].proj || 0), 0)), act));
+  O.rProj.push(spearman(gen.map(projOf), act));
   if (t20 > anyv) O.beat++;
   O.n++;
 }

@@ -59,7 +59,8 @@ for (const c of listContests().filter(c => c.json && c.fkey === FKEY)) {
   if (gen.length < 50) continue;
   const model = buildModel(pool, {});
   const res = simulate({ pool, model, field: gen, lineups: b.lineups, payouts, entries: N, fee: 1, iters: ITERS, rng: mulberry32(5 + used), fieldMode: false });
-  const feats = featurize(b.lineups, P, pool.format, res.rows);
+  const pj = lu => lu.reduce((t, id) => t + (P[id].proj || 0), 0), ow = lu => lu.reduce((t, id) => t + (P[id].own || 0), 0);
+  const feats = featurize(res.rows.map((r, i) => ({ proj: pj(b.lineups[i]), roi: r.roi, cash: r.cash, t10: r.t10, avgRank: r.avgRank, own: ow(b.lineups[i]) })));
   const rank = feats.map((f, i) => ({ i, s: RULE(f) })).sort((a, b2) => b2.s - a.s);
 
   const fieldScores = scored.map(e => e.actFP).sort((a, b2) => b2 - a);
