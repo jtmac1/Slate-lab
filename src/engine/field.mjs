@@ -38,7 +38,11 @@ export function fieldProfile(fee, fkey, fieldN) {
   // per-contest error 11.1 -> 12.3 and the level -0.1% -> -0.9%. Most likely the sim already feels
   // field size directly - it scores a field of exactly N entries against a payout curve that scales
   // with N - so adjusting opponent strength by N again double counts it.
-  // SIZE_ADJ is the strength of the correction and is 0 on purpose; raise it to regrade on new data.
+  // Fitting it to PRICING instead of to projected strength flips the sign: a positive residual means
+  // we over-predict, so large fields need a STRONGER opponent set, not the weaker one the strength
+  // measurement implied. That flip is worth 0.2 points of per-contest error (11.1 -> 10.9) while the
+  // level drifts -0.1% -> +0.7%, and the sign was derived from the same 140 contests it was graded on.
+  // SIZE_ADJ is 0 on purpose; negative builds large fields stronger, if new data ever justifies it.
   const N = +fieldN > 1 ? +fieldN : 0;
   const u = N ? Math.max(0, Math.min(1, (Math.log10(N) - Math.log10(SIZE_LO)) / (Math.log10(SIZE_HI) - Math.log10(SIZE_LO)))) : 0.5;
   const g = SIZE_ADJ * 2 * (0.5 - u);   // +1 for a small field, -1 for a large one, before damping
