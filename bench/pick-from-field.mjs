@@ -90,4 +90,15 @@ console.log("\nhow well each ranks the generated lineups against what they actua
 console.log("  simulated ROI".padEnd(26) + mean(O.rRoi).toFixed(3));
 console.log("  Lineup Score".padEnd(26) + mean(O.rScore).toFixed(3));
 console.log("  projected points".padEnd(26) + mean(O.rProj).toFixed(3));
+// Beating the field average is the only thing that matters: that average IS the rake, so anything
+// above it is edge and anything below it is losing slower than average. Paired per contest, since
+// contests differ enormously in how they pay.
+const sdv = a => { const mu = mean(a); return Math.sqrt(mean(a.map(x => (x - mu) ** 2)) * a.length / (a.length - 1)); };
+const pair = (lab, arr) => {
+  const d = arr.map((v, i) => v - O.field[i]), se = sdv(d) / Math.sqrt(d.length);
+  console.log("  " + lab.padEnd(22) + mean(d).toFixed(1).padEnd(10) + "se " + se.toFixed(1).padEnd(8)
+    + "95% [" + (mean(d) - 1.96 * se).toFixed(0) + ", " + (mean(d) + 1.96 * se).toFixed(0) + "]   ahead in " + d.filter(x => x > 0).length + "/" + d.length);
+};
+console.log("\nreturn minus the field average of the same contest");
+pair("top 1", O.top1); pair("top 3", O.top3); pair("top 20%", O.top20); pair("a random generated", O.any);
 console.log(`\nthe top 20% by Lineup Score beat an average generated lineup in ${O.beat} of ${O.n} contests`);
