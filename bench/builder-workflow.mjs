@@ -99,5 +99,34 @@ const pairC = (lab, arr) => { const d = arr.map((v, i) => v - out.cashField[i]),
     + "t = " + (mean(d) / se).toFixed(1).padEnd(8) + "ahead in " + d.filter(x => x > 0).length + "/" + d.length); };
 console.log("\ncash rate minus the field, in points");
 pairC("the sim top pick", out.cash1); pairC("a built lineup", out.cashAll);
+// Returns here are heavy tailed - the mean is carried by a handful of large finishes - so the
+// normal interval above is optimistic. Bootstrap the paired difference instead, and report the
+// median and the win rate, which do not depend on the tail behaving.
+const boot = (arr, reps = 4000) => {
+  const d = arr.map((v, i) => v - out.field[i]), n = d.length, ms = [];
+  let seed = 12345; const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  for (let r = 0; r < reps; r++) { let t = 0; for (let i = 0; i < n; i++) t += d[(rnd() * n) | 0]; ms.push(t / n); }
+  ms.sort((x, y) => x - y);
+  const med = dd => { const x = dd.slice().sort((u, v) => u - v); return x[Math.floor(x.length / 2)]; };
+  return { lo: ms[Math.floor(reps * 0.025)], hi: ms[Math.floor(reps * 0.975)], mean: mean(d), med: med(d), win: d.filter(x => x > 0).length, n };
+};
+console.log("\nbootstrapped, 4000 resamples of the paired difference");
+for (const [lab, arr] of [["the sim top pick", out.pick1], ["the sim top 3", out.pick3], ["a built lineup", out.rand1]]) {
+  const r = boot(arr);
+  console.log("  " + lab.padEnd(22) + "mean " + r.mean.toFixed(1).padEnd(9) + "95% [" + r.lo.toFixed(0) + ", " + r.hi.toFixed(0) + "]".padEnd(6)
+    + "  median " + r.med.toFixed(1).padEnd(9) + "ahead " + r.win + "/" + r.n);
+}
+// How much of the edge is a handful of contests? Drop the biggest wins one at a time. If the mean
+// goes negative after removing two or three, there is no edge - just a few lucky slates.
+{
+  const d = out.pick1.map((v, i) => v - out.field[i]).slice().sort((x, y) => y - x);
+  const tot = d.reduce((x, y) => x + y, 0);
+  console.log("\nhow concentrated is it - drop the best N contests of " + d.length);
+  for (const k of [0, 1, 2, 3, 5, 10]) {
+    const rest = d.slice(k), mu = rest.reduce((x, y) => x + y, 0) / rest.length;
+    console.log("  drop " + String(k).padEnd(4) + "mean " + mu.toFixed(1).padEnd(10)
+      + "the top " + (k || 1) + " contribute " + (100 * (tot - rest.reduce((x, y) => x + y, 0)) / Math.abs(tot)).toFixed(0) + "% of the total");
+  }
+}
 const beat = out.pick1.filter((v, i) => v > out.rand1[i]).length;
 console.log(`\nthe sim's pick beat an average built lineup in ${beat} of ${used} contests`);
