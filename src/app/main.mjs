@@ -165,12 +165,35 @@ function entriesCSV() {
 // When the simulated pool differs from the real field, the honest answer is a contest of YOUR size
 // carrying the real one's economics - the same rake, the same share to first, the same fraction
 // paid. Exact table when the sizes match, rebuilt on those three numbers when they do not.
+// A table saved before the field size was recorded, or pasted by hand, has no origin to scale from.
+// One thing still gives it away: a payout structure that would pay most of the simulated field does
+// not belong to that field. Real tournaments pay roughly a fifth. So an unattributed table that
+// covers three quarters or more of the pool is refused rather than used, which is the case that
+// produced a 100% cash rate and a four-figure ROI on a hundred-entry contest.
+// What the simulated contest actually pays, shown rather than assumed: a wrong payout structure is
+// invisible in a lineup table but moves every ROI on it.
+function payoutSummary() {
+  const N = Math.max(2, Math.round(+S.cfg.pool || 2));
+  try {
+    const { pay, fee } = payoutsFor(N);
+    const paid = paidCount(pay);
+    let tot = 0; for (let i = 0; i < pay.length; i++) tot += pay[i];
+    const rake = 100 * (1 - tot / (N * (fee || 1)));
+    const src = S.payNote ? "estimated" : (S.cfg.payMode === "custom" && S.cfg.payText ? (+S.cfg.payField === N ? "real table" : "real table, rescaled") : "estimated");
+    return "<br>Payouts: " + paid.toLocaleString() + " of " + N.toLocaleString() + " paid (" + (100 * paid / N).toFixed(1) + "%), rake " + rake.toFixed(1) + "% · " + src +
+      (S.payNote ? "<br><span class=\"warn\">" + esc(S.payNote) + "</span>" : "");
+  } catch { return ""; }
+}
 function payoutsFor(N) {
   const c = S.cfg;
+  S.payNote = "";
   if (c.payMode === "custom" && c.payText && c.payText.trim()) {
     const F = Math.max(0, Math.round(+c.payField || 0)), fee = +c.fee || 1;
-    if (!F || F === N) { const p = parsePayoutTable(c.payText, N); if (paidCount(p)) return { pay: p, fee }; }
-    else {
+    if (!F || F === N) {
+      const p = parsePayoutTable(c.payText, N), pc = paidCount(p);
+      if (pc && (F === N || pc < N * 0.75)) return { pay: p, fee };
+      if (pc) S.payNote = `Saved payout table pays ${pc} of ${N} places, so it belongs to a bigger contest. Using an estimated structure — re-pick the contest to attach its real one.`;
+    } else {
       const real = parsePayoutTable(c.payText, F);
       const paidN = paidCount(real);
       let tot = 0; for (let i = 0; i < real.length; i++) tot += real[i];
@@ -600,7 +623,7 @@ function renderGen() {
       const empty = !S.dkLobby ? "None loaded" : dm.filtered ? "Pick one you entered…" : dm.slate ? "Load entries to narrow to yours…" : "Load entries to filter…";
       return ctlField(label, `<select class="sel" id="dkPick"><option value="">${empty}</option>${dkOptions()}</select><label class="btn ghost" style="cursor:pointer;margin-top:6px;display:inline-block" title="Pick the file written by: npm run contests">${S.dkLobby ? "Refresh list" : "Load contest list"}<input type="file" id="fileLobby" accept=".json,application/json" hidden></label>${dkAge()}`, true); })()}
     <div class="f"><label>Contest Buy-in <span class="i">i</span></label><input class="txt" id="fee" type="number" min="0" step="1" value="${fee}"><div class="ticks"><span id="feeNote">$${fee} — ${feeLabel(fee)}</span></div></div>
-    <div class="stamp">${S.projWhen ? "Projections loaded: " + esc(S.projWhen) : ""}${S.dkPicked ? "<br>" + esc(S.dkPicked) : ""}${S.contest ? "<br>Contest generated " + esc(S.contest.when) : ""}</div>
+    <div class="stamp">${S.projWhen ? "Projections loaded: " + esc(S.projWhen) : ""}${S.dkPicked ? "<br>" + esc(S.dkPicked) : ""}${payoutSummary()}${S.contest ? "<br>Contest generated " + esc(S.contest.when) : ""}</div>
     <div class="f wide cta"><label>&nbsp;</label>${S.contest || S.LU.length ? `<button class="btn ghost" id="btnClear"${S.busy ? " disabled" : ""} title="Drop the generated contest, its lineups and your favourites. Projections and settings stay.">Clear</button>` : ""}<button class="btn gen" id="btnGen"${S.pool && !S.busy ? "" : " disabled"}>${S.contest ? "Generate Lineups" : "Generate Lineups"}</button></div></div>`;
   wireCommon();
   $("#poolSel").addEventListener("change", e => { if (e.target.value === "custom") { const v = prompt("Pool size (exact number of entries):", S.cfg.pool); if (v && +v >= 2) S.cfg.pool = Math.round(+v); saveCfg(); render(); } });
