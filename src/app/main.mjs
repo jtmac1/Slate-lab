@@ -340,12 +340,27 @@ function commonCtl() {
   return ctlField("League", `<select class="sel" id="league"><option value="mlb"${S.league === "mlb" ? " selected" : ""}>⚾ MLB</option><option value="nfl"${S.league === "nfl" ? " selected" : ""}>🏈 NFL</option><option value="cfb"${S.league === "cfb" ? " selected" : ""}>🏈 CFB</option></select>`) +
     ctlField("Site", `<select class="sel"><option>DraftKings</option></select>`, false, "site") +
     ctlField("Type", `<select class="sel" id="type"><option value="classic"${S.type === "classic" ? " selected" : ""}>Classic</option>${S.league === "nfl" ? `<option value="showdown"${S.type === "showdown" ? " selected" : ""}>Showdown</option>` : ""}</select>`) +
-    ctlField("Slate", `<select class="sel" style="min-width:200px"><option>${S.pool ? esc(S.projName || "Loaded projections") : "No projections loaded"}</option></select>`, true, "wide");
+    // A live slate picker rather than a label: this was a dead select showing the loaded filename,
+    // so the slate could only be changed on the hub. The hub keeps its own fuller control with
+    // Check, Load and the update stamps, so there this stays a label and avoids a second picker.
+    ctlField("Slate", S.view === "hub"
+      ? `<select class="sel" style="min-width:200px"><option>${S.pool ? esc(S.projName || "Loaded projections") : "No projections loaded"}</option></select>`
+      : `<select class="sel" id="slateSel" style="min-width:200px">${stkSlateOptions()}</select><button class="btn ghost" id="slateChk" style="margin-left:6px" title="List slates from Stokastic">↻</button>${S.pool ? `<div class="ticks"><span>${esc(S.projName || "Loaded projections")}</span></div>` : ""}`, true, "wide");
 }
 function wireCommon() {
   $("#league").addEventListener("change", e => { S.league = e.target.value; if (S.league === "mlb" || S.league === "cfb") S.type = "classic"; S.cfg.nflStacks = null; saveCfg(); /* stack shares are per sport */ store.set("league", S.league); store.set("type", S.type); reloadPool(); });
   $("#type").addEventListener("change", e => { S.type = e.target.value; store.set("type", S.type); reloadPool(); });
+  const ss = $("#slateSel");
+  if (ss) ss.addEventListener("change", e => { S.stk.slateId = e.target.value || null; store.set("stk", S.stk); if (S.stk.slateId) stkLoad(); else render(); });
+  const sc = $("#slateChk"); if (sc) sc.addEventListener("click", stkCheck);
   $$("[data-cfg]").forEach(el => { const k = el.getAttribute("data-cfg"); if (el.tagName !== "SELECT") el.value = S.cfg[k] ?? ""; el.addEventListener("change", () => { S.cfg[k] = el.type === "checkbox" ? el.checked : el.value; saveCfg(); if (el.hasAttribute("data-rr")) render(); }); });
+}
+// Drop the generated contest and everything built on it, keeping the projections and every setting.
+// Favourites go too: they are indexes into the lineup list, so they mean nothing once it is gone.
+function clearContest() {
+  S.contest = null; S.res = null; S.LU = []; S.luSource = ""; S.fieldMode = false;
+  S.favs = new Set(); S.favOrder = [];
+  render(); setStatus("Contest generator cleared — projections and settings kept.");
 }
 function reloadPool() { S.contest = null; S.res = null; S.LU = []; if (S.projText) loadProjections(S.projText, S.projName, true); render(); }
 function tabsHtml(view, list) { return `<div class="tabs">${list.map(([k, l, n]) => `<button class="tab" data-tab="${k}" aria-selected="${S.tab[view] === k}">${l}${n ? `<span class="n">${n}</span>` : ""}</button>`).join("")}</div>`; }
@@ -534,7 +549,7 @@ function renderGen() {
     ${ctlField(dkMine().filtered ? "My Contests" : "DraftKings Contest", `<select class="sel" id="dkPick"><option value="">${!S.dkLobby ? "None loaded" : dkMine().filtered ? "Pick one you entered…" : "Load entries to filter…"}</option>${dkOptions()}</select><label class="btn ghost" style="cursor:pointer;margin-top:6px;display:inline-block" title="Pick the file written by: npm run contests">${S.dkLobby ? "Refresh list" : "Load contest list"}<input type="file" id="fileLobby" accept=".json,application/json" hidden></label>${dkAge()}`, true)}
     <div class="f"><label>Contest Buy-in <span class="i">i</span></label><input class="txt" id="fee" type="number" min="0" step="1" value="${fee}"><div class="ticks"><span id="feeNote">$${fee} — ${feeLabel(fee)}</span></div></div>
     <div class="stamp">${S.projWhen ? "Projections loaded: " + esc(S.projWhen) : ""}${S.dkPicked ? "<br>" + esc(S.dkPicked) : ""}${S.contest ? "<br>Contest generated " + esc(S.contest.when) : ""}</div>
-    <div class="f wide cta"><label>&nbsp;</label><button class="btn gen" id="btnGen"${S.pool && !S.busy ? "" : " disabled"}>${S.contest ? "Generate Lineups" : "Generate Lineups"}</button></div></div>`;
+    <div class="f wide cta"><label>&nbsp;</label>${S.contest || S.LU.length ? `<button class="btn ghost" id="btnClear"${S.busy ? " disabled" : ""} title="Drop the generated contest, its lineups and your favourites. Projections and settings stay.">Clear</button>` : ""}<button class="btn gen" id="btnGen"${S.pool && !S.busy ? "" : " disabled"}>${S.contest ? "Generate Lineups" : "Generate Lineups"}</button></div></div>`;
   wireCommon();
   $("#poolSel").addEventListener("change", e => { if (e.target.value === "custom") { const v = prompt("Pool size (exact number of entries):", S.cfg.pool); if (v && +v >= 2) S.cfg.pool = Math.round(+v); saveCfg(); render(); } });
   $("#fee").addEventListener("input", e => { S.cfg.fee = +e.target.value; saveCfg();
@@ -554,6 +569,7 @@ function renderGen() {
   if (!S.dkLobby) loadDkLobby();
   $("#btnTeams").addEventListener("click", () => openModal("teams"));
   const bs = $("#btnStacks"); if (bs) bs.addEventListener("click", () => { S.pop = S.pop === "stacks" ? null : "stacks"; renderStackPop(); });
+  const bc = $("#btnClear"); if (bc) bc.addEventListener("click", clearContest);
   $("#btnGen").addEventListener("click", generateContest);
   $("#tabs").innerHTML = tabsHtml("gen", [["players", "Players"], ["stacks", "Stacks"], ["ranker", "Lineups & Ranker"]]); wireTabs("gen");
   mainGen(); renderStackPop();
