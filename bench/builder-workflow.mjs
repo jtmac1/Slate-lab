@@ -88,5 +88,16 @@ console.log("");
 console.log("cash rate, the sim s top pick".padEnd(40)+(100*mean(out.cash1)).toFixed(1)+"%");
 console.log("cash rate, a built lineup".padEnd(40)+(100*mean(out.cashAll)).toFixed(1)+"%");
 console.log("cash rate, the real field".padEnd(40)+(100*mean(out.cashField)).toFixed(1)+"%");
+const sdv = a2 => { const mu = mean(a2); return Math.sqrt(mean(a2.map(x => (x - mu) ** 2)) * a2.length / (a2.length - 1)); };
+const pair = (lab, arr) => { const d = arr.map((v, i) => v - out.field[i]), se = sdv(d) / Math.sqrt(d.length);
+  console.log("  " + lab.padEnd(22) + mean(d).toFixed(1).padEnd(10) + "se " + se.toFixed(1).padEnd(8)
+    + "95% [" + (mean(d) - 1.96 * se).toFixed(0) + ", " + (mean(d) + 1.96 * se).toFixed(0) + "]   ahead in " + d.filter(x => x > 0).length + "/" + d.length); };
+console.log("\nreturn minus the field average of the same contest");
+pair("the sim top pick", out.pick1); pair("the sim top 3", out.pick3); pair("a built lineup", out.rand1);
+const pairC = (lab, arr) => { const d = arr.map((v, i) => v - out.cashField[i]), se = sdv(d) / Math.sqrt(d.length);
+  console.log("  " + lab.padEnd(22) + (100 * mean(d)).toFixed(1).padEnd(10) + "se " + (100 * se).toFixed(1).padEnd(8)
+    + "t = " + (mean(d) / se).toFixed(1).padEnd(8) + "ahead in " + d.filter(x => x > 0).length + "/" + d.length); };
+console.log("\ncash rate minus the field, in points");
+pairC("the sim top pick", out.cash1); pairC("a built lineup", out.cashAll);
 const beat = out.pick1.filter((v, i) => v > out.rand1[i]).length;
 console.log(`\nthe sim's pick beat an average built lineup in ${beat} of ${used} contests`);
