@@ -152,7 +152,9 @@ function loadDK(text, fname) {
 }
 const dkIdFor = (p, slot) => { const e = S.dk.ids[p.key]; if (!e) return null; if (F().mult) return slot === 0 ? (e.ids.CPT || e.any) : (e.ids.FLEX || e.any); return e.any; };
 function entriesCSV() {
-  const f = F(), out = ["Entry ID,Contest Name,Contest ID,Entry Fee," + f.slots.join(",")]; let bad = 0;
+  // DraftKings validates the position header, and its names are not always ours (college super flex
+  // is S-FLEX there, SFLEX here), so export under theirs when the format supplies them.
+  const f = F(), out = ["Entry ID,Contest Name,Contest ID,Entry Fee," + (f.dkSlots || f.slots).join(",")]; let bad = 0;
   for (const en of S.dk.entries) { if (en.lu == null || !S.LU[en.lu]) continue; const ids = S.LU[en.lu].map((id, j) => { const x = dkIdFor(S.pool.players[id], j); if (!x) bad++; return x || ""; }); out.push([en.id, en.contest, en.cid, en.fee].concat(ids).join(",")); }
   return { csv: out.length > 1 ? out.join("\n") : "", bad, n: out.length - 1 };
 }

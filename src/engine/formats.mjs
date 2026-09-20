@@ -7,9 +7,14 @@ export const FORMATS = {
   nfl_cl: { key: "nfl_cl", label: "NFL Classic", sport: "nfl",
     slots: ["QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "DST"], cap: 50000,
     flexPos: ["RB", "WR", "TE"], minGames: 2 },
-  // DraftKings college football: no TE/K/DST, a FLEX (RB/WR) and a superflex that can take a second QB
+  // DraftKings college football: no TE/K/DST, a FLEX (RB/WR) and a superflex that can take a second QB.
+  // dkSlots is the header DraftKings expects on an uploaded entries file, used where it differs from
+  // the slot names the engine uses internally. Super flex is "S-FLEX" there and "SFLEX" here, and an
+  // upload spelled the engine's way is rejected with "Incorrect player position header for sport".
+  // Taken from api.draftkings.com/lineups/v1/gametypes/94/rules.
   cfb_cl: { key: "cfb_cl", label: "CFB Classic", sport: "cfb",
     slots: ["QB", "RB", "RB", "WR", "WR", "WR", "FLEX", "SFLEX"], cap: 50000,
+    dkSlots: ["QB", "RB", "RB", "WR", "WR", "WR", "FLEX", "S-FLEX"],
     flexPos: ["RB", "WR"], sflexPos: ["QB", "RB", "WR"], minGames: 2 },
   mlb_cl: { key: "mlb_cl", label: "MLB Classic", sport: "mlb",
     slots: ["P", "P", "C", "1B", "2B", "3B", "SS", "OF", "OF", "OF"], cap: 50000,
