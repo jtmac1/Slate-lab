@@ -21,10 +21,25 @@ import { featurize, spearman } from "../src/engine/select.mjs";
 const FKEY = process.argv[2] && !process.argv[2].startsWith("--") ? process.argv[2] : "cfb_cl";
 const flag = k => { const a = process.argv.find(x => x.startsWith(`--${k}=`)); return a ? +a.slice(k.length + 3) : null; };
 const LIM = flag("n") || 60, ITERS = flag("iters") || 2000, GATE = (flag("gate") ?? 50) / 100;
+// --dupes: make the generated field duplicate like a real one. Worthless for pricing real entries,
+// but selection is where it should matter: without it the sim sees no penalty for playing chalk.
+const DUPEFLOOR = process.argv.includes("--dupes");
 const SPORT = FKEY.startsWith("cfb") ? "cfb" : "nfl";
 // Lineup Score as the app computes it: simulated ROI, ranked only among lineups projecting in the
 // top share of the field, everything below it pushed to the bottom.
-const scoreOf = f => f.rProj >= 1 - GATE ? f.roi : -1e9 + f.rProj;
+// --rule: the sim picks the chalkiest lineups it can (top-1 picks carry 80 more points of summed
+// ownership than an average lineup), because the gate demands top-half projection and the generated
+// field shows almost no duplication penalty. These variants push the other way.
+const RULE_NAME = (process.argv.find(a => a.startsWith("--rule=")) || "--rule=gate").slice(7);
+const RULES_X = {
+  gate:      f => f.rProj >= 1 - GATE ? f.roi : -1e9 + f.rProj,
+  lowown:    f => f.rProj >= 1 - GATE ? f.roi + 0.5 * f.rLowOwn * 100 : -1e9 + f.rProj,
+  owncap:    f => f.rProj >= 1 - GATE && f.rLowOwn >= 0.3 ? f.roi : -1e9 + f.rProj,
+  leverage:  f => f.rProj >= 1 - GATE ? 0.6 * f.rROI + 0.4 * f.rLowOwn : -1e9 + f.rProj,
+  roionly:   f => f.roi,
+  projonly:  f => f.proj
+};
+const scoreOf = RULES_X[RULE_NAME] || RULES_X.gate;
 
 const logDir = path.join("data/logs", SPORT), actByDate = {};
 for (const f of (fs.existsSync(logDir) ? fs.readdirSync(logDir).filter(f => f.endsWith(".json")) : [])) {
@@ -43,7 +58,7 @@ for (const c of listContests().filter(c => c.json && c.fkey === FKEY)) {
   const scored = entries.filter(e => e.actFP > 0);
   if (scored.length < 100 || !paid) continue;
   const P = pool.players, N = entries.length;
-  const opt = Object.assign({ conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3 }, fieldProfile(c.fee, FKEY, N));
+  const opt = Object.assign({ conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3 }, fieldProfile(c.fee, FKEY, N), DUPEFLOOR ? { dupeFloor: true } : {});
   const gen = genField(pool, N, opt, mulberry32(11 + O.n)).field;
   if (gen.length < 100) continue;
   let miss = 0, tot = 0;
