@@ -17,6 +17,9 @@ import { featurize, RULES } from "../src/engine/select.mjs";
 const FKEY = process.argv[2] && !process.argv[2].startsWith("--") ? process.argv[2] : "cfb_cl";
 const flag = k => { const a = process.argv.find(x => x.startsWith(`--${k}=`)); return a ? +a.slice(k.length + 3) : null; };
 const LIM = flag("n") || 30, K = flag("build") || 20, RAND = flag("rand") ?? 3, ITERS = flag("iters") || 2000;
+// --source=builder or --source=field: where the candidate lineups come from. The generator builds
+// realistic entries and is the part that was actually fitted, so it is the obvious alternative.
+const SOURCE = (process.argv.find(a=>a.startsWith("--source=")) || "--source=builder").slice(9);
 const SPORT = FKEY.startsWith("cfb") ? "cfb" : "nfl";
 const RULE = RULES["ROI gated: top half proj"];
 
@@ -39,7 +42,12 @@ for (const c of listContests().filter(c => c.json && c.fkey === FKEY)) {
   if (scored.length < 100 || !paid) continue;
   const P = pool.players, N = entries.length;
   const rng = mulberry32(1000 + used);
-  const b = buildLineups(pool, { n: K, obj: "blend", rand: RAND / 100, maxExp: 60, minSal: 0, minUniq: 1, stackSize: 0, force: [], exclude: [] }, rng);
+  const genOpt = Object.assign({ conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3 }, fieldProfile(c.fee, FKEY, N));
+  let b;
+  if (SOURCE === "field") {
+    const cand = genField(pool, Math.max(K, 60), genOpt, mulberry32(555 + used)).field;
+    b = { lineups: cand.slice(0, K) };
+  } else b = buildLineups(pool, { n: K, obj: "blend", rand: RAND / 100, maxExp: 60, minSal: 0, minUniq: 1, stackSize: 0, force: [], exclude: [] }, rng);
   if (b.err || !b.lineups || b.lineups.length < 5) continue;
   let miss = 0, tot = 0;
   const score = lu => { let s = 0; for (const id of lu) { const v = A[P[id].key]; tot++; if (v == null) miss++; else s += v; } return s; };
@@ -47,7 +55,7 @@ for (const c of listContests().filter(c => c.json && c.fkey === FKEY)) {
   if (miss / Math.max(1, tot) > 0.15) continue;
 
   // the sim the app would run: our candidates against a generated field of this contest's size
-  const gen = genField(pool, N, Object.assign({ conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3 }, fieldProfile(c.fee, FKEY, N)), mulberry32(11 + used)).field;
+  const gen = genField(pool, N, genOpt, mulberry32(11 + used)).field;
   if (gen.length < 50) continue;
   const model = buildModel(pool, {});
   const res = simulate({ pool, model, field: gen, lineups: b.lineups, payouts, entries: N, fee: 1, iters: ITERS, rng: mulberry32(5 + used), fieldMode: false });
@@ -69,7 +77,7 @@ for (const c of listContests().filter(c => c.json && c.fkey === FKEY)) {
   out.field.push(mean(scored.map(e => e.actROI)));
   used++;
 }
-console.log(`${used} contests, ${K} lineups built each at ${RAND}% randomness, ${ITERS} draws, picked by "ROI gated: top half proj"\n`);
+console.log(`${used} contests, source ${SOURCE}, ${K} lineups each at ${RAND}% randomness, ${ITERS} draws, picked by "ROI gated: top half proj"\n`);
 console.log("what you played".padEnd(40) + "average return");
 console.log("the sim's top pick".padEnd(40) + mean(out.pick1).toFixed(1) + "%");
 console.log("the sim's top 3".padEnd(40) + mean(out.pick3).toFixed(1) + "%");
