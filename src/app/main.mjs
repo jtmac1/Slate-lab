@@ -281,6 +281,11 @@ async function runSim() {
   if (!S.contest) { setStatus("Generate a contest first (Contest Generator).", true); return; }
   // iters is one checkpoint; the engine keeps going (up to 4x) until the top of the ROI ranking settles
   const c = S.contest, iters = Math.max(100, Math.round(+S.cfg.iters || 5000)), seed = +S.cfg.simSeed || 1;
+  // Payouts are rebuilt here rather than trusted from the contest object. They used to be computed
+  // once at generation and carried along, so a contest generated under an older or wrong payout
+  // structure kept it for the rest of its life - which is how a hundred-entry field ended up paying
+  // all hundred places at four-figure returns even after the structure itself was fixed.
+  { const { pay, fee } = payoutsFor(c.N); c.pay = pay; c.fee = fee; c.paidN = paidCount(pay); }
   S.busy = "sim"; render(); setStatus("Running contest simulation…"); prog(2);
   try {
     const t0 = performance.now();
