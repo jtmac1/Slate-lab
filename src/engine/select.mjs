@@ -36,7 +36,16 @@ export const RULES = {
 export const DEFAULT_RULE = "ROI gated: top half proj";
 
 // Attach percentile ranks so rules can mix scales.
+// Takes ONE argument: the simulation rows, each carrying proj/roi/cash/t10/own. Called with the
+// lineups instead - featurize(lineups, players, format, rows) reads plausibly and is wrong - every
+// field comes back undefined, every rank ties, and rules silently score nothing. That cost two
+// wrong conclusions before the giveaway showed up: a rank correlation of exactly 0.000 at three
+// different draw counts, where real Monte Carlo noise would have moved. Hence the guard.
 export function featurize(rows) {
+  if (arguments.length !== 1) throw new TypeError(`featurize takes the simulation rows only, got ${arguments.length} arguments`);
+  if (!Array.isArray(rows)) throw new TypeError("featurize needs an array of rows");
+  if (rows.length && typeof rows[0].roi !== "number" && typeof rows[0].proj !== "number")
+    throw new TypeError("featurize rows need numeric proj/roi - these look like lineups, not rows");
   const rProj = pctRank(rows.map(r => r.proj)), rROI = pctRank(rows.map(r => r.roi ?? 0)), rCash = pctRank(rows.map(r => r.cash)),
     rT10 = pctRank(rows.map(r => r.t10)), rLowOwn = pctRank(rows.map(r => -(r.own || 0)));
   return rows.map((r, i) => Object.assign({}, r, { rProj: rProj[i], rROI: rROI[i], rCash: rCash[i], rT10: rT10[i], rLowOwn: rLowOwn[i] }));
