@@ -518,21 +518,47 @@ async function loadDkLobby() {
     if (!r.ok) return;
     const j = await r.json();
     S.dkLobby = (j.contests || []).filter(c => c.gameType === "Classic" || !c.gameType);
+    S.dkGroups = j.draftGroups || [];
     S.dkWhen = j.fetched || "";
     render();
   } catch { /* no file yet: the typed buy-in still works */ }
 }
-// Only the contests you are actually in. Entry Manager gives the contest id for every entry, so the
-// lobby is filtered to those; matching falls back to the contest name because a CSV exported from a
-// different slate still names the contest. With no entries loaded the whole lobby is offered.
+// Which DraftKings draft groups are the slate currently loaded. Stokastic gives the slate a UTC
+// start and its game list; DraftKings gives each draft group an Eastern start and a game count, so
+// the two line up on start time with the game count as a tiebreak. Returns null when the slate
+// cannot be identified - loaded from a CSV rather than Stokastic - and then no slate filter applies.
+function dkSlateGroups() {
+  const groups = S.dkGroups || [];
+  const sl = (S.stk.slates || []).find(x => x.slateId === S.stk.slateId);
+  if (!groups.length || !sl || !sl.start) return null;
+  let key;
+  try { key = stkEastern(sl.start).toLocaleString("sv-SE", { timeZone: "America/New_York" }).slice(0, 16).replace(" ", "T"); }
+  catch { return null; }
+  const hits = groups.filter(g => String(g.start || "").slice(0, 16) === key);
+  if (!hits.length) return null;
+  const n = (sl.games || []).length;
+  const exact = n ? hits.filter(g => !g.games || g.games === n) : [];
+  return new Set((exact.length ? exact : hits).map(g => g.id));
+}
+// Only the contests you are actually in, on the slate you have loaded. Entry Manager gives the
+// contest id for every entry, so the lobby is filtered to those; matching falls back to the contest
+// name because a CSV exported elsewhere still names the contest. An entries file usually spans
+// several slates, so it is then narrowed to the loaded one. With no entries loaded, or no slate
+// identified, the wider list is offered rather than an empty one.
 function dkMine() {
   const all = S.dkLobby || [];
   const ents = (S.dk && S.dk.entries) || [];
-  if (!all.length || !ents.length) return { list: all, filtered: false };
+  const grp = dkSlateGroups();
+  const onSlate = grp ? all.filter(c => grp.has(c.draftGroup)) : all;
+  if (!all.length || !ents.length) return { list: onSlate, filtered: false, slate: !!grp };
   const ids = new Set(ents.map(e => String(e.cid || "").trim()).filter(Boolean));
   const names = new Set(ents.map(e => String(e.contest || "").trim().toLowerCase()).filter(Boolean));
-  const mine = all.filter(c => ids.has(String(c.id)) || names.has(String(c.name || "").trim().toLowerCase()));
-  return mine.length ? { list: mine, filtered: true } : { list: all, filtered: false };
+  const pick = l => l.filter(c => ids.has(String(c.id)) || names.has(String(c.name || "").trim().toLowerCase()));
+  const mine = pick(onSlate);
+  if (mine.length) return { list: mine, filtered: true, slate: !!grp };
+  const anySlate = pick(all);   // entered, but not on this slate: better than showing everything
+  if (anySlate.length) return { list: anySlate, filtered: true, slate: false };
+  return { list: onSlate, filtered: false, slate: !!grp };
 }
 // how stale the list is: contests disappear at lock, so a list from yesterday is worse than none
 function dkAge() {
@@ -569,7 +595,10 @@ function renderGen() {
     ${ctlField("Pool Size", `<select class="sel" data-cfg="pool" id="poolSel">${[250, 500, 1000, 1500, 2000, 5000].map(n => `<option value="${n}"${+S.cfg.pool === n ? " selected" : ""}>${n}</option>`).join("")}<option value="custom"${![250, 500, 1000, 1500, 2000, 5000].includes(+S.cfg.pool) ? " selected" : ""}>Custom: ${![250, 500, 1000, 1500, 2000, 5000].includes(+S.cfg.pool) ? S.cfg.pool : "…"}</option></select>`, true)}
     ${ctlField("Team Controls", `<button class="btn sec" id="btnTeams">Team Controls</button>`, true)}
     ${(mlb || fkey() === "nfl_cl" || fkey() === "cfb_cl") ? ctlField("Stack Type Exposures", `<div style="position:relative"><button class="btn sec" id="btnStacks">Stack Type Exposures ✎</button><div id="popStacks"></div></div>`, true) : ""}
-    ${ctlField(dkMine().filtered ? "My Contests" : "DraftKings Contest", `<select class="sel" id="dkPick"><option value="">${!S.dkLobby ? "None loaded" : dkMine().filtered ? "Pick one you entered…" : "Load entries to filter…"}</option>${dkOptions()}</select><label class="btn ghost" style="cursor:pointer;margin-top:6px;display:inline-block" title="Pick the file written by: npm run contests">${S.dkLobby ? "Refresh list" : "Load contest list"}<input type="file" id="fileLobby" accept=".json,application/json" hidden></label>${dkAge()}`, true)}
+    ${(() => { const dm = dkMine();
+      const label = dm.filtered ? (dm.slate ? "My Contests — this slate" : "My Contests — other slates") : dm.slate ? "Contests on this slate" : "DraftKings Contest";
+      const empty = !S.dkLobby ? "None loaded" : dm.filtered ? "Pick one you entered…" : dm.slate ? "Load entries to narrow to yours…" : "Load entries to filter…";
+      return ctlField(label, `<select class="sel" id="dkPick"><option value="">${empty}</option>${dkOptions()}</select><label class="btn ghost" style="cursor:pointer;margin-top:6px;display:inline-block" title="Pick the file written by: npm run contests">${S.dkLobby ? "Refresh list" : "Load contest list"}<input type="file" id="fileLobby" accept=".json,application/json" hidden></label>${dkAge()}`, true); })()}
     <div class="f"><label>Contest Buy-in <span class="i">i</span></label><input class="txt" id="fee" type="number" min="0" step="1" value="${fee}"><div class="ticks"><span id="feeNote">$${fee} — ${feeLabel(fee)}</span></div></div>
     <div class="stamp">${S.projWhen ? "Projections loaded: " + esc(S.projWhen) : ""}${S.dkPicked ? "<br>" + esc(S.dkPicked) : ""}${S.contest ? "<br>Contest generated " + esc(S.contest.when) : ""}</div>
     <div class="f wide cta"><label>&nbsp;</label>${S.contest || S.LU.length ? `<button class="btn ghost" id="btnClear"${S.busy ? " disabled" : ""} title="Drop the generated contest, its lineups and your favourites. Projections and settings stay.">Clear</button>` : ""}<button class="btn gen" id="btnGen"${S.pool && !S.busy ? "" : " disabled"}>${S.contest ? "Generate Lineups" : "Generate Lineups"}</button></div></div>`;
@@ -585,7 +614,7 @@ function renderGen() {
       const j = JSON.parse(await readFile(fl));
       const list = (j.contests || []).filter(c => c.gameType === "Classic" || !c.gameType);
       if (!list.length) return setStatus("That file has no classic contests in it.", true);
-      S.dkLobby = list; S.dkWhen = j.fetched || new Date().toISOString(); S.dkTried = true;
+      S.dkLobby = list; S.dkGroups = j.draftGroups || []; S.dkWhen = j.fetched || new Date().toISOString(); S.dkTried = true;
       setStatus(`${list.length} contests loaded${j.sport ? " for " + j.sport : ""}.`); render();
     } catch { setStatus("That file is not a contest list.", true); }
   });
