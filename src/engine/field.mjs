@@ -22,6 +22,11 @@ const DEF = {
 // than a $50 one. The two ends are fitted, the middle is interpolated on log price.
 // Strength is the only field property that has ever improved how the sim PRICES a lineup. Matching
 // the real field's ownership, its duplicate share and its stack shapes each failed.
+// Audited afterwards, paired over the 136 scored contests: the LEVEL correction is the solid part,
+// +9.2% to -0.1%, a paired change of -9.3 (se 0.7, t = -12.8), with predicted ROI falling in 124 of
+// 136 - the mechanism doing what it should. The per-contest error improves in 79 and worsens in 57,
+// sign-test z = 1.89, which is NOT significant. So this removes a systematic bias rather than making
+// any individual contest reliably more accurate, and the earlier claim of both was overstated.
 const FEE_LO = 5, FEE_HI = 50, SIZE_LO = 200, SIZE_HI = 3000, SIZE_ADJ = 0;
 export function fieldProfile(fee, fkey, fieldN) {
   if (fkey !== "cfb_cl") return null;   // measured for college only; other sports keep their defaults

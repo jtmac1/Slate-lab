@@ -22,7 +22,13 @@ const load = file => {
 const arms = process.argv.slice(2).map(a => { const [label, file] = a.split("="); return { label, byC: load(file) }; });
 if (arms.length < 1) { console.error("usage: node bench/calibration.mjs label=rows.jsonl [label2=rows2.jsonl]"); process.exit(1); }
 // only contests every arm produced, so the comparison is paired
-const shared = Object.keys(arms[0].byC).filter(d => arms.every(a => a.byC[d] && a.byC[d].length === arms[0].byC[d].length));
+// Contests the vendor never scored carry every entry at -100% and an all-zero payout table. The sim
+// prices them at -100% too, so they score a gap of exactly zero and quietly flatter the per-contest
+// error: 11.1 with them against 11.5 without. They carry no information either way, so they go.
+const unscored = d => { const rs = arms[0].byC[d]; return mean(rs.map(r => r.actROI)) <= -99.9; };
+const shared = Object.keys(arms[0].byC)
+  .filter(d => arms.every(a => a.byC[d] && a.byC[d].length === arms[0].byC[d].length))
+  .filter(d => !unscored(d));
 console.log(`${shared.length} contests present in every arm, ${shared.reduce((s, d) => s + arms[0].byC[d].length, 0)} entries each\n`);
 
 const fmt = v => (v >= 0 ? "+" : "") + v.toFixed(1) + "%";
