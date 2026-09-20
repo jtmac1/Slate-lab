@@ -158,9 +158,30 @@ function entriesCSV() {
 }
 
 /* ================= contest generation ================= */
+// A payout table belongs to the field size it was written for. Applying a real 13,235 entry
+// DraftKings structure to a 500 entry simulation pays everyone and returns the field over 1000%.
+// Nor can it be sampled down: finishing first of 500 is only the top 0.2% of that contest, so the
+// $50,000 outcome is not reachable and skipping the steep top of the curve loses most of the pool.
+// When the simulated pool differs from the real field, the honest answer is a contest of YOUR size
+// carrying the real one's economics - the same rake, the same share to first, the same fraction
+// paid. Exact table when the sizes match, rebuilt on those three numbers when they do not.
 function payoutsFor(N) {
   const c = S.cfg;
-  if (c.payMode === "custom" && c.payText && c.payText.trim()) { const p = parsePayoutTable(c.payText, N); if (paidCount(p)) return { pay: p, fee: +c.fee || 1 }; }
+  if (c.payMode === "custom" && c.payText && c.payText.trim()) {
+    const F = Math.max(0, Math.round(+c.payField || 0)), fee = +c.fee || 1;
+    if (!F || F === N) { const p = parsePayoutTable(c.payText, N); if (paidCount(p)) return { pay: p, fee }; }
+    else {
+      const real = parsePayoutTable(c.payText, F);
+      const paidN = paidCount(real);
+      let tot = 0; for (let i = 0; i < real.length; i++) tot += real[i];
+      if (tot > 0 && paidN > 0) {
+        const prize = tot * N / F;                       // same rake
+        const top = Math.max(prize / N, real[0] * N / F); // same share to first
+        const pct = Math.max(1, Math.round(100 * paidN / F));
+        return { pay: fitPayouts(N, prize / fee, top / fee, pct), fee: 1 };
+      }
+    }
+  }
   const pool = N * (1 - (+c.rake || 15) / 100);   // in units of the entry fee
   return { pay: fitPayouts(N, pool, pool * (+c.pct || 10) / 100, 22), fee: 1 };
 }
@@ -533,7 +554,9 @@ function pickDkContest(id) {
   if (!c) return;
   S.cfg.fee = c.fee || S.cfg.fee;
   if (c.field >= 2) { S.cfg.pool = Math.round(c.field); S.cfg.entries = Math.round(c.field); }
-  if (c.payText) { S.cfg.payMode = "custom"; S.cfg.payText = c.payText; }
+  // payField is the field the table was written for, so the curve can be rescaled if you simulate
+  // a smaller pool than the real contest - without it a 13,000 entry structure pays 500 people
+  if (c.payText) { S.cfg.payMode = "custom"; S.cfg.payText = c.payText; S.cfg.payField = c.field || 0; }
   S.dkPicked = `${c.name} — $${c.fee}, ${(c.field || 0).toLocaleString()} entries, ${c.payText ? "real payout table" : "payout estimated"}`;
   saveCfg(); render();
   setStatus(c.payText ? "Contest loaded with its real payout table." : "Contest loaded; payouts estimated for this one.");
