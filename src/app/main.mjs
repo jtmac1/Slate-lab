@@ -87,7 +87,12 @@ const money = v => v == null || isNaN(v) ? "—" : "$" + Math.round(v).toLocaleS
 const diffS = v => v == null || isNaN(v) ? "—" : `<span class="${v >= 0 ? "diffpos" : "diffneg"}">${v >= 0 ? "" : ""}${(+v).toFixed(1)}%</span>`;
 const nameCell = p => { const parts = p.name.split(" "); const first = parts.shift(); const badge = p.isP ? '<span class="badge p">P</span>' : (p.ord ? `<span class="badge o">${p.ord}</span>` : ""); return `<span class="pname"><span class="first">${esc(first)}</span> ${esc(parts.join(" "))}</span>${badge}`; };
 const teamCell = t => `<span class="tm"><i></i>${esc(t || "?")}</span>`;
-const luCell = (l, P, f) => `<div class="lu">${l.map((id, j) => { const p = P[id]; return `<span class="ps">${f.mult && j === 0 ? "CPT" : esc(p.posList[0])}</span><b>${esc(p.name)}</b>`; }).join('<span class="sep">|</span>')}</div>`;
+// The SLOT each player fills, under DraftKings' name for it, not the player's own first position.
+// Lineups are stored in slot order, so position j is slot j. Showing the player's position instead
+// misreads a multi-position roster: a 2B/SS placed in the shortstop slot read as a second 2B, so a
+// legal lineup looked like it had two of them. The player's actual eligibility is on hover.
+const luCell = (l, P, f) => `<div class="lu">${l.map((id, j) => { const p = P[id], slot = (f.dkSlots || f.slots)[j];
+  return `<span class="ps" title="${esc(p.name)} — eligible ${esc(p.posList.join("/"))}">${esc(slot || p.posList[0])}</span><b>${esc(p.name)}</b>`; }).join('<span class="sep">|</span>')}</div>`;
 
 /* ================= worker ================= */
 let worker = null, jobId = 0; const jobs = {};
