@@ -9,7 +9,11 @@ import { listContests, loadPulled } from "./grade-all.mjs";
 const SPORT = (process.argv[2] || "cfb").toLowerCase();
 const flag = k => { const a = process.argv.find(x => x.startsWith(`--${k}=`)); return a ? +a.slice(k.length + 3) : null; };
 const MINPROJ = flag("minproj") ?? 5;
+const REF = flag("ref") ?? 11.5;
 const FKEY = SPORT === "cfb" ? "cfb_cl" : "nfl_cl", logDir = path.join("data/logs", SPORT);
+// CFB pools are QB/RB/WR only. NFL adds TE, K and DST, and those were never in this fit, which is
+// why SIGMA_DEF.nfl carried hand-set values for them.
+const POSITIONS = SPORT === "cfb" ? ["QB", "RB", "WR"] : ["QB", "RB", "WR", "TE", "K", "DST"];
 
 const proj = {};
 for (const c of listContests().filter(c => c.json && c.fkey === FKEY)) {
@@ -37,7 +41,7 @@ const TIERS = [[5, 10], [10, 15], [15, 20], [20, 99]];
 console.log("pos   " + TIERS.map(t => `${t[0]}-${t[1] === 99 ? "+" : t[1]}`.padEnd(14)).join("") + "fitted sigma = a * proj^b");
 const byPos = {};
 for (const r of rows) (byPos[r.pos] = byPos[r.pos] || []).push(r);
-for (const pos of ["QB", "RB", "WR"]) {
+for (const pos of POSITIONS) {
   const rs = byPos[pos] || []; if (!rs.length) continue;
   const pts = [], cells = [];
   for (const [lo, hi] of TIERS) {
@@ -49,5 +53,6 @@ for (const pos of ["QB", "RB", "WR"]) {
   const mx = pts.reduce((a, p) => a + p[0], 0) / pts.length, my = pts.reduce((a, p) => a + p[1], 0) / pts.length;
   let sxy = 0, sxx = 0; for (const p of pts) { sxy += (p[0] - mx) * (p[1] - my); sxx += (p[0] - mx) ** 2; }
   const b = sxy / sxx, a = Math.exp(my - b * mx);
-  console.log(pos.padEnd(6) + cells.join("") + `a ${a.toFixed(3)}  b ${b.toFixed(3)}   sigma at 11.5 proj: ${(a * Math.pow(11.5, b)).toFixed(3)}`);
+  if (pts.length < 2) { console.log(pos.padEnd(6) + cells.join("") + "too few tiers to fit"); continue; }
+  console.log(pos.padEnd(6) + cells.join("") + `a ${a.toFixed(3)}  b ${b.toFixed(3)}   sigma at ${REF} proj: ${(a * Math.pow(REF, b)).toFixed(3)}`);
 }

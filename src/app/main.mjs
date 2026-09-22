@@ -9,6 +9,7 @@ import { featurize, selectScore, gradeRules, DEFAULT_RULE } from "../engine/sele
 import { recoverContest } from "../engine/recover.mjs";
 import { fieldProfile } from "../engine/field.mjs";
 import { sigmaFor } from "../engine/model.mjs";
+import { parseEntries, auditPortfolio } from "../engine/audit.mjs";
 import { $, $$, esc, copyText, readFile, download } from "./ui.mjs";
 import * as store from "./store.mjs";
 
@@ -377,7 +378,7 @@ async function gradeReview() {
 /* ================= rendering ================= */
 function setStatus(msg, err) { S.statusMsg = msg; S.statusErr = !!err; const el = $("#status"); if (el) el.innerHTML = err ? `<span class="err">${esc(msg)}</span>` : esc(msg); }
 function prog(p) { const el = $("#prog"); if (el) el.style.width = p + "%"; }
-const VIEWS = [["hub", "Data Hub", "Data Hub"], ["gen", "Contest Generator", "Generator"], ["sim", "Pre-Contest Simulator", "Simulator"], ["review", "Review", "Review"]];
+const VIEWS = [["hub", "Data Hub", "Data Hub"], ["audit", "Audit Entries", "Audit"], ["gen", "Contest Generator", "Generator"], ["sim", "Pre-Contest Simulator", "Simulator"], ["review", "Review", "Review"]];
 function render() {
   const app = $("#app");
   app.innerHTML = `<nav class="nav"><div class="brand"><i></i>SLATE LAB</div><div class="links">${VIEWS.map(([k, l, s]) => `<button class="lnk" data-view="${k}" aria-selected="${S.view === k}"><span class="long">${l}</span><span class="short">${s}</span></button>`).join("")}</div><div class="grow"></div>
@@ -386,10 +387,10 @@ function render() {
   $$(".lnk").forEach(b => b.addEventListener("click", () => { S.view = b.getAttribute("data-view"); S.pop = null; render(); }));
   $("#btnBackup").addEventListener("click", () => openModal("backup"));
   $("#ctlToggle").addEventListener("click", () => { S.ctlOpen = !S.ctlOpen; $("#ctl").classList.toggle("collapsed", !S.ctlOpen); });
-  ({ hub: renderHub, gen: renderGen, sim: renderSim, review: renderReview })[S.view]();
+  ({ hub: renderHub, gen: renderGen, sim: renderSim, review: renderReview, audit: renderAudit })[S.view]();
   renderModal();
 }
-function renderMain() { ({ hub: mainHub, gen: mainGen, sim: mainSim, review: mainReview })[S.view](); }
+function renderMain() { ({ hub: mainHub, gen: mainGen, sim: mainSim, review: mainReview, audit: mainAudit })[S.view](); }
 const sel = (k, opts, attrs = "") => `<select class="sel" data-cfg="${k}" ${attrs}>${opts.map(o => `<option value="${o[0]}"${String(S.cfg[k]) === String(o[0]) ? " selected" : ""}>${o[1]}</option>`).join("")}</select>`;
 const ctlField = (label, inner, info, cls) => `<div class="f${cls ? " " + cls : ""}"><label>${label}${info ? '<span class="i">i</span>' : ""}</label>${inner}</div>`;
 function commonCtl() {
@@ -732,6 +733,7 @@ function renderSim() {
     ${S.LU.length ? `<span class="chip"><span class="x" id="clearLu">✕</span> ${esc(S.luSource)} · ${S.LU.length.toLocaleString()}</span>` : ""}
     <div class="stamp">${c ? `Contest: ${c.N.toLocaleString()} entries · ${c.paidN} paid<br>first place ${(c.pay[0] / c.fee).toFixed(0)}× the entry fee` : "No contest generated"}<br><a href="#" id="dlProj">Download Projections ⬇</a></div>
     <div class="f"><label>&nbsp;</label><button class="btn sec" id="btnEntry">Entry Manager</button></div>
+    <div class="f"><label>&nbsp;</label><button class="btn sec" id="btnAudit"${S.pool ? "" : " disabled"} title="Import a DraftKings or Stokastic entry file and check it against the rulebook">Audit Entries</button></div>
     <div class="f wide cta"><label>&nbsp;</label><button class="btn gen" id="run"${c && S.LU.length && !S.busy ? "" : " disabled"}>Run Contest Simulation</button></div></div>`;
   wireCommon();
   $("#pct").addEventListener("change", e => { if (e.target.value === "custom") { S.cfg.payMode = "custom"; saveCfg(); openModal("payout"); } else { S.cfg.payMode = "pct"; S.cfg.pct = +e.target.value; saveCfg(); if (S.contest) { const { pay, fee } = payoutsFor(S.contest.N); S.contest.pay = pay; S.contest.fee = fee; S.contest.paidN = paidCount(pay); S.res = null; } render(); } });
@@ -740,6 +742,7 @@ function renderSim() {
   const cl = $("#clearLu"); if (cl) cl.addEventListener("click", () => { S.LU = []; S.luSource = ""; S.res = null; S.favs = new Set(); S.favOrder = []; render(); });
   $("#dlProj").addEventListener("click", e => { e.preventDefault(); if (S.projText) download(S.projName || "projections.csv", S.projText); });
   $("#btnEntry").addEventListener("click", () => openModal("entry"));
+  $("#btnAudit").addEventListener("click", () => { S.view = "audit"; render(); });
   $("#run").addEventListener("click", runSim);
   $("#tabs").innerHTML = tabsHtml("sim", [["proj", "Projections"], ["lineups", "Lineups", S.res ? S.res.rows.length.toLocaleString() : (S.LU.length ? S.LU.length.toLocaleString() : "")], ["proi", "Player ROI"]].concat(mlb ? [["sroi", "Stack ROI"]] : []).concat(F().mult ? [["sd", "Structures", S.sd ? S.sd.rows.length : ""]] : []).concat([["favs", "Favorites", S.favs.size || ""], ["expo", "Exposures"]])); wireTabs("sim");
   mainSim();
@@ -838,6 +841,54 @@ function renderQF() {
 }
 
 /* ---------- Review ---------- */
+/* ================= audit ================= */
+// Import an entry file (DraftKings export or the Stokastic Entry Manager export - same layout) and
+// review it against rules/<format>.json before anything is uploaded. The logic is engine/audit.mjs;
+// this view only draws it. Rules are fetched once per format; without them the audit still checks
+// the salary cap and self-duplicates.
+function loadRules() {
+  if (!S.rulesBy) S.rulesBy = {};
+  const k = fkey(); if (S.rulesBy[k] !== undefined) return;
+  S.rulesBy[k] = null;
+  fetch(`rules/${k}.json`).then(r => r.ok ? r.json() : null).then(j => { S.rulesBy[k] = j; if (S.view === "audit") render(); }).catch(() => {});
+}
+async function importAudit(fl) {
+  if (!fl || !S.pool) return;
+  const f = F(), P = S.pool.players, fieldOwn = S.contest && S.contest.field ? S.contest.field.map(lu => ownSum(lu, P, f)) : null;
+  try { S.audit = auditPortfolio(parseEntries(await readFile(fl), f), P, f, S.rulesBy && S.rulesBy[fkey()], fieldOwn); S.auditName = fl.name; setStatus(`${S.audit.summary.matched} of ${S.audit.summary.lineups} lineups matched from ${fl.name}.`, S.audit.summary.unmatched > 0); }
+  catch (err) { setStatus("Could not read that entry file: " + err.message, true); }
+  render();
+}
+function renderAudit() {
+  loadRules();
+  const rules = S.rulesBy && S.rulesBy[fkey()];
+  $("#ctl").innerHTML = `<div class="ctl">${commonCtl()}
+    <div class="f"><label>Entry file</label><label class="btn${S.audit ? " sec" : ""}" style="cursor:pointer">${S.audit ? "Import another file" : "Import entries CSV"}<input type="file" id="fileAudit" accept=".csv,text/csv,text/plain,text/comma-separated-values,application/vnd.ms-excel" hidden${S.pool ? "" : " disabled"}></label></div>
+    ${S.audit ? `<span class="chip"><span class="x" id="auClear">✕</span> ${esc(S.auditName || "entries")} · ${S.audit.summary.lineups}</span>` : ""}
+    <div class="stamp">${rules ? `Rulebook: ${esc(F().label)} · ${rules.rules.length} rules · derived ${esc(rules.derived || "")}` : rules === null ? "No rulebook for this format yet - checking salary cap and duplicates only" : "Loading rulebook…"}${S.contest ? `<br>Ownership window judged against the ${S.contest.N.toLocaleString()}-entry generated field` : "<br>Generate a contest to judge the ownership window against a field"}</div></div>`;
+  wireCommon();
+  $("#fileAudit").addEventListener("change", e => importAudit(e.target.files[0]));
+  const cl = $("#auClear"); if (cl) cl.addEventListener("click", () => { S.audit = null; S.auditName = ""; render(); });
+  $("#tabs").innerHTML = ""; $("#bot").innerHTML = "";
+  mainAudit();
+}
+function mainAudit() {
+  const main = $("#main"), a = S.audit, P = S.pool ? S.pool.players : [];
+  const chip = (ok, txt) => `<span style="display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;font-weight:700;background:${ok === true ? "#0d3a22" : ok === false ? "#4a1414" : "#1e2a44"};color:${ok === true ? "var(--green2)" : ok === false ? "#ff8a8a" : "var(--ink2)"}">${esc(txt)}</span>`;
+  if (!S.pool) { main.innerHTML = `<div class="empty">Load this slate's projections first.<small>The audit matches every name in your entry file against them.</small></div>`; return; }
+  if (!a) { main.innerHTML = `<div class="empty">Import an entry file to review it.<small>Export from Stokastic's Entry Manager or DraftKings (Entry ID, Contest Name, Contest ID, Entry Fee, then one player per slot). Every lineup is checked for stack, pitchers, salary cap, duplicates, ownership and exposure before you upload.</small></div>`; return; }
+  const s = a.summary;
+  let html = `<div class="crow" style="flex-wrap:wrap;gap:14px;margin-bottom:8px"><b>${s.matched}/${s.lineups} lineups</b><span class="hint">${s.contests} contest${s.contests === 1 ? "" : "s"}</span>${chip(s.hardFails === 0, s.hardFails ? `${s.hardFails} hard-rule failure${s.hardFails === 1 ? "" : "s"}` : "no hard-rule failures")}${chip(s.selfDupes === 0, s.selfDupes ? `${s.selfDupes} self-duplicated` : "no self-duplicates")}${s.unmatched ? chip(false, `${s.unmatched} unmatched`) : ""}<div class="grow"></div><span class="hint">avg ${money(s.avgSal)} · proj ${s.avgProj.toFixed(1)} · own ${s.avgOwn.toFixed(0)}</span></div>`;
+  html += `<div class="hint" style="margin:0 0 8px">Primary stacks: ${s.primaryStacks.map(([t, n]) => `<b>${esc(t)}</b> ×${n}`).join(" &nbsp; ")}${s.maxExposure ? ` &nbsp;·&nbsp; Highest exposure: <b>${esc(s.maxExposure.name)}</b> ${s.maxExposure.count}/${s.matched} (field ${s.maxExposure.own.toFixed(0)}%)` : ""}</div>`;
+  html += `<div class="tw" style="max-height:44vh"><table><thead><tr><th class="na">#</th><th class="na">Verdict</th><th class="na">Contest</th><th class="na">Stack</th><th class="na">P ranks</th><th class="na num">Salary</th><th class="na num">Proj</th><th class="na num">Own</th><th class="na">Flags</th><th class="na">Lineup</th></tr></thead><tbody>${a.lineups.map(l => {
+    if (!l.ok) return `<tr><td>${l.n + 1}</td><td>${chip(false, "unmatched")}</td><td class="hint">${esc((l.contest || "").slice(0, 34))}</td><td colspan="7" class="hint">not in these projections: ${esc(l.missing.join(", "))}</td></tr>`;
+    const fails = l.checks.filter(c => c.pass === false), hard = fails.some(c => c.hard);
+    return `<tr><td>${l.n + 1}</td><td>${chip(hard ? false : fails.length ? null : true, hard ? "FAIL" : fails.length ? "warn" : "ok")}</td><td class="hint" style="font-size:11px">${esc((l.contest || "").slice(0, 34))}</td><td>${esc(l.primary)} ×${l.primarySize} <span class="hint">${esc(l.shape)}</span></td><td>${esc(l.pitcherRanks.join(" / ") || "—")}</td><td class="num">${money(l.sal)}</td><td class="num">${l.proj.toFixed(1)}</td><td class="num">${l.own.toFixed(0)}</td><td style="font-size:11px">${fails.map(c => `<div style="color:${c.hard ? "#ff8a8a" : "var(--yellow)"}">${esc(c.id)}: ${esc(c.detail)}</div>`).join("") || "<span class='hint'>—</span>"}</td><td style="font-size:11px;white-space:normal;min-width:220px">${esc(l.ids.map(id => P[id].name).join(", "))}</td></tr>`; }).join("")}</tbody></table></div>`;
+  html += `<div style="margin:12px 0 4px"><b style="font-size:12.5px">Exposure</b> <span class="hint">count · share of your lineups · projected field ownership · over-exposure in points</span></div><div class="tw" style="max-height:34vh;min-height:120px"><table><thead><tr><th class="na">Player</th><th class="na">Team</th><th class="na">Pos</th><th class="na num">Count</th><th class="na num">Yours</th><th class="na num">Field</th><th class="na num">Over</th></tr></thead><tbody>${a.exposure.slice(0, 60).map(x => `<tr><td>${esc(x.name)}</td><td>${esc(x.team)}</td><td>${esc(x.pos)}</td><td class="num">${x.count}</td><td class="num">${x.pct.toFixed(0)}%</td><td class="num">${x.own.toFixed(0)}%</td><td class="num" style="color:${x.delta > 40 ? "var(--yellow)" : "inherit"}">${(x.delta >= 0 ? "+" : "") + x.delta.toFixed(0)}</td></tr>`).join("")}</tbody></table></div>`;
+  html += `<div class="hint" style="margin-top:8px">Sim band needs Stokastic's lineup sim for these exact lineups and is reported as unknown. A "?" check is not a pass.</div>`;
+  main.innerHTML = html;
+}
+
 function renderReview() {
   const rv = S.review, have = k => rv.files[k] ? "✓" : "—";
   $("#ctl").innerHTML = `<div class="ctl">${ctlField("League", `<select class="sel" id="league"><option value="mlb"${S.league === "mlb" ? " selected" : ""}>⚾ MLB</option><option value="nfl"${S.league === "nfl" ? " selected" : ""}>🏈 NFL</option><option value="cfb"${S.league === "cfb" ? " selected" : ""}>🏈 CFB</option></select>`)}${ctlField("Slate date", `<input type="date" class="txt" data-cfg="rvDate" style="width:150px">`)}${ctlField("Contest name", `<input type="text" class="txt" data-cfg="rvName" style="width:240px" placeholder="e.g. 09-10 $30K Perfect Game">`)}<div class="f"><label>Post-contest files &nbsp;<span class="hint">Lineups ${have("lineup")} · Players ${have("player")} · Stacks ${have("stack")}</span></label><label class="btn sec" style="cursor:pointer">Upload Post-Contest CSVs<input type="file" id="fileRv" accept=".csv,text/csv,text/plain,text/comma-separated-values,application/vnd.ms-excel" hidden multiple></label></div><div class="f wide cta"><label>&nbsp;</label><button class="btn gen" id="btnGrade"${rv.files.lineup && rv.files.player && !S.busy ? "" : " disabled"}>Grade Selection Rules</button></div></div>`;

@@ -1,0 +1,28 @@
+{
+  "format": "mlb_cl",
+  "derived": "2026-09-22",
+  "source": "data/post/mlb, 223 contests, per-contest clustered t; DK entry history via bench/contest-select.mjs",
+  "rules": [
+    { "id": "stack5", "rule": "primary stack of 5 hitters (the DK maximum)", "hard": true,
+      "evidence": "all tiers t 3.86 (145/223 contests better); no-stack (<=3) -37% ROI t -4.79; 5-3 vs 5-2 shape indifferent (t 0.08)" },
+    { "id": "pitcher_top3", "rule": "at least one pitcher in the top 3 by projection; never a pitcher outside the top 3 on both slots", "hard": true,
+      "evidence": "outside top 3: -34% ROI t -2.96 all tiers, -31.5% t -3.04 at $100+; Mega 8s winners 90% top-3" },
+    { "id": "sim_band", "rule": "Stokastic lineup sim ROI in the top half; in MLB prefer the 10-25% band over the top 5%", "hard": true,
+      "evidence": "top half t 3.90 all tiers; top 5% -6% at $100+ (ns), 10-25% band +24% t 2.23; opposite of NFL showdown where top 5% is best" },
+    { "id": "own_window", "rule": "lineup ownership sum not in the bottom third of the field", "hard": false,
+      "evidence": "bottom-third ownership -21 pts t -2.63 at $100+, -42 pts t -4.15 at $20-99; unduplicated never significant; Mega 8s winners avg own sum 115, Full Count 121" },
+    { "id": "stack_team", "rule": "primary stack team ranked 2-8 by projection is the winners' modal profile; top-1 chalk stack is allowed but not favoured", "hard": false,
+      "evidence": "Mega 8s winners: stack team proj rank avg 6.1/19, only 5/21 top-3 owned, 11/21 own rank >= 6; Full Count 7/31 stacked the #1 team" },
+    { "id": "salary", "rule": "use at least $48,500", "hard": false,
+      "evidence": "winners avg $49,700 (Mega 8s) and $49,750 (Full Count); every Four-Point/Full Count winner >= $48,500" },
+    { "id": "no_self_dupe", "rule": "no two identical lineups from this account in one contest", "hard": true,
+      "evidence": "12 of 833 Full Count entries were self-duplicates; a duplicate can only split with yourself" },
+    { "id": "no_overrides", "rule": "no late swap or substitution that fails a hard rule, regardless of how good the hunch is", "hard": true,
+      "evidence": "2026-09-21 NYG@LAR: two hunch swaps cost 32 points and a cash; the instrument was right both times" }
+  ],
+  "contest_selection": {
+    "play": ["full count ($55, 5 entries)", "four-seamer ($4)", "battery ($121, single)", "mega 8's ($888, 1-2 entries)"],
+    "avoid": ["perfect game", "bat flip", "relay throw", "base hit", "skipper", "knuckleball", "immaculate inning", "batter's eye", "any 10k+ field at any price"],
+    "evidence": "bench/contest-select.mjs MLB --lobby, complete DK history 36,619 entries"
+  }
+}

@@ -14,13 +14,27 @@ import path from "node:path";
 import { nrm } from "../src/engine/csv.mjs";
 import { listContests, loadPulled } from "./grade-all.mjs";
 import { fieldProfile, genField } from "../src/engine/field.mjs";
-import { buildModel } from "../src/engine/model.mjs";
+import { buildModel, CSAME, COPP, MLBC, SIGMA_DEF } from "../src/engine/model.mjs";
 import { simulate } from "../src/engine/sim.mjs";
 import { mulberry32 } from "../src/engine/rng.mjs";
 import { featurize, spearman } from "../src/engine/select.mjs";
 const FKEY = process.argv[2] && !process.argv[2].startsWith("--") ? process.argv[2] : "cfb_cl";
 const flag = k => { const a = process.argv.find(x => x.startsWith(`--${k}=`)); return a ? +a.slice(k.length + 3) : null; };
 const LIM = flag("n") || 60, ITERS = flag("iters") || 2000, GATE = (flag("gate") ?? 50) / 100;
+// Model overrides, same spelling as bench/grade-all.mjs, so a config that wins there can be retested
+// on the workflow that is actually used: generate the field, sim it, take the top of Lineup Score.
+// Without these this file always ran the shipped engine and silently ignored any fitted constants.
+//   --nflsig=QB:0.74,RB:0.70,WR:0.82,TE:0.71  --sigtilt=QB:-0.66,...  --sigref=11.5  --ctable=<file>
+const arg = k => { const a = process.argv.find(x => x.startsWith(`--${k}=`)); return a ? a.slice(k.length + 3) : ""; };
+const kvNum = s => Object.fromEntries(s.split(",").filter(Boolean).map(kv => { const [k, v] = kv.split(":"); return [k, +v]; }));
+const SIGRAW = arg("nflsig"), TILTRAW = arg("sigtilt"), CTFILE = arg("ctable");
+const MODEL_OPTS = {};
+if (SIGRAW) MODEL_OPTS.sigmaDef = Object.assign({}, SIGMA_DEF[FKEY] || SIGMA_DEF[FKEY.startsWith("cfb") ? "cfb" : "nfl"], kvNum(SIGRAW));
+if (TILTRAW) MODEL_OPTS.sigmaTilt = TILTRAW.includes(":") ? kvNum(TILTRAW) : +TILTRAW;
+if (flag("sigref") != null) MODEL_OPTS.sigmaTiltRef = flag("sigref");
+if (CTFILE) { const t = JSON.parse(fs.readFileSync(CTFILE, "utf8"));
+  MODEL_OPTS.tables = { CSAME: Object.assign({}, CSAME, t.CSAME || {}), COPP: Object.assign({}, COPP, t.COPP || {}), MLBC }; }
+if (Object.keys(MODEL_OPTS).length) console.log("model overrides: " + JSON.stringify(MODEL_OPTS).slice(0, 300) + "\n");
 // --dupes: make the generated field duplicate like a real one. Worthless for pricing real entries,
 // but selection is where it should matter: without it the sim sees no penalty for playing chalk.
 const DUPEFLOOR = process.argv.includes("--dupes");
@@ -66,7 +80,7 @@ for (const c of listContests().filter(c => c.json && c.fkey === FKEY)) {
   const act = gen.map(score);
   if (miss / Math.max(1, tot) > 0.15) continue;
 
-  const model = buildModel(pool, {});
+  const model = buildModel(pool, MODEL_OPTS);
   const res = simulate({ pool, model, field: gen, lineups: gen, payouts, entries: N, fee: 1, iters: ITERS, rng: mulberry32(5 + O.n), fieldMode: true });
   const projOf = lu => lu.reduce((t, id) => t + (P[id].proj || 0), 0);
   const ownOf = lu => lu.reduce((t, id) => t + (P[id].own || 0), 0);
