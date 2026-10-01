@@ -17,6 +17,18 @@
     { "id": "own_band", "rule": "ownership sum under 180% (220%+ is the losing zone)", "hard": false, "evidence": "<180 +45% vs -45%, t 6.1; >=220 -47% vs -9%, t -6.1" },
     { "id": "salary_left", "rule": "leave $1,000 or more", "hard": false, "evidence": "t 3.2 full archive; winners leave $450-525 on average" },
     { "id": "sim_top_half", "rule": "sim ROI in the top half of the field", "hard": false, "evidence": "+32% vs -59%, t 8.5, lift 3.40" },
-    { "id": "dup_risk", "rule": "expected copies in the field under 2", "hard": false, "evidence": "bench/fit-dup-nfl.mjs: showdown fields duplicate heavily; the user's showdown entries were duplicated 69-100% vs winners 23-32%" }
+    { "id": "dup_risk", "rule": "expected copies in the field under 2", "hard": false, "evidence": "bench/fit-dup-nfl.mjs: showdown fields duplicate heavily; the user's showdown entries were duplicated 69-100% vs winners 23-32%" },
+
+    { "id": "etr_cpt_qb_2pc", "source": "etr", "rule": "CPT QB with two or more of his WR/TE", "hard": false, "evidence": "ETR: 65% of winning CPT QB lineups carry 2-3 same-team WR/TE; 5% carry none" },
+    { "id": "etr_cpt_wr_max1", "source": "etr", "rule": "CPT WR with at most one other WR/TE from his team", "hard": false, "evidence": "ETR: 88.5% of winning CPT WR lineups; two or more same-team pass catchers 9%" },
+    { "id": "etr_cpt_rb_max2", "source": "etr", "rule": "CPT RB with at most two same-team WR/TE, usually with his QB", "hard": false, "evidence": "ETR: 3 same-team WR/TE with CPT RB 3%; his QB in 61% of winners" },
+    { "id": "etr_cpt_te_qb", "source": "etr", "rule": "CPT TE with his QB", "hard": false, "evidence": "ETR: 89% of winning CPT TE lineups" },
+    { "id": "etr_bring_back", "source": "etr", "rule": "CPT QB or WR with at least one opposing WR/TE", "hard": false, "evidence": "ETR: 80% (CPT QB) and 84% (CPT WR) of winners" },
+    { "id": "etr_dst_teammates", "source": "etr", "rule": "DST with three or more teammates and at most three opponents", "hard": false, "evidence": "ETR: 79% of winning DST lineups have 3+ teammates, 89% have 3 or fewer opponents; DST as the lone bring-back in 5-1 wins 0.4%" },
+    { "id": "etr_max2_kdst", "source": "etr", "rule": "at most two kickers and DSTs combined", "hard": false, "evidence": "ETR: 3+ K/DST land in top-1% lineups 1.1% of the time" },
+    { "id": "etr_cpt_heavy_side", "source": "etr", "rule": "in a 5-1 or 4-2, the captain comes from the heavy side", "hard": false, "evidence": "ETR: 95% of winning 5-1s and 77% of winning 4-2s" },
+    { "id": "etr_onslaught_qb", "source": "etr", "rule": "in a 5-1, the QB from the five side is in the lineup", "hard": false, "evidence": "ETR: 95% of winning onslaughts" },
+    { "id": "etr_cpt_salary", "source": "etr", "rule": "captain salary $10,500 or more (or a clear ceiling case)", "hard": false, "evidence": "ETR: winning captains average $13,012; cheap captains that won beat their median 2.6x" },
+    { "id": "etr_k_or_dst", "source": "etr", "rule": "at least one kicker or DST in the flex", "hard": false, "evidence": "ETR 2025 sims: six skill players is the weakest configuration (-17% sim ROI single-entry); K+DST together +16.9% for pros. Conflicts with our 'no kicker' rule - under test" }
   ]
 }

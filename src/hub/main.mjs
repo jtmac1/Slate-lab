@@ -138,7 +138,9 @@ const COLS = [
 ];
 function renderPlayers(main) {
   const H = S.hub, sd = H.slate.type === "SHOWDOWN";
-  const cols = sd ? COLS.flatMap(c => c.k === "stkOwn" ? [c, { k: "cpt", l: "CPT", n: 1, r: r => pc(r.stk && r.stk.cptOwn), s: r => r.stk ? r.stk.cptOwn : null, t: "Stokastic captain ownership" }] : [c]) : COLS;
+  // showdown: a captain-ownership column next to each source's flex ownership
+  const cptCol = (src, label) => ({ k: src + "Cpt", l: "CPT", n: 1, r: r => pc(r[src] && r[src].cptOwn), s: r => r[src] ? r[src].cptOwn : null, t: label + " captain ownership" });
+  const cols = sd ? COLS.flatMap(c => c.k === "stkOwn" ? [c, cptCol("stk", "Stokastic")] : c.k === "etrOwn" ? [c, cptCol("etr", "ETR")] : c.k === "blickOwn" ? [c, cptCol("blick", "Blick")] : [c]) : COLS;
   let rows = H.rows.filter(r => (S.pos === "ALL" || r.pos.split("/")[0] === S.pos) && (!S.q || (r.name + " " + r.team).toLowerCase().includes(S.q.toLowerCase())) && (S.showAll || (r.cons != null && r.cons >= 1)));
   const col = cols.find(c => c.k === S.sort.k) || cols[12];
   rows = rows.slice().sort((a, b) => { const x = col.s(a), y = col.s(b); if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return (typeof x === "string" ? x.localeCompare(y) : x - y) * S.sort.d; });

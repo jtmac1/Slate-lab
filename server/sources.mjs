@@ -101,7 +101,8 @@ export function hubData(d) {
     const t = readTable(path.join(dir, etrF)), sd = t.h.includes("cpt own");
     const c = { n: t.col("player"), tmc: t.col("team"), p: t.col("position", "pos"), s: t.col("salary"), j: sd ? t.col("proj") : t.col("projection"), own: sd ? t.col("total own") : t.col("largeownership"), small: t.col("smallownership"), cpt: t.col("cpt own"), fl: t.col("floor"), ce: t.col("ceiling") };
     let n = 0;
-    for (const r of t.rows) { const base = { name: r[c.n], pos: String(r[c.p] || "").toUpperCase(), team: tm(r[c.tmc]), sal: c.s >= 0 ? num(r[c.s]) : null }; const x = get(key(r[c.n], r[c.tmc], r[c.p]), base); fill(x, base); x.etr = { proj: num(r[c.j]), own: num(r[c.own]), ownSmall: c.small >= 0 ? num(r[c.small]) : null, cptOwn: c.cpt >= 0 ? num(r[c.cpt]) : null, floor: c.fl >= 0 ? num(r[c.fl]) : null, ceil: c.ce >= 0 ? num(r[c.ce]) : null }; n++; }
+    // ETR showdown "Total Own" is captain + flex combined (sums to ~600%); Stokastic and Blick report flex alone (~500%), so split it the same way
+    for (const r of t.rows) { const base = { name: r[c.n], pos: String(r[c.p] || "").toUpperCase(), team: tm(r[c.tmc]), sal: c.s >= 0 ? num(r[c.s]) : null }; const x = get(key(r[c.n], r[c.tmc], r[c.p]), base); fill(x, base); const total = num(r[c.own]), cpt = c.cpt >= 0 ? num(r[c.cpt]) : null; x.etr = { proj: num(r[c.j]), own: sd && total != null && cpt != null ? +Math.max(0, total - cpt).toFixed(1) : total, ownTotal: sd ? total : null, ownSmall: c.small >= 0 ? num(r[c.small]) : null, cptOwn: cpt, floor: c.fl >= 0 ? num(r[c.fl]) : null, ceil: c.ce >= 0 ? num(r[c.ce]) : null }; n++; }
     sources.etr = { file: path.basename(etrF), mtime: t.mtime, rows: n };
   }
   // Blick (main or showdown layout)

@@ -67,7 +67,7 @@ export function fourSourceSim(dir, opts = {}) {
       e.sim = Object.assign(by, { sources: srcs, worst: Math.min(...rois), best: Math.max(...rois), mean: +avg(rois).toFixed(1), agree: rois.filter(r => r > 0).length, pctMed: pcts[Math.floor(pcts.length / 2)], N, fieldN, at: meta.at });
       const top = !sd && fee >= 300 && e.sim.pctMed >= 0.9;
       const ck = e.checks.find(c => c.id === "sim_top_half"); if (ck) { ck.pass = top ? false : e.sim.pctMed >= 0.5; ck.detail = srcs.map(s => `${s} ${(100 * by[s].pct).toFixed(0)}th`).join(", ") + (top ? " - top decile in a $300+ classic is where the field sits" : ""); }
-      const fails = e.checks.filter(c => c.pass === false); e.verdict = fails.some(c => c.hard) ? "FAIL" : fails.length ? "warn" : "ok"; e.broken = fails.map(c => c.id);
+      const fails = e.checks.filter(c => c.pass === false && (c.source || "lab") === "lab"); e.verdict = fails.some(c => c.hard) ? "FAIL" : fails.length ? "warn" : "ok"; e.broken = fails.map(c => c.id);
     });
     meta.contests.push({ cid, name: es[0].contest, N, fieldN, fee, entries: es.length });
   }

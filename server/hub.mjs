@@ -16,7 +16,7 @@ import { stkSlates } from "../src/engine/stokastic.mjs";
 import { pullStokastic, pullInjuries, hubData, slateDirs, slateMeta } from "./sources.mjs";
 import { pullPinnacle } from "../bench/pull-pinnacle-nfl.mjs";
 import { ingestPass } from "../bench/ingest.mjs";
-import { loadEntries, importEntries, saveThesis, saveTag } from "./entries.mjs";
+import { loadEntries, importEntries, saveThesis, saveTag, loadGuide } from "./entries.mjs";
 import { fourSourceSim } from "./foursim.mjs";
 import { contestsFor } from "./contests.mjs";
 import { saveMerge, markBuilt, diff } from "./changes.mjs";
@@ -65,7 +65,8 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/status") return json(res, 200, { lastNightly, nightlyRunning, refreshing: !!refreshing, simming, now: new Date().toISOString() });
     if (p === "/api/refresh" && req.method === "POST") { const q = JSON.parse((await body(req)).toString("utf8") || "{}"); if (refreshing) return json(res, 409, { error: "refresh already running" }); refreshing = refresh(q); try { return json(res, 200, await refreshing); } finally { refreshing = null; } }
     if (p === "/api/upload" && req.method === "POST") { const name = path.basename(u.searchParams.get("name") || "upload.csv").replace(/[^\w.@ -]/g, "_"); fs.mkdirSync("data/inbox", { recursive: true }); const f = path.join("data/inbox", name); fs.writeFileSync(f, await body(req)); const r = ingestPass([f]); lastIngest = Object.assign(r, { at: new Date().toISOString() }); return json(res, 200, r); }
-    if (p === "/api/entries") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); if (req.method === "POST") return json(res, 200, importEntries(d, (await body(req)).toString("utf8"), u.searchParams.get("name") || "")); return json(res, 200, loadEntries(d)); }
+    if (p === "/api/entries") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); const E = req.method === "POST" ? importEntries(d, (await body(req)).toString("utf8"), u.searchParams.get("name") || "") : loadEntries(d); return json(res, 200, Object.assign(E, { guide: loadGuide(d) })); }
+    if (p === "/api/guide") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); return json(res, 200, loadGuide(d) || {}); }
     if (p === "/api/sim" && req.method === "POST") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); if (simming) return json(res, 409, { error: "sim already running" }); simming = true; try { return json(res, 200, fourSourceSim(d)); } finally { simming = false; } }
     if (p === "/api/lateswap" && req.method === "POST") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); if (simming) return json(res, 409, { error: "sim already running" }); simming = true; try { return json(res, 200, await lateSwap(d)); } finally { simming = false; } }
     if (p === "/api/thesis" && req.method === "POST") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); const q = JSON.parse((await body(req)).toString("utf8") || "{}"); return json(res, 200, saveThesis(d, q.entryId, q.thesis)); }

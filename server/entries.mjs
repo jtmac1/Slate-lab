@@ -13,6 +13,10 @@ import { hubData } from "./sources.mjs";
 const readJ = f => fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : null;
 const file = dir => path.join("data", dir, "entries.json");
 export const loadEntries = dir => readJ(file(dir)) || { dir, entries: [], importedAt: null };
+// slate guide: ETR's breakdown + sim analysis for this specific slate, written per slate as
+// data/<slate>/slate-guide.json (see memory "slate-guide"); drives the "Slate" check group
+export const loadGuide = dir => readJ(path.join("data", dir, "slate-guide.json"));
+const nm = s => nrm(String(s || ""));
 const isDst = p => /^(DST|D|DEF)$/i.test(p || "");
 const CATCH = /^(WR|TE|RB)$/;
 
@@ -31,7 +35,7 @@ function dupEstimate(model, key, fee, N, owns) {
 export function importEntries(dir, csv, sourceName) {
   const hub = hubData(dir), sd = hub.slate.type === "SHOWDOWN", fkey = sd ? "nfl_sd" : "nfl_cl", f = FORMATS[fkey];
   const rules = readJ(`rules/${fkey}.json`), ruleBy = Object.fromEntries((rules?.rules || []).map(r => [r.id, r]));
-  const parsed = parseEntries(csv, f);
+  const parsed = parseEntries(csv, f), guide = loadGuide(dir);
   const byDk = new Map(), byCpt = new Map(), byName = new Map();
   for (const r of hub.rows) { if (r.stk?.dkId) byDk.set(r.stk.dkId, r); if (r.stk?.cptDkId) byCpt.set(r.stk.cptDkId, r); const k = isDst(r.pos) ? "dst|" + r.team : nrm(r.name); if (!byName.has(k)) byName.set(k, r); }
   const nick = new Map(); for (const r of hub.rows) if (isDst(r.pos)) nick.set(nrm(r.name), r);
@@ -51,7 +55,7 @@ export function importEntries(dir, csv, sourceName) {
     const tc = {}; for (const p of players) tc[p.team] = (tc[p.team] || 0) + 1; const split = Object.values(tc).sort((a, b) => b - a).join("-");
     const sig = players.map(p => p.name + (p.isCpt ? "*" : "")).sort().join("|"), dupKey = e.contest + "|" + sig; sigs[dupKey] = (sigs[dupKey] || 0) + 1;
     const dup = dupEstimate(model, sd ? "showdown" : "classic", fee, N, players.map(p => p.own));
-    const checks = [], add = (id, pass, detail) => { if (ruleBy[id]) checks.push({ id, hard: !!ruleBy[id].hard, pass, detail, rule: ruleBy[id].rule }); };
+    const checks = [], add = (id, pass, detail) => { if (ruleBy[id]) checks.push({ id, hard: !!ruleBy[id].hard, pass, detail, rule: ruleBy[id].rule, source: ruleBy[id].source || "lab" }); };
     add("salary_cap", sal <= f.cap, `$${sal.toLocaleString()}`);
     add("no_dst_vs_qb", !(qb && dst && dst.team === qb.opp), dst && qb ? `${dst.name} vs ${qb.name}` : "no QB/DST pair");
     if (!sd) {
@@ -77,12 +81,38 @@ export function importEntries(dir, csv, sourceName) {
       add("own_band", own < 180 ? true : own >= 220 ? false : null, `own sum ${own.toFixed(0)}%`);
       add("salary_left", left >= 1000, `$${left.toLocaleString()} left`);
       add("dup_risk", dup.meanDup == null ? null : dup.meanDup < 2, dup.meanDup == null ? "contest size unknown (pull the lobby)" : `~${dup.meanDup} copies expected, ${(100 * dup.pDup).toFixed(0)}% chance of any (field ${dup.N.toLocaleString()})`);
+      // ETR evergreen showdown guidelines (rules/nfl_sd.json, source "etr"): shown in their own group
+      const flex = players.slice(1), sameWRTE = p => flex.filter(q => q.team === p.team && /^(WR|TE)$/.test(q.pos)).length, oppWRTE = p => flex.filter(q => q.team !== p.team && /^(WR|TE)$/.test(q.pos)).length;
+      const cptQB = players.find(p => p.pos === "QB" && p.team === cpt.team), kd = players.filter(p => p.pos === "K" || isDst(p.pos)).length;
+      const heavy = Object.entries(tc).sort((a, b) => b[1] - a[1])[0][0], counts = Object.values(tc).sort((a, b) => b - a);
+      if (cpt.pos === "QB") { add("etr_cpt_qb_2pc", sameWRTE(cpt) >= 2, `CPT ${cpt.name} + ${sameWRTE(cpt)} same-team WR/TE`); add("etr_bring_back", oppWRTE(cpt) >= 1, `${oppWRTE(cpt)} opposing WR/TE`); }
+      if (cpt.pos === "WR") { add("etr_cpt_wr_max1", sameWRTE(cpt) <= 1, `CPT ${cpt.name} + ${sameWRTE(cpt)} same-team WR/TE`); add("etr_bring_back", oppWRTE(cpt) >= 1, `${oppWRTE(cpt)} opposing WR/TE`); }
+      if (cpt.pos === "RB") add("etr_cpt_rb_max2", sameWRTE(cpt) <= 2, `CPT ${cpt.name} + ${sameWRTE(cpt)} same-team WR/TE${cptQB ? ", with his QB" : ", no QB"}`);
+      if (cpt.pos === "TE") add("etr_cpt_te_qb", !!cptQB, cptQB ? `with ${cptQB.name}` : "without his QB");
+      if (dst) { const mates = players.filter(p => p !== dst && p.team === dst.team).length, opps = players.filter(p => p.team !== dst.team).length; add("etr_dst_teammates", mates >= 3 && opps <= 3, `${dst.name} with ${mates} teammates, ${opps} opponents`); }
+      add("etr_max2_kdst", kd <= 2, `${kd} K/DST`);
+      if (counts[0] >= 4) { add("etr_cpt_heavy_side", cpt.team === heavy, `${split}, CPT from ${cpt.team}${cpt.team === heavy ? " (heavy side)" : " (light side)"}`); }
+      if (split === "5-1") add("etr_onslaught_qb", players.some(p => p.pos === "QB" && p.team === heavy), players.some(p => p.pos === "QB" && p.team === heavy) ? `${heavy} QB in` : `no ${heavy} QB`);
+      add("etr_cpt_salary", (cpt.sal || 0) >= 10500, `CPT $${(cpt.sal || 0).toLocaleString()}`);
+      add("etr_k_or_dst", kd >= 1, kd ? `${kd} K/DST in flex` : "six skill players");
+      // slate-specific guide (data/<slate>/slate-guide.json): ETR's breakdown and sim analysis for this game
+      if (guide) {
+        const names = players.map(p => nm(p.name)), has = list => (list || []).filter(x => names.includes(nm(x)));
+        const pool = guide.cptPool || [], simCpt = guide.simCpt || {}, simRate = Object.entries(simCpt).find(([k]) => nm(k) === nm(cpt.name));
+        checks.push({ id: "slate_cpt", source: "slate", hard: false, pass: pool.some(x => nm(x) === nm(cpt.name)) || (simRate && simRate[1] >= 5) || null, detail: `CPT ${cpt.name}: ${pool.some(x => nm(x) === nm(cpt.name)) ? "in ETR's captain ideas" : "not an ETR captain idea"}${simRate ? `, optimal CPT in ${simRate[1]}% of sims` : ""}`, rule: "captain is one of ETR's captain ideas for this slate, or wins 5%+ of their sims" });
+        const lev = has(guide.topPlays?.leverage); checks.push({ id: "slate_leverage", source: "slate", hard: false, pass: lev.length >= 1, detail: lev.length ? "has " + lev.join(", ") : "no ETR leverage play (" + (guide.topPlays?.leverage || []).join(", ") + ")", rule: "carries at least one of ETR's leverage plays for this slate" });
+        if (guide.construction && guide.construction.utilization) { const fav = guide.construction.favorite, nf = players.filter(p => p.team === fav).length, key = `${nf}-${players.length - nf}`, u = guide.construction.utilization[key]; if (u != null) checks.push({ id: "slate_construction", source: "slate", hard: false, pass: u < 25, detail: `${key} (${fav} first): ETR projects ${u}% of the field there`, rule: "roster construction the field is projected to use under 25% of the time" }); }
+        const pr = Object.entries(guide.cptPairs || {}).find(([k]) => nm(k) === nm(cpt.name));
+        if (pr) { const hurt = has(pr[1].hurt), boost = has(pr[1].boost); checks.push({ id: "slate_pairings", source: "slate", hard: false, pass: hurt.length ? false : boost.length ? true : null, detail: (boost.length ? "boosted by CPT: " + boost.join(", ") : "none of the sim's boosted flexes") + (hurt.length ? "; hurt by CPT: " + hurt.join(", ") : ""), rule: "flex choices the sims say go with this captain, none they say go against him" }); }
+        const st = (guide.stacks || []).find(s => nm(s.cpt) === nm(cpt.name)); if (st) { const w = has(st.with); checks.push({ id: "slate_stack", source: "slate", hard: false, pass: w.length ? true : null, detail: w.length ? `ETR stack idea: with ${w.join(", ")}` : `ETR pairs this CPT with ${st.with.join(", ")}`, rule: "matches one of ETR's stack ideas for this captain" }); }
+      }
     }
     add("sim_top_half", null, "needs the four-source sim (next build)");
     entries.push(Object.assign(base, { ok: true, players, sal, left, own: +own.toFixed(1), cons: +cons.toFixed(1), chalk, qb: qb ? qb.name : null, stackN, bring, split, teams: Object.keys(tc).length, sig, dupKey, dup, contestN: N, checks, inj: players.filter(p => p.inj && !/^(Active|)$/i.test(p.inj)).map(p => `${p.name} ${p.inj}`) }));
   });
   for (const e of entries) if (e.ok && ruleBy.no_self_dupe) e.checks.unshift({ id: "no_self_dupe", hard: true, pass: sigs[e.dupKey] === 1, detail: sigs[e.dupKey] > 1 ? `${sigs[e.dupKey]} identical entries in this contest` : "unique in its contest", rule: ruleBy.no_self_dupe.rule });
-  for (const e of entries) if (e.ok) { const fails = e.checks.filter(c => c.pass === false); e.verdict = fails.some(c => c.hard) ? "FAIL" : fails.length ? "warn" : "ok"; e.broken = fails.map(c => c.id); }
+  // verdict and "broken" come from our own rulebook; ETR guidelines are shown but do not grade
+  for (const e of entries) if (e.ok) { const fails = e.checks.filter(c => c.pass === false && (c.source || "lab") === "lab"); e.verdict = fails.some(c => c.hard) ? "FAIL" : fails.length ? "warn" : "ok"; e.broken = fails.map(c => c.id); e.etrBroken = e.checks.filter(c => c.pass === false && c.source === "etr").map(c => c.id); e.slateBroken = e.checks.filter(c => c.pass === false && c.source === "slate").map(c => c.id); }
   const good = entries.filter(e => e.ok), cnt = {};
   for (const e of good) for (const p of e.players) { const k = p.name + "|" + p.team; const c = cnt[k] = cnt[k] || { name: p.name, team: p.team, pos: p.pos, n: 0, own: p.own, cpt: 0 }; c.n++; if (p.isCpt) c.cpt++; }
   const exposure = Object.values(cnt).map(c => Object.assign(c, { pct: +(100 * c.n / good.length).toFixed(0), delta: c.own == null ? null : +(100 * c.n / good.length - c.own).toFixed(0) })).sort((a, b) => b.n - a.n || (b.delta ?? 0) - (a.delta ?? 0));
