@@ -3,9 +3,9 @@
 // Refresh pulls Stokastic (projections + ownership) for the chosen slate, Pinnacle lines, ESPN
 // injuries, the DK lobby, and ingests any ETR/Blick CSV that landed in Downloads, then merges and
 // snapshots everything. ETR and Blick cannot be fetched here (login / Discord), so they arrive as
-// downloads: Downloads is watched every 10 s and the page has a drop zone. The server also runs the
-// nightly reports at 04:30 and re-pulls lines and injuries hourly on game days. No dependencies, no
-// credentials.
+// downloads: Downloads is read on every Refresh and the page has a drop zone. The nightly report
+// chain runs from the Review tab (POST /api/nightly); there are no background timers. No
+// dependencies, no credentials.
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -31,7 +31,7 @@ const json = (res, code, obj) => { res.writeHead(code, { "Content-Type": "applic
 const body = req => new Promise((resolve, reject) => { const c = []; req.on("data", d => c.push(d)); req.on("end", () => resolve(Buffer.concat(c))); req.on("error", reject); });
 const safeDir = d => d && !/[\\/]/.test(d) && fs.existsSync(path.join("data", d)) ? d : null;
 const run = (args, timeout = 300000) => new Promise((resolve, reject) => execFile(process.execPath, args, { cwd: ROOT, timeout, maxBuffer: 16e6 }, (err, out, errOut) => err ? reject(new Error((errOut || err.message).split("\n").slice(-3).join(" ").slice(0, 300))) : resolve(String(out).trim().split("\n").slice(-4).join("\n"))));
-let refreshing = null, simming = false, nightlyRunning = false, lastIngest = { done: [], notes: [], at: null }, lastNightly = null, lastHourly = 0;
+let refreshing = null, simming = false, nightlyRunning = false, lastIngest = { done: [], notes: [], at: null }, lastNightly = null;
 
 async function refresh(q) {
   const steps = [], step = async (name, fn) => { const t = Date.now(); try { const info = await fn(); steps.push({ name, ok: true, ms: Date.now() - t, info }); return info; } catch (e) { steps.push({ name, ok: false, ms: Date.now() - t, error: e.message }); return null; } };
@@ -54,7 +54,6 @@ async function nightly() {
   fs.mkdirSync("data/reports", { recursive: true }); fs.appendFileSync("data/reports/log.txt", `---- hub nightly ${lastNightly.at} ----\n` + log.map(l => `${l.ok ? "ok  " : "FAIL"} ${l.script} ${(l.ms / 1000).toFixed(0)}s ${l.ok ? l.out.split("\n").pop() : l.error}`).join("\n") + "\n");
   return lastNightly;
 }
-async function hourly() { try { await pullPinnacle(); await pullInjuries(); const d = slateDirs()[0]; if (d) saveMerge(d, hubData(d)); console.log(`${new Date().toLocaleTimeString()} hourly lines + injuries pulled`); } catch (e) { console.log("hourly error " + e.message); } }
 
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, "http://x"), p = u.pathname, d = u.searchParams.get("dir");
@@ -91,11 +90,8 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, "0.0.0.0", () => {
   const lan = Object.values(os.networkInterfaces()).flat().find(i => i && i.family === "IPv4" && !i.internal);
   console.log(`Slate Lab hub: http://localhost:${PORT}${lan ? `  (phone on this wifi: http://${lan.address}:${PORT})` : ""}`);
-  console.log(`watching Downloads for ETR/Blick CSVs every 10 s; nightly reports at 04:30; lines + injuries hourly on Thu/Sun/Mon 8am-11pm`);
-  setInterval(() => { try { const r = ingestPass(); if (r.done.length) { lastIngest = Object.assign(r, { at: new Date().toISOString() }); for (const d of r.done) console.log(`ingested ${d.src}: ${d.file} -> ${d.dest}`); } } catch (e) { console.log("ingest error " + e.message); } }, 10000);
-  setInterval(() => {
-    const now = new Date(), hhmm = now.toTimeString().slice(0, 5), today = now.toLocaleString("sv-SE").slice(0, 10);
-    if (hhmm === "04:30" && (!lastNightly || lastNightly.at.slice(0, 10) !== today) && !nightlyRunning) nightly().then(r => console.log(`nightly done in ${(r.ms / 1000).toFixed(0)}s`));
-    if ([0, 1, 4].includes(now.getDay()) && now.getHours() >= 8 && Date.now() - lastHourly >= 3600000 && !refreshing) { lastHourly = Date.now(); hourly(); }
-  }, 60000);
+  // No background timers (2026-10-01, user's call): Downloads are read on Refresh and on drop, the
+  // nightly chain runs from the Review tab's button, lines re-pull on Refresh. Bring a timer back
+  // only once a week of use shows it is missed.
+  console.log(`Downloads are read on Refresh; nightly reports run from the Review tab`);
 });
