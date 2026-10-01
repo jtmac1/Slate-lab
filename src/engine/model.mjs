@@ -17,8 +17,19 @@ export const COPP = { "QB|QB": 0.25, "QB|RB": 0.05, "QB|WR": 0.20, "QB|TE": 0.15
 // 0.391 -> 0.415, cash hits +1.1 per contest, realized money unchanged.
 export const CSAME_CFB = Object.assign({}, CSAME, { "QB|RB": 0.097, "QB|WR": 0.192, "RB|RB": 0.150, "RB|WR": -0.019, "WR|WR": 0.126 });
 export const COPP_CFB = Object.assign({}, COPP, { "QB|QB": 0.099, "QB|RB": 0.021, "QB|WR": 0.008, "RB|RB": -0.017, "RB|WR": 0.000, "WR|WR": 0.038 });
-export const MLBC = { hitSame: 0.22, hitOppSameGame: 0.10, hitOwnPitcher: 0.05, hitOppPitcher: -0.20,
-  pitchPitchSameGame: -0.12, orderBonus: 0.08 };
+// MLB correlations fitted from 480 finished 2026 games and 86,106 player pairs (bench/game-logs-mlb.mjs +
+// bench/fit-corr-mlb.mjs, 2026-09-30). Same-team hitters move together far less than the hand-set 0.22
+// (+0.08 order bonus) assumed, and opposing offenses do not move together at all; the pitcher-vs-opposing-
+// hitters link is stronger. Graded on 266 pulled contests against the hand-set table (noise floor from a
+// seed re-run: lineup rank +-0.004, player rank +-0.006, cash hits +-1.3): lineup rank correlation
+// 0.104 -> 0.119, player 0.116 -> 0.147, both halves and all six fee/size tiers; cash hits +1.5.
+// Top-decile realized ROI -6 points, inside its +-13 noise floor. Lineup spread is now narrower than real
+// (SD 23.0 vs 28.5 for 5-stacks); widening hitter sigma to 0.85 restores the spread but gives back the
+// rank gains (-0.023) and 2.6 cash hits, so the spread gap is a per-player tail-shape problem, not sigma.
+// Hand-set table it replaced: hitSame 0.22, hitOppSameGame 0.10, hitOwnPitcher 0.05, hitOppPitcher -0.20,
+// pitchPitchSameGame -0.12, orderBonus 0.08.
+export const MLBC = { hitSame: 0.094, hitOppSameGame: -0.009, hitOwnPitcher: 0.031, hitOppPitcher: -0.286,
+  pitchPitchSameGame: -0.064, orderBonus: 0.013 };
 export const LOAD = {
   nfl: { QB: [0.30, 0.70, 0.10], RB: [0.20, 0.48, 0.05], WR: [0.28, 0.62, 0.10], TE: [0.25, 0.55, 0.10], K: [0.20, 0.45, 0.05], DST: [-0.15, 0.30, -0.55] },
   mlb: { HIT: [0.25, 0.52, 0.08], PIT: [-0.30, 0.18, -0.55] },
@@ -146,6 +157,9 @@ export function buildModel(pool, opts = {}) {
   // put the mean back: the bend only adds mass above c, so every centre is scaled down to match
   if (ta) { const base = mu; mu = new Float64Array(n);
     for (let i = 0; i < n; i++) { const pr = base ? base[i] : P[i].proj; mu[i] = pr > 0 ? pr * tailFactor(sig[i], tc, ta) : pr; } }
+  // zero-inflated draw (BUST): per-player bust probability, or null for the plain lognormal
+  const bustTbl = opts.bust === true ? BUST[sport] : (opts.bust || null);
+  let p0 = null; if (bustTbl) { p0 = new Float64Array(n); for (let i = 0; i < n; i++) p0[i] = bustProb(P[i], bustTbl); }
   if (n > cholMax) {
     const tbl = (opts.load && opts.load[sport]) || LOAD[sport], L = [];   // opts.load: grade alternative factor loadings without editing the table
     for (const p of P) {
@@ -153,7 +167,7 @@ export function buildModel(pool, opts = {}) {
       const ss = l[0] * l[0] + l[1] * l[1] + l[2] * l[2];
       L.push({ g: l[0], t: l[1], o: l[2], e: Math.sqrt(Math.max(0.02, 1 - ss)) });
     }
-    return { type: "factor", L, sig, n, mu, tc, ta };
+    return { type: "factor", L, sig, n, mu, tc, ta, p0 };
   }
   const tables = opts.tables || (sport === "cfb" ? { CSAME: CSAME_CFB, COPP: COPP_CFB, MLBC } : null);
   const C = []; for (let i = 0; i < n; i++) C.push(new Float64Array(n));
@@ -171,7 +185,7 @@ export function buildModel(pool, opts = {}) {
     let sum = D[i][j]; for (let k = 0; k < j; k++) sum -= Lm[i][k] * Lm[j][k];
     if (i === j) Lm[i][j] = Math.sqrt(Math.max(sum, 1e-9)); else Lm[i][j] = sum / (Lm[j][j] || 1e-9);
   }
-  return { type: "chol", L: Lm, sig, n, mu, tc, ta };
+  return { type: "chol", L: Lm, sig, n, mu, tc, ta, p0 };
 }
 
 // A lognormal draw gets the cash line right and the winning score badly wrong: over 60 pulled college
@@ -197,6 +211,24 @@ export function buildModel(pool, opts = {}) {
 // between them is not by itself a pricing error. The tight sigma is shrinkage against noisy
 // projections, and grading keeps choosing it.
 export const TAIL = {};
+// Zero-inflated draw. A real MLB hitter-game is nothing like a lognormal around the projection: over
+// 8,468 starter player-games (bench/fit-bust-mlb.mjs, 2026-09-30) a 5-7 point hitter scores exactly 0
+// in 25% of games (the lognormal draws 0%), and the games that are not zero run wider than the model
+// (q90 of actual/projected 2.58 vs 1.92). The fit is a bust mass at zero that shrinks with the
+// projection, P(0) = a * (ref / proj)^b, and a mean-preserving lognormal for the rest with its own sigma.
+// Starting pitchers show the same shape at a lower rate (early exits, blow-ups floored at zero).
+// Off by default until graded: buildModel takes opts.bust (true for BUST[sport], or an object).
+export const BUST = { mlb: { hit: { a: 0.258, b: 1.32, ref: 6, max: 0.6 }, pit: { a: 0.077, b: 1.94, ref: 15, max: 0.5 } } };
+export function bustProb(p, tbl) { if (!tbl || !(p.proj > 0)) return 0; const t = p.isP ? tbl.pit : tbl.hit; if (!t) return 0; return Math.min(t.max ?? 0.6, t.a * Math.pow(t.ref / p.proj, t.b)); }
+// standard normal CDF (Abramowitz-Stegun 7.1.26, |err| < 1.5e-7) and quantile (Acklam), for the bust split
+export function pnorm(z) { const x = Math.abs(z) / Math.SQRT2, t = 1 / (1 + 0.3275911 * x), y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x); return z >= 0 ? 0.5 + 0.5 * y : 0.5 - 0.5 * y; }
+const QA = [-3.969683028665376e1, 2.209460984245205e2, -2.759285104469687e2, 1.383577518672690e2, -3.066479806614716e1, 2.506628277459239], QB = [-5.447609879822406e1, 1.615858368580409e2, -1.556989798598866e2, 6.680131188771972e1, -1.328068155288572e1], QC = [-7.784894002430293e-3, -3.223964580411365e-1, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783], QD = [7.784695709041462e-3, 3.224671290700398e-1, 2.445134137142996, 3.754408661907416];
+export function qnorm(p) {
+  if (p <= 1e-9) return -6; if (p >= 1 - 1e-9) return 6;
+  if (p < 0.02425) { const q = Math.sqrt(-2 * Math.log(p)); return (((((QC[0] * q + QC[1]) * q + QC[2]) * q + QC[3]) * q + QC[4]) * q + QC[5]) / ((((QD[0] * q + QD[1]) * q + QD[2]) * q + QD[3]) * q + 1); }
+  if (p <= 0.97575) { const q = p - 0.5, r = q * q; return (((((QA[0] * r + QA[1]) * r + QA[2]) * r + QA[3]) * r + QA[4]) * r + QA[5]) * q / (((((QB[0] * r + QB[1]) * r + QB[2]) * r + QB[3]) * r + QB[4]) * r + 1); }
+  const q = Math.sqrt(-2 * Math.log(1 - p)); return -(((((QC[0] * q + QC[1]) * q + QC[2]) * q + QC[3]) * q + QC[4]) * q + QC[5]) / ((((QD[0] * q + QD[1]) * q + QD[2]) * q + QD[3]) * q + 1);
+}
 // capped at 5 sigma: a quadratic bend left unbounded sends a 15-point projection to four figures
 export const BEND_MAX = 5;
 export function bendZ(z, c, a) { if (!a || z <= c) return z; const d = z - c; return Math.min(BEND_MAX, z + a * d * d); }
@@ -220,23 +252,30 @@ export function tailFactor(sg, c, a) {
 
 // mu overrides the projection the draw is centred on, for grading a recalibration of the projections
 // themselves. The draw is mean-preserving, so mu is exactly the player's expected score.
-export function toScore(p, z, sg, mu, tc, ta) {
+export function toScore(p, z, sg, mu, tc, ta, p0 = 0) {
   const m = mu == null ? p.proj : mu;
   if (m <= 0) return 0;
   if (p.pos === "DST") { const sd = p.sd && p.sd > 0 ? p.sd : Math.max(2, m * 0.8); return Math.max(-4, m + sd * z); }
+  if (p0 > 0) {
+    // bust split on the same correlated normal: the bottom p0 of the distribution is a zero, the rest is
+    // the lognormal re-centred so the overall mean stays m
+    const u = pnorm(z); if (u < p0) return 0;
+    const z2 = qnorm((u - p0) / (1 - p0));
+    return m / (1 - p0) * Math.exp(sg * z2 - sg * sg / 2);
+  }
   return m * Math.exp(sg * (ta ? bendZ(z, tc, ta) : z) - sg * sg / 2);
 }
 
 // Fill `out` with one correlated draw of every player's score.
 export function drawScores(model, pool, rng, out, scratch) {
-  const P = pool.players, n = model.n, sig = model.sig, mu = model.mu, tc = model.tc, ta = model.ta;
+  const P = pool.players, n = model.n, sig = model.sig, mu = model.mu, tc = model.tc, ta = model.ta, p0 = model.p0;
   if (model.type === "chol") {
     const z = scratch.z;
     for (let j = 0; j < n; j++) z[j] = rng.gauss();
     for (let j = 0; j < n; j++) {
       let s = 0; const Lj = model.L[j];
       for (let k = 0; k <= j; k++) s += Lj[k] * z[k];
-      out[j] = toScore(P[j], s, sig[j], mu ? mu[j] : undefined, tc, ta);
+      out[j] = toScore(P[j], s, sig[j], mu ? mu[j] : undefined, tc, ta, p0 ? p0[j] : 0);
     }
   } else {
     const gF = scratch.gF, tF = scratch.tF, teams = pool.teams;
@@ -245,7 +284,7 @@ export function drawScores(model, pool, rng, out, scratch) {
     for (let j = 0; j < n; j++) {
       const p = P[j], l = model.L[j], oppTi = teams.indexOf(p.opp);
       const s = l.g * gF[p.gi || 0] + l.t * tF[p.ti < 0 ? 0 : p.ti] + (oppTi >= 0 ? l.o * tF[oppTi] : 0) + l.e * rng.gauss();
-      out[j] = toScore(p, s, sig[j], mu ? mu[j] : undefined, tc, ta);
+      out[j] = toScore(p, s, sig[j], mu ? mu[j] : undefined, tc, ta, p0 ? p0[j] : 0);
     }
   }
 }

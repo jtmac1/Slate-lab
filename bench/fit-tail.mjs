@@ -12,7 +12,7 @@ import { sigmaFor, SIGMA_DEF, SIGMA_TILT, SIGMA_TILT_REF, bendZ } from "../src/e
 const SPORT = (process.argv[2] || "cfb").toLowerCase();
 const flag = k => { const a = process.argv.find(x => x.startsWith(`--${k}=`)); return a ? +a.slice(k.length + 3) : null; };
 const MINPROJ = flag("minproj") ?? 5;
-const FKEY = SPORT === "cfb" ? "cfb_cl" : "nfl_cl", logDir = path.join("data/logs", SPORT);
+const FKEY = SPORT === "cfb" ? "cfb_cl" : SPORT === "mlb" ? "mlb_cl" : "nfl_cl", logDir = path.join("data/logs", SPORT);
 
 const proj = {};
 for (const c of listContests().filter(c => c.json && c.fkey === FKEY)) {

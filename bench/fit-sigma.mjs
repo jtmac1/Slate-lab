@@ -10,17 +10,17 @@ const SPORT = (process.argv[2] || "cfb").toLowerCase();
 const flag = k => { const a = process.argv.find(x => x.startsWith(`--${k}=`)); return a ? +a.slice(k.length + 3) : null; };
 const MINPROJ = flag("minproj") ?? 5;
 const REF = flag("ref") ?? 11.5;
-const FKEY = SPORT === "cfb" ? "cfb_cl" : "nfl_cl", logDir = path.join("data/logs", SPORT);
+const FKEY = SPORT === "cfb" ? "cfb_cl" : SPORT === "mlb" ? "mlb_cl" : "nfl_cl", logDir = path.join("data/logs", SPORT);
 // CFB pools are QB/RB/WR only. NFL adds TE, K and DST, and those were never in this fit, which is
 // why SIGMA_DEF.nfl carried hand-set values for them.
-const POSITIONS = SPORT === "cfb" ? ["QB", "RB", "WR"] : ["QB", "RB", "WR", "TE", "K", "DST"];
+const POSITIONS = SPORT === "cfb" ? ["QB", "RB", "WR"] : SPORT === "mlb" ? ["SP", "RP", "C", "1B", "2B", "3B", "SS", "OF"] : ["QB", "RB", "WR", "TE", "K", "DST"];
 
 const proj = {};
 for (const c of listContests().filter(c => c.json && c.fkey === FKEY)) {
   const { pool } = loadPulled(c.json), d = proj[c.date] = proj[c.date] || {};
   for (const p of pool.players) { if (!(p.proj > 0)) continue; const k = p.key + "|" + String(p.team).toUpperCase();
-    if (!d[k] || d[k].proj < p.proj) d[k] = { proj: p.proj, pos: p.pos };
-    const byN = d.__byName || (d.__byName = {}); (byN[p.key] = byN[p.key] || []).push({ proj: p.proj, pos: p.pos }); }
+    if (!d[k] || d[k].proj < p.proj) d[k] = { proj: p.proj, pos: String(p.pos).split("/")[0] };
+    const byN = d.__byName || (d.__byName = {}); (byN[p.key] = byN[p.key] || []).push({ proj: p.proj, pos: String(p.pos).split("/")[0] }); }
 }
 const rows = [];
 for (const f of (fs.existsSync(logDir) ? fs.readdirSync(logDir).filter(f => f.endsWith(".json")) : [])) {

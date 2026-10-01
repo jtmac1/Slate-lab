@@ -284,6 +284,14 @@ function genFieldMLB(pool, n, o, rng, log) {
   else for (const tm in byTeam) share[tm] = Math.pow(byTeam[tm].reduce((s, p) => s + p.own, 0), 1.5);
   const minHit = Math.min(...hitters.map(p => p.sal)), minPit = Math.min(...pitchers.map(p => p.sal));
   const cum = new Float64Array(np), pick = new Int32Array(np);
+  // o.skill / o.best: a share of entrants consider several candidate lineups and keep the highest
+  // projected one, which is what makes a real field stronger than a draw from ownership alone
+  // (bench/field-strength.mjs: the real MLB field runs ~2.5 projected points above this generator at
+  // every fee tier). Same [share, candidates] mixture the NFL generator takes.
+  const skill = o.skill || (o.best > 1 ? [[o.sharpFrac == null ? 1 : o.sharpFrac, Math.round(o.best)]] : null);
+  const pickSkill = () => { if (!skill) return 1; let u = rng(); for (const [p, m] of skill) { if (u < p) return Math.max(1, Math.round(m)); u -= p; } return 1; };
+  const maxK = skill ? Math.max(1, ...skill.map(s => s[1])) : 1;
+  const projOf = lu => { let s = 0; for (const id of lu) s += P[id].proj || 0; return s; };
 
   function pickTeam(exclude) {
     let ks = Object.keys(share).filter(k => k !== exclude && byTeam[k]);
@@ -310,10 +318,23 @@ function genFieldMLB(pool, n, o, rng, log) {
   let sizes = Object.assign({}, o.sizes), secBy = o.secBy ? JSON.parse(JSON.stringify(o.secBy)) : null;
   const struct = {};
   function draw(count, cnt, dd) {
-    const out = []; let tries = 0; const max = count * 150;
+    const out = []; let tries = 0; const max = count * 150 * maxK;
     for (const k in struct) delete struct[k];
     while (out.length < count && tries < max) {
-      tries++;
+      // one entrant: the best of k candidate lineups, k from the skill mixture (1 = a single draw)
+      const k = pickSkill(); let lu = null, sk = null, bp = -Infinity;
+      for (let j = 0; j < k && tries < max; j++) { const c = one(); tries++; if (!c) continue; const pj = k > 1 ? projOf(c.lu) : 0; if (pj > bp) { bp = pj; lu = c.lu; sk = c.sk; } }
+      if (!lu) continue;
+      // duplicate quota (final draws only): a copy beyond the real share is thrown back
+      if (dd) { const sg = sigOf(lu, f); if (dd.sigs.has(sg)) { if (dd.dupes >= dd.allow) continue; dd.dupes++; } else dd.sigs.add(sg); }
+      out.push(lu); for (const id of lu) cnt[id]++;
+      struct[sk] = (struct[sk] || 0) + 1;
+    }
+    return out;
+  }
+  // one candidate lineup, or null when the salary window or the rules reject it
+  function one() {
+    {
       const used = new Uint8Array(np), tc = {}, ids = [];
       let sal = 0;
       const T1 = pickTeam(null), s1 = Math.min(pickFrom(sizes, rng, 5), byTeam[T1].length);
@@ -330,7 +351,7 @@ function genFieldMLB(pool, n, o, rng, log) {
         if (!m) { ids.length = 0; break; }
         const id = pick[rng.pickCum(cum, m)]; used[id] = 1; ids.push(id); sal += P[id].sal;
       }
-      if (ids.length < s1 + s2 + 2) continue;
+      if (ids.length < s1 + s2 + 2) return null;
       const pitchOpp = {}; for (const id of ids) if (P[id].isP && P[id].opp) pitchOpp[P[id].opp] = 1;
       // fill the remaining hitter slots under the salary window
       let left = 8 - s1 - s2, ok = true;
@@ -346,15 +367,11 @@ function genFieldMLB(pool, n, o, rng, log) {
         if (!m) { ok = false; break; }
         const id = pick[rng.pickCum(cum, m)]; used[id] = 1; ids.push(id); sal += P[id].sal; tc[P[id].team] = (tc[P[id].team] || 0) + 1; left--;
       }
-      if (!ok || sal > f.cap || sal < o.minSal) continue;
-      const lu = assignSlots(ids, P, f); if (!lu) continue;
-      if (!lineupOK(lu, P, f, teams)) continue;
-      // duplicate quota (final draws only): a copy beyond the real share is thrown back
-      if (dd) { const sg = sigOf(lu, f); if (dd.sigs.has(sg)) { if (dd.dupes >= dd.allow) continue; dd.dupes++; } else dd.sigs.add(sg); }
-      out.push(lu); for (const id of lu) cnt[id]++;
-      const sk = s1 + "|" + (T2 ? s2 : 0); struct[sk] = (struct[sk] || 0) + 1;
+      if (!ok || sal > f.cap || sal < o.minSal) return null;
+      const lu = assignSlots(ids, P, f); if (!lu) return null;
+      if (!lineupOK(lu, P, f, teams)) return null;
+      return { lu, sk: s1 + "|" + (T2 ? s2 : 0) };
     }
-    return out;
   }
   // nudge structure weights so the built field matches the requested stack mix despite salary rejections
   function calibrateStructure(made) {

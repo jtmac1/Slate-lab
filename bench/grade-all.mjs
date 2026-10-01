@@ -310,6 +310,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const DUPEFLOOR = flag("dupefloor");
   const dupeFloorOpt = DUPEFLOOR == null ? null : DUPEFLOOR < 0 ? true : DUPEFLOOR || false;
   const BEST = flag("best"), SHARPFRAC = flag("frac"), MINSAL = flag("minsal");   // sharp-mixture field
+  // --skill=0.08:40,0.40:3  share of entrants and how many candidate lineups each considers (bench/field-strength.mjs fits it)
+  const SKILLRAW = (args.find(a => a.startsWith("--skill=")) || "").slice(8), SKILL = SKILLRAW ? SKILLRAW.split(",").map(x => x.split(":").map(Number)) : null;
   const SECSTACK = args.includes("--sec");   // build the measured second team block in the CFB field   // --dupefloor=0 turns the generator's forced duplicates off
   // --sigtilt=-0.35 or --sigtilt=QB:-0.67,RB:-0.34,WR:-0.28: one exponent, or one per position
   const SIGTILTRAW = (args.find(a => a.startsWith("--sigtilt=")) || "").slice(10);
@@ -318,12 +320,14 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const SIGREF = flag("sigref");   // sigma scaled by (proj/ref)^tilt, graded against a flat sigma
   const CHOLMAX = flag("cholmax");   // force the factor model (0) or the pairwise matrix (large), as the app would use them
   const CTFILE = (args.find(a => a.startsWith("--ctable=")) || "").slice(9), CT = CTFILE ? JSON.parse(fs.readFileSync(CTFILE, "utf8")) : null;
+  // --bust: zero-inflated draw (model.mjs BUST), or --bust=<file> with a {hit, pit} table from bench/fit-bust-mlb.mjs
+  const BUSTARG = args.find(a => a === "--bust" || a.startsWith("--bust=")), BUSTF = !BUSTARG ? null : BUSTARG === "--bust" ? true : (b => ({ hit: b.hit, pit: b.pit }))(JSON.parse(fs.readFileSync(BUSTARG.slice(7), "utf8")));
   const nflSigma = Object.assign({}, SIGMA_DEF.nfl), cfbSigma = Object.assign({}, SIGMA_DEF.cfb);
   for (const kv of NFLSIG.split(",").filter(Boolean)) { const [k, v] = kv.split(":"); nflSigma[k] = +v; if (k in cfbSigma) cfbSigma[k] = +v; }
   const scaleT = t => CORR != null ? Object.fromEntries(Object.entries(t).map(([k, v]) => [k, v * CORR])) : t;
   const sigmaDef = Object.assign({}, SIGMA_DEF.mlb); if (HSIG != null) for (const k of ["C", "1B", "2B", "3B", "SS", "OF"]) sigmaDef[k] = HSIG; if (PSIG != null) for (const k of ["P", "SP", "RP"]) sigmaDef[k] = PSIG;
   const isNFL = /nfl|cfb/.test(FILTER);   // football: --nflsig positions apply to CFB too (its base table is SIGMA_DEF.cfb)
-  const MODEL = (LOADT || PROJTILT != null || SIGTILT != null || CHOLMAX != null || HS != null || HSIG != null || PSIG != null || SMAX != null || NFLSIG || CORR != null || CT) ? { tables: { CSAME: Object.assign({}, scaleT(CSAME), (CT || {}).CSAME || {}), COPP: Object.assign({}, scaleT(COPP), (CT || {}).COPP || {}), MLBC: Object.assign({}, MLBC, HS != null ? { hitSame: HS } : {}) }, sigmaBy: { mlb: sigmaDef, nfl: nflSigma, cfb: cfbSigma }, sigmaMax: SMAX != null ? SMAX : SIGMA_MAX, cholMax: CHOLMAX != null ? CHOLMAX : undefined, load: LOADT || undefined, sigmaTilt: SIGTILT != null ? SIGTILT : undefined, sigmaTiltRef: SIGREF != null ? SIGREF : undefined, projTilt: PROJTILT != null ? PROJTILT : undefined } : null;
+  const MODEL = (LOADT || PROJTILT != null || SIGTILT != null || CHOLMAX != null || HS != null || HSIG != null || PSIG != null || SMAX != null || NFLSIG || CORR != null || CT || BUSTF) ? { tables: { CSAME: Object.assign({}, scaleT(CSAME), (CT || {}).CSAME || {}), COPP: Object.assign({}, scaleT(COPP), (CT || {}).COPP || {}), MLBC: Object.assign({}, MLBC, (CT || {}).MLBC || {}, HS != null ? { hitSame: HS } : {}) }, sigmaBy: { mlb: sigmaDef, nfl: nflSigma, cfb: cfbSigma }, sigmaMax: SMAX != null ? SMAX : SIGMA_MAX, cholMax: CHOLMAX != null ? CHOLMAX : undefined, load: LOADT || undefined, sigmaTilt: SIGTILT != null ? SIGTILT : undefined, sigmaTiltRef: SIGREF != null ? SIGREF : undefined, projTilt: PROJTILT != null ? PROJTILT : undefined, bust: BUSTF || undefined } : null;
   // --genfield [--batch=50] [--dupecap] [--minfee=200]: grade the generator too (real entries vs a generated field)
   // --vendor: grade on the recovered Stokastic pre-lock file (vendor Std Dev path) when bench/stk-vendor-files.mjs found one
   const NOSD = args.includes("--nosd");   // with --vendor: same file, but default sigmas instead of its Std Dev
@@ -340,7 +344,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     // node bench/grade-all.mjs --field [iters-ignored] [filter]: generated field vs the real one
     console.log("contest".padEnd(40) + "N     stackTVD  dupes real/gen  salary real/gen   ownsum real/gen  expo gap | top stacks real/gen %");
     for (const c of shardList) {
-      const r = fieldCheck(c, { gen: Object.assign({}, DUPECAP ? { dupeCap: true } : {}, CONC != null ? { conc: CONC } : {}, DUPEFLOOR != null ? { dupeFloor: dupeFloorOpt } : {}, SECSTACK ? { secStack: true } : {}, BEST ? { best: BEST } : {}, SHARPFRAC != null ? { sharpFrac: SHARPFRAC } : {}, MINSAL ? { minSal: MINSAL } : {}) });
+      const r = fieldCheck(c, { gen: Object.assign({}, DUPECAP ? { dupeCap: true } : {}, CONC != null ? { conc: CONC } : {}, DUPEFLOOR != null ? { dupeFloor: dupeFloorOpt } : {}, SECSTACK ? { secStack: true } : {}, BEST ? { best: BEST } : {}, SKILL ? { skill: SKILL } : {}, SHARPFRAC != null ? { sharpFrac: SHARPFRAC } : {}, MINSAL ? { minSal: MINSAL } : {}) });
       console.log(r.dir.padEnd(40) + String(r.N).padEnd(6) + r.tvd.toFixed(2).padEnd(10) + `${r.dupReal}/${r.dupGen}`.padEnd(16) + `${r.salReal.toFixed(0)}/${r.salGen.toFixed(0)}`.padEnd(18) + `${r.ownReal.toFixed(0)}/${r.ownGen.toFixed(0)}`.padEnd(17) + r.gap.toFixed(1).padEnd(9) + "| " + r.top);
       console.log("".padEnd(46) + "largest exposure misses: " + r.worst.map(w => `${w.name} ${w.real.toFixed(0)}→${w.gen.toFixed(0)}`).join(", ") + ` (${r.ms} ms)`);
     }
@@ -349,7 +353,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const rows = [];
   for (const c of shardList) {
     if (VENDOR && !vendorMap[c.key]) continue;   // only contests with a vendor file, so A/B runs pair up
-    const r = gradeContest(c, Object.assign({ iters: ITERS }, VENDOR ? { proj: vendorMap[c.key].file } : {}, MODEL ? { model: MODEL } : {}, NOSD ? { model: Object.assign({}, MODEL || {}, { ignoreFileSigma: true }) } : {}, args.includes("--dkpay") ? { dkPay: true } : args.includes("--fitpay") ? { fitPay: true } : args.includes("--fitpay-name") ? { fitPay: "name" } : {}, GENFIELD ? { genField: true, batch: BATCH, gen: Object.assign({}, DUPECAP ? { dupeCap: true } : {}, CONC != null ? { conc: CONC } : {}, DUPEFLOOR != null ? { dupeFloor: dupeFloorOpt } : {}, SECSTACK ? { secStack: true } : {}, BEST ? { best: BEST } : {}, SHARPFRAC != null ? { sharpFrac: SHARPFRAC } : {}, MINSAL ? { minSal: MINSAL } : {}, ORACLE ? { oracleOwn: true } : {}) } : {}, ROWS ? { rows: true } : {})); rows.push(r);
+    const r = gradeContest(c, Object.assign({ iters: ITERS }, VENDOR ? { proj: vendorMap[c.key].file } : {}, MODEL ? { model: MODEL } : {}, NOSD ? { model: Object.assign({}, MODEL || {}, { ignoreFileSigma: true }) } : {}, args.includes("--dkpay") ? { dkPay: true } : args.includes("--fitpay") ? { fitPay: true } : args.includes("--fitpay-name") ? { fitPay: "name" } : {}, GENFIELD ? { genField: true, batch: BATCH, gen: Object.assign({}, DUPECAP ? { dupeCap: true } : {}, CONC != null ? { conc: CONC } : {}, DUPEFLOOR != null ? { dupeFloor: dupeFloorOpt } : {}, SECSTACK ? { secStack: true } : {}, BEST ? { best: BEST } : {}, SKILL ? { skill: SKILL } : {}, SHARPFRAC != null ? { sharpFrac: SHARPFRAC } : {}, MINSAL ? { minSal: MINSAL } : {}, ORACLE ? { oracleOwn: true } : {}) } : {}, ROWS ? { rows: true } : {})); rows.push(r);
     if (ROWS && r.entryRows) { fs.appendFileSync(ROWS, r.entryRows.map(x => JSON.stringify(x)).join("\n") + "\n"); delete r.entryRows; }
     console.log(`\n=== ${c.dir} [${c.fkey}] ===`);
     console.log(`  ${r.N} entries of ${r.rows} rows, ${r.paid} paid, field ROI ${r.fieldROI.toFixed(0)}%; ${r.players} players, ${r.teams} teams, ${r.games} games; unmatched ${r.unmatched.length}${r.unmatched.length ? " (" + r.unmatched.slice(0, 5).join(", ") + ")" : ""}; projection residual ${r.resid.toFixed(2)} FP/lineup; sim ${r.ms} ms`);
