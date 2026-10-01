@@ -1,0 +1,22 @@
+{
+  "format": "nfl_sd",
+  "derived": "2026-10-01",
+  "source": "bench/rulebook-nfl.mjs on data/post/nfl, 184k showdown lineups 2026-09-10..09-28; KEEP = |t| >= 3, same sign both halves, 300+ each side",
+  "rules": [
+    { "id": "salary_cap", "rule": "salary at or under $50,000", "hard": true, "evidence": "DraftKings rejects the upload" },
+    { "id": "no_self_dupe", "rule": "no two identical lineups from this account in one contest", "hard": true, "evidence": "a copy can only split with yourself" },
+    { "id": "has_qb", "rule": "roster a quarterback", "hard": true, "evidence": "-11% vs -66%, t 5.2, lift 4.31" },
+    { "id": "cpt_not_k_dst", "rule": "captain is not a kicker or DST", "hard": true, "evidence": "-71% vs -12%, t -10.5, lift 0.14" },
+    { "id": "no_dst_vs_qb", "rule": "DST must not face your own QB", "hard": true, "evidence": "-62% vs -10%, t -8.9" },
+    { "id": "no_kicker", "rule": "no kicker", "hard": true, "evidence": "-46% vs +4%, t -6.0, lift 0.50; the user had one in half his $100-299 entries" },
+    { "id": "split_51", "rule": "5-1 team split", "hard": false, "evidence": "+132% vs -47%, t 6.7, lift 4.92; 4-2 is -43% (t -5.5), 3-3 avoid (t -6.6 full archive)" },
+    { "id": "qb_pass_catcher", "rule": "QB with one of his pass catchers", "hard": false, "evidence": "-11% vs -50%, t 4.3" },
+    { "id": "has_dst", "rule": "roster a DST", "hard": false, "evidence": "+75% vs -40%, t 5.2, lift 1.95" },
+    { "id": "cpt_own_10", "rule": "captain owned 10% or more", "hard": false, "evidence": "under 10%: -44% vs +9%, t -5.6; the user's captains averaged 7.5-12.6%" },
+    { "id": "cpt_not_te", "rule": "captain is not a TE", "hard": false, "evidence": "full archive t -8.8" },
+    { "id": "own_band", "rule": "ownership sum under 180% (220%+ is the losing zone)", "hard": false, "evidence": "<180 +45% vs -45%, t 6.1; >=220 -47% vs -9%, t -6.1" },
+    { "id": "salary_left", "rule": "leave $1,000 or more", "hard": false, "evidence": "t 3.2 full archive; winners leave $450-525 on average" },
+    { "id": "sim_top_half", "rule": "sim ROI in the top half of the field", "hard": false, "evidence": "+32% vs -59%, t 8.5, lift 3.40" },
+    { "id": "dup_risk", "rule": "expected copies in the field under 2", "hard": false, "evidence": "bench/fit-dup-nfl.mjs: showdown fields duplicate heavily; the user's showdown entries were duplicated 69-100% vs winners 23-32%" }
+  ]
+}

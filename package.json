@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test \"test/**/*.test.mjs\"",
+    "hub": "node server/hub.mjs",
     "bench": "node bench/mlb-night-2026-09-10.mjs",
     "select": "node bench/contest-select.mjs",
     "contests": "node bench/dk-contests.mjs CFB --payouts --max=40",

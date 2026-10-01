@@ -1,0 +1,20 @@
+{
+  "format": "nfl_cl",
+  "derived": "2026-10-01",
+  "source": "bench/rulebook-nfl.mjs on data/post/nfl, 192 contests $20+ 2026-09-10..09-28 (115k classic lineups); KEEP = |t| >= 3, same sign both halves, 300+ each side",
+  "rules": [
+    { "id": "salary_cap", "rule": "salary at or under $50,000", "hard": true, "evidence": "DraftKings rejects the upload" },
+    { "id": "no_self_dupe", "rule": "no two identical lineups from this account in one contest", "hard": true, "evidence": "a copy can only split with yourself" },
+    { "id": "no_dst_vs_qb", "rule": "DST must not face your own QB", "hard": true, "evidence": "-63% vs -11%, t -9.5, top-1% lift 0.00" },
+    { "id": "qb_stack1", "rule": "QB with at least one of his pass catchers", "hard": true, "evidence": "+36 pts ROI, t 7.2; 93% of the field does it" },
+    { "id": "chalk_low", "rule": "at least three players owned 20%+ (0-2 chalk is the worst construction in the archive)", "hard": true, "evidence": "0-2 chalk -55% vs +21%, t -13.0, lift 0.32; $100-299 t -9.1" },
+    { "id": "salary_left", "rule": "leave less than $600", "hard": true, "evidence": "$600+ left -46% vs -10%, t -6.5; every tier" },
+    { "id": "chalk4", "rule": "four or more players owned 20%+", "hard": false, "evidence": "+34% vs -35%, t 9.9, lift 2.28" },
+    { "id": "qb_stack2", "rule": "QB with two or more pass catchers", "hard": false, "evidence": "+7% vs -30%, t 5.9, lift 1.88" },
+    { "id": "bring_back", "rule": "a bring-back from the QB's opponent", "hard": false, "evidence": "+1% vs -26%, t 4.6, lift 1.45" },
+    { "id": "no_rb_own_dst", "rule": "no RB paired with his own DST", "hard": false, "evidence": "-41% vs -4%, t -7.7" },
+    { "id": "own_200", "rule": "ownership sum 200% or more", "hard": false, "evidence": "under 200: -21% vs +19%, t -6.3; 200-260 best band in $20-299" },
+    { "id": "sim_top_half", "rule": "sim ROI in the top half of the field; in $300+ contests avoid the top decile (that is where the field sits)", "hard": false, "evidence": "top half +14% vs -36%, t 7.9; $300+ top decile -31% vs -6%, t -3.4" },
+    { "id": "dup_risk", "rule": "expected copies in the field under 1", "hard": false, "evidence": "bench/fit-dup-nfl.mjs: classic P(copy) 50% once entries x ownership product passes 0.1; the user's entries were duplicated 2-4x the winners' rate" }
+  ]
+}
