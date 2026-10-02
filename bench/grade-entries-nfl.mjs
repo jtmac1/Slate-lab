@@ -28,6 +28,8 @@ export async function gradeAll() {
   let graded = 0, pulled = 0, missing = [];
   for (const d of dirs) {
     const file = path.join("data", d, "entries.json"), E = JSON.parse(fs.readFileSync(file, "utf8")), date = d.slice(0, 10); let changed = false;
+    // the slate notes (Notes tab) are the user's read on the slate; they ride along into the ledger
+    const notesF = path.join("data", d, "notes.md"), notes = fs.existsSync(notesF) ? fs.readFileSync(notesF, "utf8").trim().slice(0, 600) : "";
     const posts = {};
     for (const e of E.entries) {
       if (!e.ok || !e.cid) continue;
@@ -41,7 +43,7 @@ export async function gradeAll() {
       const order = j.lineups.slice().sort((a, b) => b.sroi - a.sroi), simPct = order.indexOf(hit) / N;
       e.result = { fin: hit.fin, N, roi: hit.aroi, won: +((1 + (hit.aroi || 0)) * e.fee).toFixed(2), cash: hit.aroi > -1 ? 1 : 0, top1: hit.fin <= Math.max(1, Math.ceil(N * 0.01)) ? 1 : 0, top10: hit.fin <= N * 0.1 ? 1 : 0, win: hit.fin === 1 ? 1 : 0, dup: hit.dup || 0, simPct: +(1 - simPct).toFixed(2), pts: hit.afp, gradedAt: new Date().toISOString() };
       changed = true; graded++;
-      ledger.push({ dir: d, date, contest: e.contest, cid: e.cid, fee: e.fee, entryId: e.entryId, verdict: e.verdict, broken: e.broken || [], sim: e.sim ? { worst: e.sim.worst, agree: e.sim.agree, pctMed: e.sim.pctMed, sources: e.sim.sources.length } : null, dup: e.dup ? e.dup.meanDup : null, own: e.own, chalk: e.chalk, left: e.left, thesis: e.thesis || "", tag: e.tag || "", result: e.result, lineup: e.players.map(p => p.name) });
+      ledger.push({ dir: d, date, contest: e.contest, cid: e.cid, fee: e.fee, entryId: e.entryId, verdict: e.verdict, broken: e.broken || [], sim: e.sim ? { worst: e.sim.worst, agree: e.sim.agree, pctMed: e.sim.pctMed, sources: e.sim.sources.length } : null, dup: e.dup ? e.dup.meanDup : null, own: e.own, chalk: e.chalk, left: e.left, notes, tag: e.tag || "", result: e.result, lineup: e.players.map(p => p.name) });
     }
     if (changed) { E.gradedAt = new Date().toISOString(); fs.writeFileSync(file, JSON.stringify(E, null, 1)); }
   }

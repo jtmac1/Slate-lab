@@ -6,15 +6,16 @@ import { $, $$, esc, download } from "../app/ui.mjs";
 import { renderEntries, initEntries } from "./entries.mjs";
 import { renderContests } from "./contests.mjs";
 import { renderReview } from "./review.mjs";
+import { renderSim, initSim } from "./sim.mjs";
 
 const LS = "slatelab:hub";
 const saved = (() => { try { return JSON.parse(localStorage.getItem(LS) || "{}"); } catch { return {}; } })();
 const persist = () => { try { localStorage.setItem(LS, JSON.stringify({ date: S.date, slateId: S.slateId, dir: S.dir, tab: S.tab, view: S.view })); } catch {} };
 const nextSlateDate = () => { const d = new Date(), dow = d.getDay(); if (dow >= 2 && dow <= 6) d.setDate(d.getDate() + (7 - dow)); return d.toLocaleString("sv-SE").slice(0, 10); };
-const S = { view: ["hub", "entries", "contests", "review"].includes(saved.view) ? saved.view : "hub", date: saved.date || nextSlateDate(), slateId: saved.slateId || null, dir: saved.dir || null, slates: [], dirs: [], hub: null, tab: saved.tab || "players", q: "", pos: "ALL", sort: { k: "cons", d: -1 }, busy: false, steps: [], msg: "", err: false, showAll: false, slatesErr: "", changes: null, notes: null };
-initEntries(S);
+const S = { view: ["hub", "entries", "contests", "review", "sim"].includes(saved.view) ? saved.view : "hub", date: saved.date || nextSlateDate(), slateId: saved.slateId || null, dir: saved.dir || null, slates: [], dirs: [], hub: null, tab: saved.tab || "players", q: "", pos: "ALL", sort: { k: "cons", d: -1 }, busy: false, steps: [], msg: "", err: false, showAll: false, slatesErr: "", changes: null, notes: null };
+initEntries(S); initSim(S);
 // views rebuilt so far are buttons; the rest link to the current app until they are rebuilt
-const VIEWS = [["hub", "Data Hub", "Data Hub", true], ["contests", "Contests", "Contests", true], ["entries", "Entries", "Entries", true], ["review", "Review", "Review", true], ["gen", "Contest Generator", "Generator"], ["sim", "Pre-Contest Simulator", "Simulator"]];
+const VIEWS = [["hub", "Data Hub", "Data Hub", true], ["contests", "Contests", "Contests", true], ["sim", "Simulator", "Simulator", true], ["entries", "Entries", "Entries", true], ["review", "Review", "Review", true], ["gen", "Old Generator", "Old app"]];
 const api = async (p, opts) => { const r = await fetch(p, opts); const j = await r.json().catch(() => ({ error: r.statusText })); if (!r.ok) throw new Error(j.error || r.statusText); return j; };
 const f1 = v => v == null || isNaN(v) ? "—" : (+v).toFixed(1);
 const f0 = v => v == null || isNaN(v) ? "—" : (+v).toFixed(0);
@@ -114,6 +115,7 @@ function renderMain() {
   if (S.view === "entries") { renderEntries(main, ctx); return; }
   if (S.view === "contests") { renderContests(main, ctx); return; }
   if (S.view === "review") { renderReview(main, ctx); return; }
+  if (S.view === "sim") { renderSim(main, ctx); return; }
   if (!H) { main.innerHTML = `<div class="empty">No slate loaded<small>Pick the slate date and the DraftKings slate above, then press Refresh.</small></div>`; return; }
   if (S.tab === "players") renderPlayers(main); else if (S.tab === "games") renderGames(main); else if (S.tab === "captains") renderCaptains(main); else if (S.tab === "changes") renderChanges(main); else if (S.tab === "notes") renderNotes(main); else renderSources(main);
 }
