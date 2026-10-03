@@ -34,7 +34,7 @@ function dupEstimate(model, key, fee, N, owns) {
 }
 // a hub row -> the player record a lineup carries (captain = 1.5x salary and projection, captain ownership)
 export function playerFrom(r, slot, isCpt) {
-  return { slot, name: r.name, pos: r.pos.split("/")[0], team: r.team, opp: r.opp, sal: isCpt ? Math.round((r.sal || 0) * 1.5) : r.sal, own: isCpt ? (r.stk?.cptOwn ?? null) : (r.own ?? null), proj: isCpt ? (r.cons != null ? +(1.5 * r.cons).toFixed(2) : null) : r.cons, lab: isCpt ? (r.lab != null ? +(1.5 * r.lab).toFixed(2) : null) : r.lab, stk: r.stk?.proj ?? null, inj: r.inj ? r.inj.status : (r.stk?.inj || ""), isCpt: !!isCpt, dkId: isCpt ? (r.stk?.cptDkId || "") : (r.stk?.dkId || "") };
+  return { slot, name: r.name, pos: r.pos.split("/")[0], team: r.team, opp: r.opp, sal: isCpt ? Math.round((r.sal || 0) * 1.5) : r.sal, own: isCpt ? (r.stk?.cptOwn ?? null) : (r.own ?? null), fown: isCpt ? (r.labCptOwn ?? r.stk?.cptOwn ?? null) : (r.labOwn ?? r.own ?? null), proj: isCpt ? (r.cons != null ? +(1.5 * r.cons).toFixed(2) : null) : r.cons, lab: isCpt ? (r.lab != null ? +(1.5 * r.lab).toFixed(2) : null) : r.lab, stk: r.stk?.proj ?? null, inj: r.inj ? r.inj.status : (r.stk?.inj || ""), isCpt: !!isCpt, dkId: isCpt ? (r.stk?.cptDkId || "") : (r.stk?.dkId || "") };
 }
 // shared context for a slate: format, rulebook, dup model, guide
 export function evalContext(dir, hub) {
@@ -45,7 +45,8 @@ export function evalContext(dir, hub) {
 export function evaluateLineup(players, fee, N, ctx) {
   const { sd, f, ruleBy, model, guide } = ctx;
   const sal = players.reduce((s, p) => s + (p.sal || 0), 0), left = f.cap - sal, own = players.reduce((s, p) => s + (p.own || 0), 0), cons = players.reduce((s, p) => s + (p.proj || 0), 0), lab = players.reduce((s, p) => s + (p.lab ?? p.proj ?? 0), 0);
-  const qb = players.find(p => p.pos === "QB"), dst = players.find(p => isDst(p.pos)), chalk = players.filter(p => (p.own || 0) >= 20).length;
+  // chalk and ownership-sum rules were fit on actual ownership, so they read Model own (fown) when the slate has it
+  const fo = p => p.fown ?? p.own ?? 0, qb = players.find(p => p.pos === "QB"), dst = players.find(p => isDst(p.pos)), chalk = players.filter(p => fo(p) >= 20).length, fown = players.reduce((s, p) => s + fo(p), 0);
   const stackN = qb ? players.filter(p => p !== qb && p.team === qb.team && CATCH.test(p.pos)).length : 0, bring = qb ? players.some(p => p.team === qb.opp && !isDst(p.pos)) : false;
   const tc = {}; for (const p of players) tc[p.team] = (tc[p.team] || 0) + 1; const split = Object.values(tc).sort((a, b) => b - a).join("-");
   const sig = players.map(p => p.name + (p.isCpt ? "*" : "")).sort().join("|");
@@ -61,7 +62,7 @@ export function evaluateLineup(players, fee, N, ctx) {
     add("chalk4", chalk >= 4, `${chalk} at 20%+`);
     add("salary_left", left < 600, `$${left.toLocaleString()} left`);
     add("no_rb_own_dst", !(dst && players.some(p => p.pos === "RB" && p.team === dst.team)), dst ? `DST ${dst.team}` : "no DST");
-    add("own_200", own >= 200, `own sum ${own.toFixed(0)}%`);
+    add("own_200", fown >= 200, `own sum ${fown.toFixed(0)}% (model)`);
     add("dup_risk", dup.meanDup == null ? null : dup.meanDup < 1, dup.meanDup == null ? "contest size unknown (pull the lobby)" : `~${dup.meanDup} copies expected, ${(100 * dup.pDup).toFixed(0)}% chance of any (field ${dup.N.toLocaleString()})`);
   } else {
     const cpt = players[0];
@@ -73,7 +74,7 @@ export function evaluateLineup(players, fee, N, ctx) {
     add("has_dst", !!dst, dst ? dst.name : "none");
     add("cpt_own_10", cpt.own == null ? null : cpt.own >= 10, `CPT own ${cpt.own == null ? "?" : cpt.own.toFixed(1) + "%"}`);
     add("cpt_not_te", cpt.pos !== "TE", `CPT ${cpt.pos}`);
-    add("own_band", own < 180 ? true : own >= 220 ? false : null, `own sum ${own.toFixed(0)}%`);
+    add("own_band", fown < 180 ? true : fown >= 220 ? false : null, `own sum ${fown.toFixed(0)}%`);
     add("salary_left", left >= 1000, `$${left.toLocaleString()} left`);
     add("dup_risk", dup.meanDup == null ? null : dup.meanDup < 2, dup.meanDup == null ? "contest size unknown (pull the lobby)" : `~${dup.meanDup} copies expected, ${(100 * dup.pDup).toFixed(0)}% chance of any (field ${dup.N.toLocaleString()})`);
     // ETR evergreen showdown guidelines (rules/nfl_sd.json, source "etr"): shown in their own group

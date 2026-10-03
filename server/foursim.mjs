@@ -51,12 +51,13 @@ export function simLineups(L, lus, opts = {}) {
   for (const s of srcs) {
     const players = P.map(p => { const k = keyOf(p.name, p.pos, p.team), r = hubBy.get(k); const own = ownOf(r, s, vendors) ?? p.own, cown = cptOf(r, s, vendors) ?? Math.max(0.1, own / 6); const q = Object.assign({}, p, { proj: Math.max(0, projOf(r, s, p.proj) ?? 0), own, cown, fown: own }); if (locked && locked[k] != null) { q.proj = locked[k]; q.sd = 0.01; q.ceil = null; } return q; });
     const ps = Object.assign({}, pool, { players }), model = buildModel(ps, {});
-    const opt = Object.assign({ conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3, nflStacks: { 1: 45, 2: 25, 3: 5, bring: 25 } }, fieldProfile(fee, fkey, N) || {});
+    // fitted presets (see server/contestsim.mjs): showdown leaves salary, classic stacks QB+2 far more than the old default
+    const opt = Object.assign(fkey === "nfl_sd" ? { conc: 1.0, minSal: 44000, boost: 1.0, rounds: 3 } : { conc: 1.25, minSal: 48000, boost: 1.0, rounds: 3, nflStacks: { 1: 45, 2: 41, 3: 5, bring: 62 }, skill: [[0.15, 60], [0.35, 5]], dupeFloor: "auto" }, fieldProfile(fee, fkey, N) || {});
     const gen = genField(ps, fieldN, opt, mulberry32(7)).field;
     const rng = mulberry32(13), sample = []; for (let i = 0; i < Math.min(SAMPLE, gen.length); i++) sample.push(gen[Math.floor(rng() * gen.length)]);
     const res = simulate({ pool: ps, model, field: gen, lineups: lus.concat(sample), payouts: pay, entries: fieldN, fee: 1, iters: opts.iters || ITERS, maxIters: (opts.iters || ITERS) * 2, rng: mulberry32(17), fieldMode: false });
     const fieldRoi = res.rows.slice(lus.length).map(r => r.roi).sort((a, b) => a - b);
-    per[s] = lus.map((lu, k) => { const r = res.rows[k]; let lo = 0; while (lo < fieldRoi.length && fieldRoi[lo] < r.roi) lo++; return { roi: +r.roi.toFixed(1), se: +r.se.toFixed(1), t10: +r.t10.toFixed(1), cash: +r.cash.toFixed(1), dupN: r.dupN, pct: +(lo / fieldRoi.length).toFixed(2), proj: +r.proj.toFixed(1) }; });
+    per[s] = lus.map((lu, k) => { const r = res.rows[k]; let lo = 0; while (lo < fieldRoi.length && fieldRoi[lo] < r.roi) lo++; return { roi: +r.roi.toFixed(1), se: +r.se.toFixed(1), win: +r.win.toFixed(3), t1: +r.t1.toFixed(2), t10: +r.t10.toFixed(1), cash: +r.cash.toFixed(1), dupN: r.dupN, pct: +(lo / fieldRoi.length).toFixed(2), proj: +r.proj.toFixed(1) }; });
   }
   return { sources: srcs, per, fieldN, N, fee };
 }

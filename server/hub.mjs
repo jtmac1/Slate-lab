@@ -19,6 +19,8 @@ import { ingestPass } from "../bench/ingest.mjs";
 import { loadEntries, importEntries, saveThesis, saveTag, loadGuide } from "./entries.mjs";
 import { fourSourceSim } from "./foursim.mjs";
 import { generateAndSim, loadGen } from "./gensim.mjs";
+import { buildField, loadField, runSim, loadSimRun, stripField } from "./contestsim.mjs";
+import { reviewLineups, reviewPortfolio, brainStatus, loadBrain } from "./brain.mjs";
 import { contestsFor } from "./contests.mjs";
 import { saveMerge, markBuilt, diff } from "./changes.mjs";
 import { lateSwap } from "./lateswap.mjs";
@@ -27,7 +29,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 process.chdir(ROOT);
 const PORT = +process.env.PORT || 8787;
 const TYPES = { ".html": "text/html; charset=utf-8", ".mjs": "text/javascript", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".csv": "text/csv", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".webmanifest": "application/manifest+json", ".md": "text/markdown", ".txt": "text/plain" };
-const NIGHTLY = [["bench/pull-pinnacle-nfl.mjs"], ["bench/winners-nfl.mjs"], ["bench/source-scorecard-nfl.mjs"], ["bench/winners-profile-nfl.mjs", "2026-09-01"], ["bench/rulebook-nfl.mjs"], ["bench/vendor-index.mjs"], ["bench/grade-entries-nfl.mjs"]];
+// $RECENT = 35 days ago at run time: the ownership curve and chalk exponent follow the current season's fields
+const NIGHTLY = [["bench/pull-pinnacle-nfl.mjs"], ["bench/winners-nfl.mjs"], ["bench/source-scorecard-nfl.mjs"], ["bench/winners-profile-nfl.mjs", "2026-09-01"], ["bench/rulebook-nfl.mjs"], ["bench/fit-conc-nfl.mjs", "$RECENT"], ["bench/fit-own-error-nfl.mjs"],["bench/vendor-index.mjs"], ["bench/grade-entries-nfl.mjs"]];
+const recent = () => new Date(Date.now() - 35 * 864e5).toLocaleString("sv-SE").slice(0, 10);
 const json = (res, code, obj) => { res.writeHead(code, { "Content-Type": "application/json", "Cache-Control": "no-store" }); res.end(JSON.stringify(obj)); };
 const body = req => new Promise((resolve, reject) => { const c = []; req.on("data", d => c.push(d)); req.on("end", () => resolve(Buffer.concat(c))); req.on("error", reject); });
 const safeDir = d => d && !/[\\/]/.test(d) && fs.existsSync(path.join("data", d)) ? d : null;
@@ -49,7 +53,7 @@ async function refresh(q) {
 async function nightly() {
   if (nightlyRunning) return { running: true }; nightlyRunning = true;
   const log = [], t0 = Date.now();
-  try { for (const a of NIGHTLY) { const t = Date.now(); try { const out = await run(a, 900000); log.push({ script: a[0], ok: true, ms: Date.now() - t, out }); } catch (e) { log.push({ script: a[0], ok: false, ms: Date.now() - t, error: e.message }); } } }
+  try { for (const a of NIGHTLY) { const t = Date.now(); try { const out = await run(a.map(x => x === "$RECENT" ? recent() : x), 900000); log.push({ script: a[0], ok: true, ms: Date.now() - t, out }); } catch (e) { log.push({ script: a[0], ok: false, ms: Date.now() - t, error: e.message }); } } }
   finally { nightlyRunning = false; }
   lastNightly = { at: new Date().toISOString(), ms: Date.now() - t0, log };
   fs.mkdirSync("data/reports", { recursive: true }); fs.appendFileSync("data/reports/log.txt", `---- hub nightly ${lastNightly.at} ----\n` + log.map(l => `${l.ok ? "ok  " : "FAIL"} ${l.script} ${(l.ms / 1000).toFixed(0)}s ${l.ok ? l.out.split("\n").pop() : l.error}`).join("\n") + "\n");
@@ -69,6 +73,11 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/entries") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); const E = req.method === "POST" ? importEntries(d, (await body(req)).toString("utf8"), u.searchParams.get("name") || "") : loadEntries(d); return json(res, 200, Object.assign(E, { guide: loadGuide(d) })); }
     if (p === "/api/guide") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); return json(res, 200, loadGuide(d) || {}); }
     if (p === "/api/sim" && req.method === "POST") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); if (simming) return json(res, 409, { error: "sim already running" }); simming = true; try { return json(res, 200, fourSourceSim(d)); } finally { simming = false; } }
+    if (p === "/api/field") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); if (req.method === "POST") { if (simming) return json(res, 409, { error: "sim already running" }); simming = true; try { return json(res, 200, buildField(d, JSON.parse((await body(req)).toString("utf8") || "{}"))); } finally { simming = false; } } return json(res, 200, stripField(loadField(d))); }
+    if (p === "/api/simrun") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); if (req.method === "POST") { if (simming) return json(res, 409, { error: "sim already running" }); simming = true; try { return json(res, 200, runSim(d, JSON.parse((await body(req)).toString("utf8") || "{}"))); } finally { simming = false; } } return json(res, 200, loadSimRun(d) || { rows: [] }); }
+    // Entry Manager plan: which lineups go into which contests for the slate (data/<slate>/entry-plan.json); graded after the slate
+    if (p === "/api/plan") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); const f = path.join("data", d, "entry-plan.json"); if (req.method === "POST") { const q = JSON.parse((await body(req)).toString("utf8") || "{}"); q.savedAt = new Date().toISOString(); fs.writeFileSync(f, JSON.stringify(q, null, 1)); return json(res, 200, q); } return json(res, 200, fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : { contests: [] }); }
+    if (p === "/api/brain") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); if (req.method === "POST") { const q = JSON.parse((await body(req)).toString("utf8") || "{}"); try { return json(res, 200, q.portfolio ? await reviewPortfolio(d, q.sigs || []) : await reviewLineups(d, q.sigs || [], { max: q.max })); } catch (e) { return json(res, 500, { error: e.message }); } } return json(res, 200, Object.assign(brainStatus(d), { reviews: loadBrain(d).reviews || {} })); }
     if (p === "/api/gen") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); if (req.method === "POST") { if (simming) return json(res, 409, { error: "sim already running" }); simming = true; try { const cfg = JSON.parse((await body(req)).toString("utf8") || "{}"); return json(res, 200, generateAndSim(d, cfg)); } finally { simming = false; } } return json(res, 200, loadGen(d) || { rows: [] }); }
     if (p === "/api/lateswap" && req.method === "POST") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); if (simming) return json(res, 409, { error: "sim already running" }); simming = true; try { return json(res, 200, await lateSwap(d)); } finally { simming = false; } }
     if (p === "/api/thesis" && req.method === "POST") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); const q = JSON.parse((await body(req)).toString("utf8") || "{}"); return json(res, 200, saveThesis(d, q.entryId, q.thesis)); }

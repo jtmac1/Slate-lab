@@ -22,6 +22,45 @@ function readTable(file) {
   return { H, h, rows: all.slice(1).filter(r => r.length > 2), col, file, mtime: fs.statSync(file).mtime.toISOString() };
 }
 // slate folders that hold a Stokastic file or slate.json (the -sd- build copies and ETR-only folders are skipped)
+// Ownership calibration: actual / projected by projected-ownership bucket, from
+// data/reports/conc-fit-nfl.json (bench/fit-conc-nfl.mjs, re-fit nightly on recent weeks). Real
+// fields own 20-30%-projected players ~1.3x and sub-5% players ~0.8x; a single exponent cannot
+// bend both ways, a bucket curve can. Returns own -> calibrated own (percent in, percent out).
+export function ownCurve(fmt, group = "flex") {
+  try {
+    const j = JSON.parse(fs.readFileSync("data/reports/conc-fit-nfl.json", "utf8")), b = (j.buckets || {})[`${fmt}|${group}|all`];
+    if (!b || !b.length) return o => o;
+    const seg = b.map(x => { const [lo, hi] = x.bucket.split("-").map(Number); return { lo, hi, m: x.ratio }; });
+    return o => { if (o == null) return o; const s = seg.find(x => o >= x.lo && o < x.hi) || seg[seg.length - 1]; return +(o * s.m).toFixed(2); };
+  } catch { return o => o; }
+}
+// Player-level ownership model (bench/fit-own-error-nfl.mjs -> data/reports/own-error-nfl.json):
+// which players come in over/under their projected ownership, from position, salary, value, rank
+// within position, the team's QB ownership and the slate's chalk. 2026 hold-out on chalk (15%+):
+// MAE 7.5 vs 8.7 for the bucket curve vs 9.7 for the vendors' number; direction right 86% of the time.
+// Classic only. Returns (rows, ctx) => rows with labOwn/ownDelta set; rows need pos, team, sal, proj, vown.
+export function ownModel(fmt = "classic") {
+  const identity = rows => rows.map(r => Object.assign(r, { labOwn: r.vown, ownDelta: null }));
+  if (fmt !== "classic") return identity;
+  let m; try { m = JSON.parse(fs.readFileSync("data/reports/own-error-nfl.json", "utf8")); } catch { return identity; }
+  const beta = m.prodBeta, [lo, hi] = m.clamp || [0.5, 1.4], POS = ["QB", "RB", "WR", "TE", "DST"];
+  if (!beta || beta.length !== 15) return identity;
+  return (rows, ctx = {}) => {
+    const pj = r => r.proj ?? r.lab ?? r.cons, R = rows.filter(r => r.vown != null && r.sal > 0 && pj(r) != null), posOf = r => isDst(r.pos) ? "DST" : r.pos.split("/")[0];
+    const qbOwn = {}, teamOwn = {}, rank = new Map(), byPos = {};
+    for (const r of R) { const p = posOf(r); if (p === "QB") qbOwn[r.team] = Math.max(qbOwn[r.team] || 0, r.vown); teamOwn[r.team] = (teamOwn[r.team] || 0) + r.vown; (byPos[p] = byPos[p] || []).push(r); }
+    for (const list of Object.values(byPos)) list.sort((a, b) => b.vown - a.vown).forEach((r, i) => rank.set(r, i));
+    const chalkN = R.filter(r => r.vown >= 20).length, logN = Math.log10(Math.max(100, ctx.n || 5000)), logFee = Math.log(Math.max(1, ctx.fee || 20));
+    for (const r of rows) {
+      if (!R.includes(r) || !POS.includes(posOf(r))) { r.labOwn = r.vown; r.ownDelta = null; continue; }
+      const lp = Math.log(r.vown + 1), p = posOf(r);
+      const x = [1, lp, lp * lp, p === "RB" ? 1 : 0, p === "WR" ? 1 : 0, p === "TE" ? 1 : 0, p === "DST" ? 1 : 0, r.sal / 1000, pj(r) / (r.sal / 1000), Math.min(rank.get(r), 8), Math.log((qbOwn[r.team] || 0) + 1), Math.log((teamOwn[r.team] || 0) + 1), chalkN, logN, logFee];
+      const mult = Math.min(hi, Math.max(lo, Math.exp(x.reduce((s, v, i) => s + v * beta[i], 0))));
+      r.labOwn = +Math.max(0, (r.vown + 1) * mult - 1).toFixed(2); r.ownDelta = +(r.labOwn - r.vown).toFixed(1);
+    }
+    return rows;
+  };
+}
 export const slateDirs = () => fs.readdirSync("data").filter(d => /^\d{4}-\d{2}-\d{2}-nfl-/.test(d) && !/-post$/.test(d) && (fs.existsSync(path.join("data", d, "slate.json")) || fs.readdirSync(path.join("data", d)).some(f => /_Data_Hub_Projections\.csv$/i.test(f)))).sort().reverse();
 export function slateMeta(d) {
   const dir = path.join("data", d), meta = path.join(dir, "slate.json");
@@ -131,6 +170,7 @@ export function hubData(d) {
   }
   // Lab blend: per-position weights 1/MAE^2 from the scorecard (data/reports/source-scorecard-nfl.json byPos); equal weights until it exists
   const W = (() => { try { const bp = JSON.parse(fs.readFileSync("data/reports/source-scorecard-nfl.json", "utf8")).byPos || {}; const m = {}; for (const [pos, b] of Object.entries(bp)) { m[pos] = {}; for (const [s, q] of Object.entries(b)) if (q.mae > 0 && q.n >= 30) m[pos][{ stokastic: "stk", etr: "etr", blick: "blick", market: "mkt" }[s] || s] = 1 / (q.mae * q.mae); } return m; } catch { return {}; } })();
+  const curveFlex = ownCurve(meta.type === "SHOWDOWN" ? "showdown" : "classic", "flex"), curveCpt = ownCurve("showdown", "cpt");
   // consensus and flags
   const rows = [];
   for (const x of P.values()) {
@@ -143,9 +183,14 @@ export function hubData(d) {
     x.spread = srcs.length > 1 ? +(Math.max(...srcs.map(([, v]) => v.proj)) - Math.min(...srcs.map(([, v]) => v.proj))).toFixed(1) : null;
     x.mktGap = x.mkt && vendors.length ? +(x.mkt.proj - vendors.reduce((a, b) => a + b, 0) / vendors.length).toFixed(1) : null;
     x.own = x.stk?.own ?? x.etr?.own ?? x.blick?.own ?? null;
+    // calibrated ownership: the vendors' average, run through the player model (classic) or the bucket curve (showdown)
+    const vown = [x.stk?.own, x.etr?.own, x.blick?.own].filter(v => v != null); x.vown = vown.length ? +(vown.reduce((a, b) => a + b, 0) / vown.length).toFixed(2) : null;
+    x.labOwn = x.vown != null ? curveFlex(x.vown) : null; x.ownDelta = null;
+    if (meta.type === "SHOWDOWN") { const vc = [x.stk?.cptOwn, x.etr?.cptOwn, x.blick?.cptOwn].filter(v => v != null); x.labCptOwn = vc.length ? curveCpt(vc.reduce((a, b) => a + b, 0) / vc.length) : null; }
     x.value = x.cons != null && x.sal ? +(1000 * x.cons / x.sal).toFixed(2) : null;
     rows.push(x);
   }
+  if (meta.type !== "SHOWDOWN") ownModel("classic")(rows);
   rows.sort((a, b) => (b.cons ?? -1) - (a.cons ?? -1));
   // games: slate games with Stokastic team totals and Pinnacle lines + movement since the first snapshot
   const stkTT = {}; for (const x of P.values()) if (x.stk && x.stk.tt > 0) stkTT[x.team] = Math.max(stkTT[x.team] || 0, x.stk.tt);

@@ -7,15 +7,17 @@ import { renderEntries, initEntries } from "./entries.mjs";
 import { renderContests } from "./contests.mjs";
 import { renderReview } from "./review.mjs";
 import { renderSim, initSim } from "./sim.mjs";
+import { renderGen, initGen } from "./gen.mjs";
 
 const LS = "slatelab:hub";
 const saved = (() => { try { return JSON.parse(localStorage.getItem(LS) || "{}"); } catch { return {}; } })();
 const persist = () => { try { localStorage.setItem(LS, JSON.stringify({ date: S.date, slateId: S.slateId, dir: S.dir, tab: S.tab, view: S.view })); } catch {} };
 const nextSlateDate = () => { const d = new Date(), dow = d.getDay(); if (dow >= 2 && dow <= 6) d.setDate(d.getDate() + (7 - dow)); return d.toLocaleString("sv-SE").slice(0, 10); };
-const S = { view: ["hub", "entries", "contests", "review", "sim"].includes(saved.view) ? saved.view : "hub", date: saved.date || nextSlateDate(), slateId: saved.slateId || null, dir: saved.dir || null, slates: [], dirs: [], hub: null, tab: saved.tab || "players", q: "", pos: "ALL", sort: { k: "cons", d: -1 }, busy: false, steps: [], msg: "", err: false, showAll: false, slatesErr: "", changes: null, notes: null };
-initEntries(S); initSim(S);
-// views rebuilt so far are buttons; the rest link to the current app until they are rebuilt
-const VIEWS = [["hub", "Data Hub", "Data Hub", true], ["contests", "Contests", "Contests", true], ["sim", "Simulator", "Simulator", true], ["entries", "Entries", "Entries", true], ["review", "Review", "Review", true], ["gen", "Old Generator", "Old app"]];
+const S = { view: ["hub", "entries", "review", "sim", "gen"].includes(saved.view) ? saved.view : "hub", date: saved.date || nextSlateDate(), slateId: saved.slateId || null, dir: saved.dir || null, slates: [], dirs: [], hub: null, tab: saved.tab || "players", q: "", pos: "ALL", sort: { k: "cons", d: -1 }, busy: false, steps: [], msg: "", err: false, showAll: false, slatesErr: "", changes: null, notes: null };
+initEntries(S); initSim(S); initGen(S);
+// every tab is rebuilt; "Old app" keeps the previous build reachable
+// no Contests tab: a record by contest family measures the old process, not the new one (user, 2026-10-02)
+const VIEWS = [["hub", "Data Hub", "Data Hub", true], ["gen", "Contest Generator", "Generator", true], ["sim", "Pre-Contest Simulator", "Simulator", true], ["entries", "Entries", "Entries", true], ["review", "Review", "Review", true], ["old", "Old app", "Old app"]];
 const api = async (p, opts) => { const r = await fetch(p, opts); const j = await r.json().catch(() => ({ error: r.statusText })); if (!r.ok) throw new Error(j.error || r.statusText); return j; };
 const f1 = v => v == null || isNaN(v) ? "—" : (+v).toFixed(1);
 const f0 = v => v == null || isNaN(v) ? "—" : (+v).toFixed(0);
@@ -116,6 +118,7 @@ function renderMain() {
   if (S.view === "contests") { renderContests(main, ctx); return; }
   if (S.view === "review") { renderReview(main, ctx); return; }
   if (S.view === "sim") { renderSim(main, ctx); return; }
+  if (S.view === "gen") { renderGen(main, ctx); return; }
   if (!H) { main.innerHTML = `<div class="empty">No slate loaded<small>Pick the slate date and the DraftKings slate above, then press Refresh.</small></div>`; return; }
   if (S.tab === "players") renderPlayers(main); else if (S.tab === "games") renderGames(main); else if (S.tab === "captains") renderCaptains(main); else if (S.tab === "changes") renderChanges(main); else if (S.tab === "notes") renderNotes(main); else renderSources(main);
 }
@@ -134,6 +137,8 @@ const COLS = [
   { k: "mkt", l: "Market", n: 1, r: r => `<span title="${esc(r.mkt ? r.mkt.lines : "")}">${f1(r.mkt && r.mkt.proj)}</span>`, s: r => r.mkt ? r.mkt.proj : null, t: "Pinnacle lines turned into DK points" },
   { k: "cons", l: "Cons", n: 1, r: r => `<b>${f1(r.cons)}</b><span class="mini"> /${r.nSrc}</span>`, s: r => r.cons, t: "mean of the sources present" },
   { k: "lab", l: "Lab", n: 1, r: r => `<b>${f1(r.lab)}</b>`, s: r => r.lab, t: "Lab blend: sources weighted by their scorecard accuracy per position" },
+  { k: "labOwn", l: "Model own", n: 1, r: r => pc(r.labOwn), s: r => r.labOwn, t: "predicted actual ownership: the vendors' average run through the player model fit on real fields (classic) or the measured bucket curve (showdown)" },
+  { k: "ownDelta", l: "vs sites", n: 1, r: r => r.ownDelta == null ? "—" : `<span class="${Math.abs(r.ownDelta) >= 3 ? (r.ownDelta > 0 ? "gap dn" : "gap up") : ""}">${r.ownDelta > 0 ? "+" : ""}${r.ownDelta.toFixed(1)}</span>`, s: r => r.ownDelta, t: "Model own minus the vendors' average: + means the field will come in heavier than projected, − lighter (classic only)" },
   { k: "spread", l: "Range", n: 1, r: r => r.spread == null ? "—" : `<span class="${r.spread >= 4 ? "gap dn" : ""}">${f1(r.spread)}</span>`, s: r => r.spread, t: "highest minus lowest source" },
   { k: "mktGap", l: "Mkt−Vend", n: 1, r: r => gapCell(r.mktGap), s: r => r.mktGap, t: "market minus the vendor average" },
   { k: "value", l: "Val", n: 1, r: r => f1(r.value), s: r => r.value, t: "consensus per $1K" },
@@ -203,7 +208,7 @@ async function renderChanges(main) {
   const C = S.changes, mvc = v => `<span class="gap ${v > 0 ? "up" : "dn"}">${v > 0 ? "+" : ""}${v}</span>`;
   const sec = (title, list, cols, row) => `<div style="padding:12px 16px 4px"><b style="font-size:12.5px">${title}</b> <span class="hint">${list.length}</span></div>${list.length ? `<div class="tw" style="max-height:36vh"><table><thead><tr>${cols.map(c => `<th class="na">${c}</th>`).join("")}</tr></thead><tbody>${list.map(row).join("")}</tbody></table></div>` : `<div class="hint" style="padding:0 16px 8px">none</div>`}`;
   main.innerHTML = `<div class="status">${esc(C.label)}</div>
-    ${sec("Injury designations", C.inj, ["Player", "Team", "Pos", "Was", "Now"], x => `<tr><td><b>${esc(x.name)}</b></td><td>${esc(x.team)}</td><td>${esc(x.pos)}</td><td>${esc(x.from)}</td><td><b style="color:#ff8a8a">${esc(x.to)}</b></td></tr>`)}
+    ${sec("Injury designations", C.inj, ["Player", "Team", "Pos", "Was", "Now"], x => `<tr><td><b>${esc(x.name)}</b></td><td>${esc(x.team)}</td><td>${esc(x.pos)}</td><td>${esc(x.from)}</td><td><b style="color:#ff9fb3">${esc(x.to)}</b></td></tr>`)}
     ${sec("Line moves", C.lines, ["Game", "Line", "From", "To", "Move"], x => `<tr><td><b>${esc(x.game)}</b></td><td>${esc(x.k)}</td><td>${x.from}</td><td>${x.to}</td><td>${mvc(x.d)}</td></tr>`)}
     ${sec("Projection moves (half a point or more)", C.proj, ["Player", "Team", "Pos", "Source", "From", "To", "Move"], x => `<tr><td><b>${esc(x.name)}</b></td><td>${esc(x.team)}</td><td>${esc(x.pos)}</td><td>${esc(x.src)}</td><td>${f1(x.from)}</td><td>${f1(x.to)}</td><td>${mvc(x.d)}</td></tr>`)}
     ${sec("Ownership moves (2 points or more)", C.own, ["Player", "Team", "Pos", "Source", "From", "To", "Move"], x => `<tr><td><b>${esc(x.name)}</b></td><td>${esc(x.team)}</td><td>${esc(x.pos)}</td><td>${esc(x.src)}</td><td>${pc(x.from)}</td><td>${pc(x.to)}</td><td>${mvc(x.d)}</td></tr>`)}`;

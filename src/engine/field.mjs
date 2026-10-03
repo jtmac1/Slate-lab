@@ -63,6 +63,12 @@ export function fieldProfile(fee, fkey, fieldN) {
 // several times the baseball rate, because a college slate has far fewer lineups worth building.
 // The baseball quota applied to college was cutting duplicates to a third of the real share.
 const DUPE = { cfb: [0.124, 0.156, 0.273] };
+// NFL classic copies to add, by slate size (o.dupeFloor "auto"; bench/fit-field-dupes-nfl.mjs, 2026-10-02). With conc 1.25 and
+// the optimizer mix the generator matches real duplication on 2-4 game slates by itself (27.8% of entries vs 24.1%) but
+// under-builds it on bigger ones: 10+ games 1.0% vs 3.6%, 5-9 games 3.2% vs 6.1%. A floor of 1.9% copies on main slates (3.2% on 5-9 games) brings
+// it to about 3.7% with chalk per lineup unchanged (169 vs 167 actual-own). The share counted here is extra copies; the
+// share of ENTRIES in a duplicated lineup is about twice that.
+export const nflDupeFloor = games => games >= 10 ? 0.019 : games >= 5 ? 0.032 : 0;
 export function dupeTarget(n, sport, floorOnly) {
   const d = DUPE[sport]; if (d) return n < 300 ? d[0] : n < 1500 ? d[1] : d[2];
   return floorOnly ? 0 : n < 300 ? 0.021 : n < 1500 ? 0.013 : 0.031;
@@ -72,9 +78,12 @@ export function dupeTarget(n, sport, floorOnly) {
 // projected 15-30% came in at 25% and those above 30% at 48%, while everyone under 15% landed
 // on projection. Raising ownership to the power conc and rescaling each position group back
 // to its roster mass reproduces that; the calibration rounds then aim at these targets.
+// conc may be one number or a map by group (e.g. { QB: 1.0, RB: 1.25, WR: 1.2, TE: 1.25, DST: 1.1,
+// default: 1.2 }): real NFL classic fields concentrate RB/WR/TE chalk ~1.15x projection but own
+// QB chalk exactly as projected (bench/fit-contest-profile-nfl.mjs, 371 contests, 2026-10-02).
 function concTargets(P, conc, key, val) {
-  const t = new Float64Array(P.length), raw = {}, mass = {};
-  for (let i = 0; i < P.length; i++) { const g = key(P[i]), o = Math.max(0, val(P[i])) / 100; raw[g] = (raw[g] || 0) + o; t[i] = Math.pow(o, conc); mass[g] = (mass[g] || 0) + t[i]; }
+  const t = new Float64Array(P.length), raw = {}, mass = {}, cOf = g => typeof conc === "number" ? conc : (conc[g] ?? conc.default ?? 1);
+  for (let i = 0; i < P.length; i++) { const g = key(P[i]), o = Math.max(0, val(P[i])) / 100; raw[g] = (raw[g] || 0) + o; t[i] = Math.pow(o, cOf(g)); mass[g] = (mass[g] || 0) + t[i]; }
   for (let i = 0; i < P.length; i++) { const g = key(P[i]); t[i] = mass[g] > 0 ? t[i] * raw[g] / mass[g] : 0; }
   return t;
 }
@@ -238,7 +247,7 @@ function genFieldNFL(pool, n, o, rng, log) {
     o.minSal -= 500; const more = draw(n - field.length, cnt); for (const lu of more) field.push(lu);
     lines.push(`salary floor relaxed to ${o.minSal}: +${more.length} entries`);
   }
-  const share = typeof o.dupeFloor === "number" ? o.dupeFloor : o.dupeFloor === true ? dupeTarget(field.length, f.sport, true) : 0;
+  const share = typeof o.dupeFloor === "number" ? o.dupeFloor : o.dupeFloor === true ? dupeTarget(field.length, f.sport, true) : o.dupeFloor === "auto" && !cfb ? nflDupeFloor(ng) : 0;
   const made = share ? addDuplicates(field, P, f, rng, share, cnt, cnt) : 0;
   lines.push(`final: ${field.length} entries, mean ownership gap ${gap(t, cnt, field.length || 1, np).toFixed(2)} pts${made ? `, ${made} duplicates added to reach ${(100 * share).toFixed(1)}%` : ""}`);
   if (log) lines.forEach(log);
