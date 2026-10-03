@@ -50,6 +50,35 @@ async function refresh(q) {
   const hub = dir ? await step("merge", () => { const h = hubData(dir); saveMerge(dir, h); return h; }) : null;
   return { steps, hub };
 }
+// "Pull ETR + Blick" (user-approved 2026-10-03): a one-shot headless Claude Code run (claude -p --chrome) with the job in
+// bench/pull-vendors.prompt.md, allowed only the Chrome tools, writes under data/, and curl to this server. It posts its own
+// progress to /api/pull-status; when it exits, its final line (or the failure) becomes the status if it didn't post one.
+const PULL_MODEL = process.env.SLATELAB_PULL_MODEL || "claude-sonnet-5";
+function pullStatus(patch) { const sf = "data/requests/status.json"; const cur = fs.existsSync(sf) ? JSON.parse(fs.readFileSync(sf, "utf8")) : {}; fs.writeFileSync(sf, JSON.stringify(Object.assign(cur, patch, { updated: new Date().toISOString() }))); return cur; }
+function startPull(r) {
+  const meta = slateMeta(r.dir), sd = meta.type === "SHOWDOWN", wk = (() => { const m = fs.readdirSync(path.join("data", r.dir)).join(" ").match(/(\d{4})wk(\d\d)/); return m ? m[1] + "wk" + m[2] : `${meta.date.slice(0, 4)}wk00`; })();
+  const etrMain = `Open https://establishtherun.com/draftkings-fanduel-yahoo-projections/ and wait 4 seconds. The DraftKings table is the FIRST AG Grid on the page; read every row from React in one step (no scrolling):
+     const el=document.querySelectorAll('.ag-root-wrapper')[0]; const fk=Object.keys(el).find(k=>k.startsWith('__reactFiber')); let f=el[fk]; while(f&&!(f.memoizedProps&&Array.isArray(f.memoizedProps.rowData))) f=f.return;
+     const D=f.memoizedProps.rowData.filter(o=>o.projection>=2||o.largeOwnership>0);
+     window.__C=['player,team,opponent,position,salary,projection,floor,ceiling,largeOwnership,smallOwnership'].concat(D.map(o=>[String(o.player).includes(',')?'"'+o.player+'"':o.player,o.team,o.opponent,o.position,o.salary,o.projection,o.floor,o.ceiling,o.largeOwnership,o.smallOwnership].join(','))).join('\\n');
+     'rows '+D.length+' chars '+window.__C.length+' | '+((document.body.innerText.match(/DraftKings NFL DFS Projections[^\\n]*\\n[^\\n]*/)||[''])[0])
+   Read window.__C in 950-character slices with browser_batch, join exactly, and Write data/${r.dir}/ETR-main-${meta.date}.csv .`;
+  const etrSd = `Open https://establishtherun.com/draftkings-showdown-and-fanduel-single-game-projections/?site=DK and use get_page_text. It lists all player names first, then 10 fields per player (Pos, Team, Salary, Proj, Ceiling, Total Own, CPT Own, CPT Salary, CPT Proj, Slate); zip them in order, keep only this game (${meta.games.join(" ")}), strip $ , %, and Write data/${r.dir}/ETR-showdown-${meta.games.join("").replace("@", "")}-${meta.date}.csv with header Player,Pos,Team,Salary,Proj,Ceiling,Total Own,CPT Own,CPT Salary,CPT Proj .`;
+  const vars = { DIR: r.dir, TYPE: meta.type, DATE: meta.date, SLATEID: String(meta.slateId || ""), GAMES: meta.games.join(" "), ETR_STEPS: sd ? etrSd : etrMain,
+    BLICK_URL: sd ? "https://blickanalytics.com/nfl/showdown-ownership-gpp" : "https://blickanalytics.com/nfl/ownership-gpp", BLICK_NEXT: sd ? "%2Fnfl%2Fshowdown-ownership-gpp" : "%2Fnfl%2Fownership-gpp",
+    BLICK_FILE: sd ? `nfl-${meta.games.join("-").replace("@", "-").toLowerCase()}-showdown-${wk}.csv` : `nfl-main-${wk}.csv` };
+  const prompt = fs.readFileSync("bench/pull-vendors.prompt.md", "utf8").replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? m);
+  const args = ["-p", "--chrome", "--model", PULL_MODEL, "--output-format", "json", "--allowedTools", "mcp__claude-in-chrome", "Edit(data/**)", "Write(data/**)", "Read", "Bash(curl:*)", "--", prompt];
+  pullStatus({ status: "working", message: "Claude started" });
+  const child = execFile("claude", args, { cwd: ROOT, timeout: 15 * 60000, maxBuffer: 32e6, windowsHide: true }, (err, out) => {
+    let result = null; try { result = JSON.parse(String(out)); } catch {}
+    const cur = pullStatus({});
+    if (cur.status === "done" || cur.status === "error") return pullStatus({ cost: result && result.total_cost_usd, ms: result && result.duration_ms });
+    if (err && !result) return pullStatus({ status: "error", message: "Claude run failed: " + String(err.message).split("\n")[0].slice(0, 200) });
+    pullStatus({ status: result && !result.is_error ? "done" : "error", message: String(result && result.result || "finished without a report").split("\n").pop().slice(0, 300), cost: result && result.total_cost_usd, ms: result && result.duration_ms });
+  });
+  pullStatus({ pid: child.pid });
+}
 async function nightly() {
   if (nightlyRunning) return { running: true }; nightlyRunning = true;
   const log = [], t0 = Date.now();
@@ -75,6 +104,11 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/sim" && req.method === "POST") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); if (simming) return json(res, 409, { error: "sim already running" }); simming = true; try { return json(res, 200, fourSourceSim(d)); } finally { simming = false; } }
     if (p === "/api/field") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); if (req.method === "POST") { if (simming) return json(res, 409, { error: "sim already running" }); simming = true; try { return json(res, 200, buildField(d, JSON.parse((await body(req)).toString("utf8") || "{}"))); } finally { simming = false; } } return json(res, 200, stripField(loadField(d))); }
     if (p === "/api/simrun") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); if (req.method === "POST") { if (simming) return json(res, 409, { error: "sim already running" }); simming = true; try { return json(res, 200, runSim(d, JSON.parse((await body(req)).toString("utf8") || "{}"))); } finally { simming = false; } } return json(res, 200, loadSimRun(d) || { rows: [] }); }
+    // "Pull ETR + Blick": the site files a request (data/requests/requests.log, one JSON line each); an open Claude session
+    // watching that file pulls the CSVs through the user's logged-in Chrome, ingests them, refreshes, and reports progress back
+    // through POST /api/pull-status. GET returns the latest request with its status.
+    if (p === "/api/pull-request") { const rq = "data/requests", sf = path.join(rq, "status.json"); fs.mkdirSync(rq, { recursive: true }); if (req.method === "POST") { const q = JSON.parse((await body(req)).toString("utf8") || "{}"); if (!safeDir(q.dir)) return json(res, 400, { error: "dir" }); const cur = fs.existsSync(sf) ? JSON.parse(fs.readFileSync(sf, "utf8")) : {}; if (/pending|working/.test(cur.status) && Date.now() - Date.parse(cur.at) < 20 * 60000) return json(res, 409, Object.assign({ error: "a pull is already running" }, cur)); const r = { id: Date.now().toString(36), dir: q.dir, sources: q.sources || ["etr", "blick"], at: new Date().toISOString(), status: "pending", message: "starting Claude" }; fs.appendFileSync(path.join(rq, "requests.log"), JSON.stringify(r) + "\n"); fs.writeFileSync(sf, JSON.stringify(r)); startPull(r); return json(res, 200, r); } return json(res, 200, fs.existsSync(sf) ? JSON.parse(fs.readFileSync(sf, "utf8")) : { status: "none" }); }
+    if (p === "/api/pull-status" && req.method === "POST") { const sf = path.join("data/requests", "status.json"); const q = JSON.parse((await body(req)).toString("utf8") || "{}"); const cur = fs.existsSync(sf) ? JSON.parse(fs.readFileSync(sf, "utf8")) : {}; const r = Object.assign(cur, q, { updated: new Date().toISOString() }); fs.mkdirSync("data/requests", { recursive: true }); fs.writeFileSync(sf, JSON.stringify(r)); return json(res, 200, r); }
     // Entry Manager plan: which lineups go into which contests for the slate (data/<slate>/entry-plan.json); graded after the slate
     if (p === "/api/plan") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); const f = path.join("data", d, "entry-plan.json"); if (req.method === "POST") { const q = JSON.parse((await body(req)).toString("utf8") || "{}"); q.savedAt = new Date().toISOString(); fs.writeFileSync(f, JSON.stringify(q, null, 1)); return json(res, 200, q); } return json(res, 200, fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : { contests: [] }); }
     if (p === "/api/brain") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); if (req.method === "POST") { const q = JSON.parse((await body(req)).toString("utf8") || "{}"); try { return json(res, 200, q.portfolio ? await reviewPortfolio(d, q.sigs || []) : await reviewLineups(d, q.sigs || [], { max: q.max })); } catch (e) { return json(res, 500, { error: e.message }); } } return json(res, 200, Object.assign(brainStatus(d), { reviews: loadBrain(d).reviews || {} })); }

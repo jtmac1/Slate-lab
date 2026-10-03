@@ -39,6 +39,14 @@ export function ownCurve(fmt, group = "flex") {
 // within position, the team's QB ownership and the slate's chalk. 2026 hold-out on chalk (15%+):
 // MAE 7.5 vs 8.7 for the bucket curve vs 9.7 for the vendors' number; direction right 86% of the time.
 // Classic only. Returns (rows, ctx) => rows with labOwn/ownDelta set; rows need pos, team, sal, proj, vown.
+// when each vendor last published (its own stamp, as shown on its page) and when Slate Lab last pulled it: from
+// data/<slate>/vendor-stamps.json ({etr:{updated,checked}, blick:{...}}, written on manual pulls) or, failing that, the last
+// "Pull ETR + Blick" run for this slate (its done message carries "ETR 227 (stamp), Blick 237 (stamp)")
+export function vendorStamps(dir, src) {
+  try { const v = JSON.parse(fs.readFileSync(path.join("data", dir, "vendor-stamps.json"), "utf8"))[src]; if (v && v.updated) return v; } catch {}
+  try { const st = JSON.parse(fs.readFileSync("data/requests/status.json", "utf8")); if (st.dir === dir && st.status === "done") { const m = String(st.message).match(src === "etr" ? /ETR \d+ \(([^)]+)\)/ : /Blick \d+ \(([^)]+)\)/); if (m) return { updated: m[1], checked: st.updated }; } } catch {}
+  return {};
+}
 export function ownModel(fmt = "classic") {
   const identity = rows => rows.map(r => Object.assign(r, { labOwn: r.vown, ownDelta: null }));
   if (fmt !== "classic") return identity;
@@ -142,7 +150,7 @@ export function hubData(d) {
     let n = 0;
     // ETR showdown "Total Own" is captain + flex combined (sums to ~600%); Stokastic and Blick report flex alone (~500%), so split it the same way
     for (const r of t.rows) { const base = { name: r[c.n], pos: String(r[c.p] || "").toUpperCase(), team: tm(r[c.tmc]), sal: c.s >= 0 ? num(r[c.s]) : null }; const x = get(key(r[c.n], r[c.tmc], r[c.p]), base); fill(x, base); const total = num(r[c.own]), cpt = c.cpt >= 0 ? num(r[c.cpt]) : null; x.etr = { proj: num(r[c.j]), own: sd && total != null && cpt != null ? +Math.max(0, total - cpt).toFixed(1) : total, ownTotal: sd ? total : null, ownSmall: c.small >= 0 ? num(r[c.small]) : null, cptOwn: cpt, floor: c.fl >= 0 ? num(r[c.fl]) : null, ceil: c.ce >= 0 ? num(r[c.ce]) : null }; n++; }
-    sources.etr = { file: path.basename(etrF), mtime: t.mtime, rows: n };
+    const vs = vendorStamps(d, "etr"); sources.etr = { file: path.basename(etrF), mtime: t.mtime, rows: n, updated: vs.updated, checked: vs.checked || t.mtime };
   }
   // Blick (main or showdown layout)
   const blickF = files.find(f => /^nfl-.*\.csv$/i.test(f));
@@ -151,7 +159,7 @@ export function hubData(d) {
     const c = { n: t.col("player"), tmc: t.col("team"), p: t.col("pos"), s: sd ? t.col("flex $") : t.col("$"), j: t.col("proj"), own: sd ? t.col("flex own %") : t.col("own mme %"), se: t.col("own se %"), hs: t.col("own hs %"), cpt: t.col("cpt own %"), gpp: sd ? t.col("flex gpp score") : t.col("gpp score"), ce: t.col("ceiling"), sce: t.col("super ceiling") };
     let n = 0;
     for (const r of t.rows) { const proj = num(r[c.j]); const base = { name: r[c.n], pos: String(r[c.p] || "").toUpperCase(), team: tm(r[c.tmc]), sal: c.s >= 0 ? num(r[c.s]) : null }; const x = get(key(r[c.n], r[c.tmc], r[c.p]), base); fill(x, base); x.blick = { proj, own: num(r[c.own]), ownSE: c.se >= 0 ? num(r[c.se]) : null, ownHS: c.hs >= 0 ? num(r[c.hs]) : null, cptOwn: c.cpt >= 0 ? num(r[c.cpt]) : null, gpp: num(r[c.gpp]), ceil: num(r[c.ce]), superCeil: c.sce >= 0 ? num(r[c.sce]) : null }; if (proj > 0) n++; }
-    sources.blick = { file: blickF, mtime: t.mtime, rows: n, stale: n === 0 };
+    const vs = vendorStamps(d, "blick"); sources.blick = { file: blickF, mtime: t.mtime, rows: n, stale: n === 0, updated: vs.updated, checked: vs.checked || t.mtime };
   }
   // Pinnacle market
   const mk = marketFor(teams, meta.date);
@@ -166,7 +174,7 @@ export function hubData(d) {
   if (fs.existsSync("data/nfl-ref/injuries.json")) {
     const inj = JSON.parse(fs.readFileSync("data/nfl-ref/injuries.json", "utf8")), byKey = new Map(inj.rows.map(r => [nrm(r.name) + "|" + r.team, r]));
     let n = 0; for (const x of P.values()) { const r = byKey.get(x.key); if (r && r.status !== "Active") { x.inj = { status: r.status, note: r.note, date: r.date }; n++; } }
-    sources.injuries = { at: inj.at, flagged: n };
+    const latest = inj.rows.reduce((m, r) => r.date && r.date > m ? r.date : m, ""); sources.injuries = { at: inj.at, flagged: n, latest: latest ? latest.replace(/Z$/, ":00Z") : null };
   }
   // Lab blend: per-position weights 1/MAE^2 from the scorecard (data/reports/source-scorecard-nfl.json byPos); equal weights until it exists
   const W = (() => { try { const bp = JSON.parse(fs.readFileSync("data/reports/source-scorecard-nfl.json", "utf8")).byPos || {}; const m = {}; for (const [pos, b] of Object.entries(bp)) { m[pos] = {}; for (const [s, q] of Object.entries(b)) if (q.mae > 0 && q.n >= 30) m[pos][{ stokastic: "stk", etr: "etr", blick: "blick", market: "mkt" }[s] || s] = 1 / (q.mae * q.mae); } return m; } catch { return {}; } })();

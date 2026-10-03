@@ -22,7 +22,25 @@ const api = async (p, opts) => { const r = await fetch(p, opts); const j = await
 const f1 = v => v == null || isNaN(v) ? "—" : (+v).toFixed(1);
 const f0 = v => v == null || isNaN(v) ? "—" : (+v).toFixed(0);
 const pc = v => v == null || isNaN(v) ? "—" : (+v).toFixed(1) + "%";
-const when = iso => iso ? new Date(iso).toLocaleString([], { month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—";
+// every time on the page is Central, 12-hour (user, 2026-10-03)
+const CT = "America/Chicago";
+const when = iso => { if (!iso) return "—"; const d = iso instanceof Date ? iso : new Date(iso); return isNaN(d) ? String(iso) : d.toLocaleString("en-US", { timeZone: CT, month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit" }) + " CT"; };
+const clockCT = d => d.toLocaleString("en-US", { timeZone: CT, hour: "numeric", minute: "2-digit" });
+// a wall-clock time in a named zone ("2026-10-04T13:00:00" in America/New_York) to a real instant
+const zoned = (local, tz) => {
+  const guess = new Date(local + "Z"), p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: tz, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).formatToParts(guess).map(x => [x.type, x.value]));
+  const offset = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second) - guess.getTime();   // the zone's UTC offset at that moment
+  return new Date(guess.getTime() - offset);
+};
+// vendor stamps as their sites print them: ETR "Fri, Oct 02, 2026 10:09PM CDT", Blick "2026-10-03 01:29 AM ET"
+const vendorTime = s => { if (!s) return null; const t = String(s);
+  let m = t.match(/(\w{3})\w*\s+(\d{1,2}),\s*(\d{4})\s+(\d{1,2}):(\d{2})\s*([AP]M)\s*(C[DS]T|E[DS]T|ET|CT)?/i);
+  if (m) { const mo = "JanFebMarAprMayJunJulAugSepOctNovDec".indexOf(m[1].slice(0, 3)) / 3 + 1, h = (+m[4] % 12) + (/P/i.test(m[6]) ? 12 : 0); return zoned(`${m[3]}-${String(mo).padStart(2, "0")}-${m[2].padStart(2, "0")}T${String(h).padStart(2, "0")}:${m[5]}:00`, /^E/i.test(m[7] || "") ? "America/New_York" : CT); }
+  m = t.match(/(\d{4}-\d{2}-\d{2})\s+(\d{1,2}):(\d{2})\s*([AP]M)\s*(ET|CT)?/i);
+  if (m) { const h = (+m[2] % 12) + (/P/i.test(m[4]) ? 12 : 0); return zoned(`${m[1]}T${String(h).padStart(2, "0")}:${m[3]}:00`, /^C/i.test(m[5] || "") ? CT : "America/New_York"); }
+  const d = new Date(t); return isNaN(d) ? null : d; };
+// the league picker: real league marks (ESPN's league logos); only NFL is rebuilt so far
+const LEAGUES = [["nfl", "NFL", "https://a.espncdn.com/i/teamlogos/leagues/500/nfl.png", true], ["cfb", "College Football", "https://a.espncdn.com/i/teamlogos/ncaa/500/ncaa.png", false], ["mlb", "MLB", "https://a.espncdn.com/i/teamlogos/leagues/500/mlb.png", false]];
 const ago = iso => { if (!iso) return ""; const m = Math.round((Date.now() - new Date(iso)) / 60000); return m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`; };
 const nameCell = p => { const parts = String(p.name || "").split(" "), first = parts.shift(); return `<span class="pname"><span class="first">${esc(first)}</span> ${esc(parts.join(" "))}</span>${p.inj ? `<span class="inj${/Questionable/i.test(p.inj.status) ? " q" : ""}" title="${esc(p.inj.note || "")}">${esc(p.inj.status.replace("Injured Reserve", "IR").slice(0, 4).toUpperCase())}</span>` : (p.stk && p.stk.inj ? `<span class="inj q">${esc(p.stk.inj.slice(0, 4).toUpperCase())}</span>` : "")}`; };
 const teamCell = t => `<span class="tm"><i></i>${esc(t || "?")}</span>`;
@@ -63,38 +81,50 @@ async function upload(file) {
 function render() {
   const app = $("#app"), H = S.hub;
   app.innerHTML = `<nav class="nav"><div class="brand"><i></i>SLATE LAB</div><div class="links">${VIEWS.map(([k, l, s, live]) => live ? `<button class="lnk" data-view="${k}" aria-selected="${S.view === k}"><span class="long">${l}</span><span class="short">${s}</span></button>` : `<a class="lnk" href="index.html" title="Not rebuilt yet; opens the current app"><span class="long">${l}</span><span class="short">${s}</span></a>`).join("")}</div><div class="grow"></div>
-    <div class="right"><span class="st">${H ? `<span class="ok">✓</span> ${esc(H.slate.name || H.dir)}` : "No slate loaded"}</span></div></nav>
-    ${slateBar()}<div id="ctl">${ctl()}</div><div class="prog"><i id="prog"${S.busy ? ' style="width:60%"' : ""}></i></div><div id="status" class="status">${S.err ? `<span class="err">${esc(S.msg)}</span>` : esc(S.msg)}</div>${S.view === "hub" ? steps() + srcStrip() : ""}<div id="tabs">${S.view === "hub" ? tabs() : ""}</div><div id="main"></div><div id="bot"></div>`;
+</nav>
+    <div id="ctl">${ctl()}</div><div class="prog"><i id="prog"${S.busy ? ' style="width:60%"' : ""}></i></div><div id="status" class="status">${S.err ? `<span class="err">${esc(S.msg)}</span>` : esc(S.msg)}</div>${S.view === "hub" ? steps() + srcStrip() : ""}<div id="tabs">${S.view === "hub" ? tabs() : ""}</div><div id="main"></div><div id="bot"></div>`;
   $$(".lnk[data-view]").forEach(b => b.addEventListener("click", () => { S.view = b.getAttribute("data-view"); persist(); render(); }));
   wireCtl(); renderMain();
 }
-function slateBar() {
-  const H = S.hub; if (!H) return `<div class="slatebar"><span><span class="warn">!</span> <b>Slate</b> nothing loaded yet. Pick a date and slate, then Refresh.</span></div>`;
-  const s = H.slate, st = H.sources.stokastic;
-  return `<div class="slatebar"><span><span class="ok">✓</span> <b>${esc(s.type === "SHOWDOWN" ? "Showdown" : "Classic")}</b> ${esc(s.name || s.code)} · ${s.games.length} game${s.games.length === 1 ? "" : "s"} · ${s.games.map(esc).join(" ")}</span>
-    <span><b>Players</b> ${H.rows.length} (${H.rows.filter(r => r.nSrc >= 2).length} with 2+ sources)</span>
-    <span><b>Stokastic</b> ${st ? `proj ${when(st.projUpdated)} · own ${when(st.ownUpdated)}` : "none"}</span><span><b>Merged</b> ${when(H.builtAt)}</span></div>`;
+function leaguePicker() {
+  const cur = LEAGUES.find(l => l[0] === "nfl");
+  return `<div class="lgpick"><button class="sel lgbtn" id="lgbtn" type="button"><img src="${cur[2]}" alt="" width="20" height="20"> ${cur[1]}</button>${S.lgOpen ? `<div class="menu lgmenu">${LEAGUES.map(([k, l, img, live]) => `<button type="button" data-lg="${k}"${live ? "" : " disabled title=\"not rebuilt yet\""}><img src="${img}" alt="" width="22" height="22"> ${l}${live ? "" : ' <span class="mini">soon</span>'}</button>`).join("")}</div>` : ""}</div>`;
 }
 function ctl() {
-  const slateOpts = S.slates.map(s => `<option value="${s.slateId}"${String(s.slateId) === String(S.slateId) ? " selected" : ""}>${esc(s.name)} · ${s.type === "SHOWDOWN" ? "Showdown" : "Classic"} · ${s.games.length} gm · ${esc(s.start.slice(11, 16))} ET</option>`).join("");
+  // Stokastic's slate starts are Eastern wall-clock times; show them in Central, 12-hour
+  const slateOpts = S.slates.map(s => `<option value="${s.slateId}"${String(s.slateId) === String(S.slateId) ? " selected" : ""}>${esc(s.name)} · ${s.type === "SHOWDOWN" ? "Showdown" : "Classic"} · ${s.games.length} gm · ${esc(clockCT(zoned(s.start.slice(0, 19), "America/New_York")))} CT</option>`).join("");
   const dirOpts = S.dirs.slice(0, 20).map(d => `<option value="dir:${d.dir}"${d.dir === S.dir && !S.slates.some(s => String(s.slateId) === String(S.slateId) && String(s.slateId) === String(d.slateId)) ? " selected" : ""}>${esc(d.date)} ${esc(d.name || d.code)} (${d.games.length || "?"} gm)</option>`).join("");
   return `<div class="ctl">
-    <div class="f"><label>League</label><select class="sel" id="league"><option value="nfl" selected>🏈 NFL</option></select></div>
+    <div class="f"><label>League</label>${leaguePicker()}</div>
     <div class="f"><label>Slate date</label><input class="txt" type="date" id="date" value="${S.date}"></div>
     <div class="f wide"><label>Slate ${S.slatesErr ? `<span class="hint">(Stokastic: ${esc(S.slatesErr)})</span>` : ""}</label><select class="sel" id="slate" style="min-width:260px">${slateOpts ? `<optgroup label="Stokastic · ${S.date}">${slateOpts}</optgroup>` : `<option value="">no DK slates on ${S.date}</option>`}${dirOpts ? `<optgroup label="Saved folders">${dirOpts}</optgroup>` : ""}</select></div>
     <div class="f cta"><label>&nbsp;</label><button class="btn refresh${S.busy ? " busy" : ""}" id="refresh"${S.busy ? " disabled" : ""}>${S.busy ? "Refreshing…" : "⟳ Refresh"}</button></div>
-    <div class="f"><label>&nbsp;</label><button class="btn sec" id="markBuilt" title="Snapshot every source now; What changed diffs against it"${S.hub ? "" : " disabled"}>Mark as built</button></div>
-    <div class="f"><label>&nbsp;</label><label class="drop sm btn sec" id="drop" title="ETR or Blick CSV">Drop ETR / Blick CSV <input type="file" id="file" accept=".csv" multiple></label></div>
-    <div class="stamp">${S.hub ? `folder data/${esc(S.hub.dir)}` : ""}<br>${S.hub && S.hub.sources.market ? `Pinnacle ${esc(S.hub.sources.market.stamp.slice(5, 10))} ${esc(S.hub.sources.market.stamp.slice(11, 13))}:${esc(S.hub.sources.market.stamp.slice(13))}` : ""}</div></div>`;
+    <div class="f"><label>&nbsp;</label><button class="btn sec" id="pullVend" title="Starts a short Claude run that pulls ETR and Blick in your logged-in Chrome, files them and refreshes. Chrome must be open with the Claude extension connected."${S.hub && !(S.pull && /pending|working/.test(S.pull.status)) ? "" : " disabled"}>${S.pull && /pending|working/.test(S.pull.status) ? `Pulling… <span class="mini">${esc(S.pull.message || "")}</span>` : "⤓ Pull ETR + Blick"}</button></div>
+    <div class="f"><label>&nbsp;</label><label class="drop sm btn sec" id="drop" title="ETR or Blick CSV">Drop ETR / Blick CSV <input type="file" id="file" accept=".csv" multiple></label></div></div>`;
 }
 function wireCtl() {
   $("#date").addEventListener("change", async e => { S.date = e.target.value; persist(); await loadSlates(); render(); });
   $("#slate").addEventListener("change", async e => { const v = e.target.value; if (v.startsWith("dir:")) { S.dir = v.slice(4); const d = S.dirs.find(x => x.dir === S.dir); if (d && d.slateId) S.slateId = d.slateId; await loadHub(); } else { S.slateId = v; const d = S.dirs.find(x => String(x.slateId) === String(v)); if (d) { S.dir = d.dir; await loadHub(); } } persist(); render(); });
   $("#refresh").addEventListener("click", refresh);
-  $("#markBuilt").addEventListener("click", async () => { try { await api(`/api/built?dir=${encodeURIComponent(S.hub.dir)}`, { method: "POST" }); S.changes = null; setMsg("Marked as built: What changed now diffs against this moment"); if (S.tab === "changes") render(); } catch (e) { setMsg("Could not mark: " + e.message, true); } });
+  const lb = $("#lgbtn"); if (lb) lb.addEventListener("click", () => { S.lgOpen = !S.lgOpen; render(); });
+  $$("[data-lg]").forEach(b => b.addEventListener("click", () => { S.lgOpen = false; render(); }));
+  const pv = $("#pullVend"); if (pv) pv.addEventListener("click", async () => { try { S.pull = await api("/api/pull-request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dir: S.hub.dir, sources: ["etr", "blick"] }) }); setMsg("Asked Claude to pull ETR + Blick; this updates as it works"); render(); watchPull(); } catch (e) { setMsg("Could not file the request: " + e.message, true); } });
   const inp = $("#file"); inp.addEventListener("change", async e => { for (const f of Array.from(e.target.files || [])) await upload(f); try { e.target.value = ""; } catch {} });
   const zone = $("#drop"); ["dragenter", "dragover"].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.add("over"); })); ["dragleave", "drop"].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.remove("over"); }));
   zone.addEventListener("drop", async e => { for (const f of Array.from(e.dataTransfer.files || [])) await upload(f); });
+}
+// follow a pull request while it's open: every 3s until Claude marks it done or failed (or 20 minutes pass with nobody picking it up)
+let pullTimer = null;
+function watchPull() {
+  if (pullTimer) return; const t0 = Date.now();
+  pullTimer = setInterval(async () => {
+    try { const r = await api("/api/pull-request"); const was = S.pull && S.pull.status + (S.pull.message || ""); S.pull = r;
+      if (r.status === "done") { clearInterval(pullTimer); pullTimer = null; setMsg("ETR + Blick pulled: " + (r.message || "done")); await loadHub(); render(); return; }
+      if (r.status === "error") { clearInterval(pullTimer); pullTimer = null; setMsg("Pull failed: " + (r.message || "unknown"), true); render(); return; }
+      if (/pending|working/.test(r.status) && Date.now() - t0 > 16 * 60000) { clearInterval(pullTimer); pullTimer = null; await api("/api/pull-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "error", message: "the Claude run didn't finish in 15 minutes" }) }); S.pull.status = "error"; setMsg("The pull didn't finish in 15 minutes. Check that Chrome is open with the Claude extension connected.", true); render(); return; }
+      if (r.status + (r.message || "") !== was) render();
+    } catch { /* server restarting: keep waiting */ }
+  }, 3000);
 }
 function steps() { if (!S.steps.length) return ""; return `<div class="steps">${S.steps.map(s => `<span class="${s.ok ? "ok" : "bad"}">${s.ok ? "✓" : "✗"} ${esc(s.name)} ${s.ok ? esc(stepInfo(s)) : esc(s.error)} <span class="mini">${(s.ms / 1000).toFixed(1)}s</span></span>`).join("")}</div>`; }
 function stepInfo(s) { const i = s.info || {}; if (s.name === "stokastic") return `${i.projected} projected, ${i.changed ? "new numbers" : "unchanged"}`; if (s.name === "pinnacle") return `${i.games} games, ${i.props} props`; if (s.name === "ingest") return i.copied.length ? i.copied.join("; ") : "nothing new in Downloads"; if (s.name === "injuries") return `${i.notActive} flagged`; if (s.name === "merge") return `${i.rows.length} players`; return ""; }
@@ -102,11 +132,11 @@ function srcStrip() {
   const H = S.hub; if (!H) return "";
   const s = H.sources, box = (cls, name, line, sub) => `<div class="src ${cls}"><i></i><div><b>${name}</b> ${line}<small>${sub}</small></div></div>`;
   return `<div class="srcs">
-    ${s.stokastic ? box("ok", "Stokastic", `${s.stokastic.rows} players`, `proj ${when(s.stokastic.projUpdated)} · own ${when(s.stokastic.ownUpdated)} · pulled ${ago(s.stokastic.pulledAt)}`) : box("bad", "Stokastic", "not pulled", "pick the slate and Refresh")}
-    ${s.etr ? box("ok", "ETR", `${s.etr.rows} players`, `${esc(s.etr.file)} · ${ago(s.etr.mtime)}`) : box("warn", "ETR", "no file", "download the CSV from ETR; it files itself")}
-    ${s.blick ? box(s.blick.stale ? "warn" : "ok", "Blick", s.blick.stale ? "file has zero projections" : `${s.blick.rows} players`, `${esc(s.blick.file)} · ${ago(s.blick.mtime)}`) : box("warn", "Blick", "no file", "download from Discord; it files itself")}
-    ${s.market ? box("ok", "Pinnacle", `${s.market.rows} players`, `pulled ${ago(s.market.pulledAt)} · ${s.market.snapshots} snapshot${s.market.snapshots === 1 ? "" : "s"} this week`) : box("warn", "Pinnacle", "no lines for these games", "Refresh pulls the current week")}
-    ${s.injuries ? box("ok", "Injuries", `${s.injuries.flagged} flagged`, `ESPN · ${ago(s.injuries.at)}`) : box("warn", "Injuries", "not pulled", "Refresh pulls ESPN")}
+    ${s.stokastic ? box("ok", "Stokastic", `${s.stokastic.rows} players`, `proj ${when(s.stokastic.projUpdated)} · own ${when(s.stokastic.ownUpdated)} · checked ${ago(s.stokastic.pulledAt)}`) : box("bad", "Stokastic", "not pulled", "pick the slate and Refresh")}
+    ${s.etr ? box("ok", "ETR", `${s.etr.rows} players`, `${s.etr.updated ? `updated ${when(vendorTime(s.etr.updated))}` : "update time unknown"} · checked ${ago(s.etr.checked || s.etr.mtime)}`) : box("warn", "ETR", "not pulled", "press Pull ETR + Blick")}
+    ${s.blick ? box(s.blick.stale ? "warn" : "ok", "Blick", s.blick.stale ? "file has zero projections" : `${s.blick.rows} players`, `${s.blick.updated ? `updated ${when(vendorTime(s.blick.updated))}` : "update time unknown"} · checked ${ago(s.blick.checked || s.blick.mtime)}`) : box("warn", "Blick", "not pulled", "press Pull ETR + Blick")}
+    ${s.market ? box("ok", "Pinnacle", `${s.market.rows} players`, `lines ${when(s.market.pulledAt)} · checked ${ago(s.market.pulledAt)}`) : box("warn", "Pinnacle", "no lines for these games", "Refresh pulls the current week")}
+    ${s.injuries ? box("ok", "ESPN", `${s.injuries.flagged} injuries`, `${s.injuries.latest ? `latest report ${when(s.injuries.latest)}` : "no reports"} · checked ${ago(s.injuries.at)}`) : box("warn", "ESPN", "injuries not pulled", "Refresh pulls ESPN")}
   </div>`;
 }
 function tabs() { const H = S.hub, sd = H && H.slate.type === "SHOWDOWN"; return `<div class="tabs">${[["players", "Players", H ? H.rows.length : ""], ...(sd ? [["captains", "Captains"]] : []), ["games", "Games", H ? H.games.length : ""], ["changes", "What changed"], ["notes", "Notes"], ["sources", "Sources"]].map(([k, l, n]) => `<button class="tab" data-tab="${k}" aria-selected="${S.tab === k}">${l}${n !== "" && n != null ? `<span class="n">${n}</span>` : ""}</button>`).join("")}</div>`; }
@@ -212,7 +242,7 @@ async function renderChanges(main) {
     ${sec("Line moves", C.lines, ["Game", "Line", "From", "To", "Move"], x => `<tr><td><b>${esc(x.game)}</b></td><td>${esc(x.k)}</td><td>${x.from}</td><td>${x.to}</td><td>${mvc(x.d)}</td></tr>`)}
     ${sec("Projection moves (half a point or more)", C.proj, ["Player", "Team", "Pos", "Source", "From", "To", "Move"], x => `<tr><td><b>${esc(x.name)}</b></td><td>${esc(x.team)}</td><td>${esc(x.pos)}</td><td>${esc(x.src)}</td><td>${f1(x.from)}</td><td>${f1(x.to)}</td><td>${mvc(x.d)}</td></tr>`)}
     ${sec("Ownership moves (2 points or more)", C.own, ["Player", "Team", "Pos", "Source", "From", "To", "Move"], x => `<tr><td><b>${esc(x.name)}</b></td><td>${esc(x.team)}</td><td>${esc(x.pos)}</td><td>${esc(x.src)}</td><td>${pc(x.from)}</td><td>${pc(x.to)}</td><td>${mvc(x.d)}</td></tr>`)}`;
-  $("#bot").innerHTML = `<div class="bot"><span class="hint">Every Refresh (and the hourly game-day pull) snapshots the merged table. Mark as built when your lineups are set so this diffs against that moment.</span></div>`;
+  $("#bot").innerHTML = `<div class="bot"><span class="hint">Every Refresh (and the hourly game-day pull) snapshots the merged table. Mark as built in the Entry Manager (Simulator) when your lineups are set, so this diffs against that moment.</span></div>`;
 }
 /* ---------------- notes ---------------- */
 async function renderNotes(main) {
@@ -229,6 +259,7 @@ async function renderNotes(main) {
 
 /* ---------------- boot ---------------- */
 (async () => {
-  try { await loadDirs(); await loadHub(); render(); setMsg(S.hub ? `Loaded data/${S.hub.dir} (merged ${when(S.hub.builtAt)})` : "Pick a slate and Refresh"); await loadSlates(); render(); }
+  try { await loadDirs(); await loadHub(); render(); if (!S.hub) setMsg("Pick a slate and Refresh"); await loadSlates(); render();
+    try { S.pull = await api("/api/pull-request"); if (/pending|working/.test(S.pull.status)) { render(); watchPull(); } } catch {} }
   catch (e) { $("#app").innerHTML = `<div class="empty">Hub server not reachable<small>${esc(e.message)} — start it with <code>node server/hub.mjs</code> and open http://localhost:8787</small></div>`; }
 })();
