@@ -82,7 +82,7 @@ function render() {
   const app = $("#app"), H = S.hub;
   app.innerHTML = `<nav class="nav"><div class="brand"><i></i>SLATE LAB</div><div class="links">${VIEWS.map(([k, l, s, live]) => live ? `<button class="lnk" data-view="${k}" aria-selected="${S.view === k}"><span class="long">${l}</span><span class="short">${s}</span></button>` : `<a class="lnk" href="index.html" title="Not rebuilt yet; opens the current app"><span class="long">${l}</span><span class="short">${s}</span></a>`).join("")}</div><div class="grow"></div>
 </nav>
-    <div id="ctl">${ctl()}</div><div class="prog"><i id="prog"${S.busy ? ' style="width:60%"' : ""}></i></div><div id="status" class="status">${S.err ? `<span class="err">${esc(S.msg)}</span>` : esc(S.msg)}</div>${S.view === "hub" ? steps() + srcStrip() : ""}<div id="tabs">${S.view === "hub" ? tabs() : ""}</div><div id="main"></div><div id="bot"></div>`;
+    <div id="ctl" class="${S.view === "hub" ? "" : "nothub"}">${ctl()}</div><div class="prog"><i id="prog"${S.busy ? ' style="width:60%"' : ""}></i></div><div id="status" class="status">${S.err ? `<span class="err">${esc(S.msg)}</span>` : esc(S.msg)}</div>${S.view === "hub" ? steps() + srcStrip() : ""}<div id="tabs">${S.view === "hub" ? tabs() : ""}</div><div id="main"></div><div id="bot"></div>`;
   $$(".lnk[data-view]").forEach(b => b.addEventListener("click", () => { S.view = b.getAttribute("data-view"); persist(); render(); }));
   wireCtl(); renderMain();
 }
@@ -99,7 +99,7 @@ function ctl() {
     <div class="f"><label>Slate date</label><input class="txt" type="date" id="date" value="${S.date}"></div>
     <div class="f wide"><label>Slate ${S.slatesErr ? `<span class="hint">(Stokastic: ${esc(S.slatesErr)})</span>` : ""}</label><select class="sel" id="slate" style="min-width:260px">${slateOpts ? `<optgroup label="Stokastic · ${S.date}">${slateOpts}</optgroup>` : `<option value="">no DK slates on ${S.date}</option>`}${dirOpts ? `<optgroup label="Saved folders">${dirOpts}</optgroup>` : ""}</select></div>
     <div class="f cta"><label>&nbsp;</label><button class="btn refresh${S.busy ? " busy" : ""}" id="refresh"${S.busy ? " disabled" : ""}>${S.busy ? "Refreshing…" : "⟳ Refresh"}</button></div>
-    <div class="f"><label>&nbsp;</label><button class="btn sec" id="pullVend" title="Starts a short Claude run that pulls ETR and Blick in your logged-in Chrome, files them and refreshes. Chrome must be open with the Claude extension connected."${S.hub && !(S.pull && /pending|working/.test(S.pull.status)) ? "" : " disabled"}>${S.pull && /pending|working/.test(S.pull.status) ? `Pulling… <span class="mini">${esc(S.pull.message || "")}</span>` : "⤓ Pull ETR + Blick"}</button></div>
+    <div class="f"><label>&nbsp;</label><button class="btn sec" id="pullVend" title="Starts a short Claude run that pulls ETR and Blick in your logged-in Chrome, files them and refreshes. Chrome must be open with the Claude extension connected."${S.hub && !pulling() ? "" : " disabled"}>${pulling() && S.pull.kind !== "weekly" ? `Pulling… <span class="mini">${esc(S.pull.message || "")}</span>` : "⤓ Pull ETR + Blick"}</button></div>
     <div class="f"><label>&nbsp;</label><label class="drop sm btn sec" id="drop" title="ETR or Blick CSV">Drop ETR / Blick CSV <input type="file" id="file" accept=".csv" multiple></label></div></div>`;
 }
 function wireCtl() {
@@ -115,14 +115,17 @@ function wireCtl() {
 }
 // follow a pull request while it's open: every 3s until Claude marks it done or failed (or 20 minutes pass with nobody picking it up)
 let pullTimer = null;
+function pulling() { return !!(S.pull && /pending|working/.test(S.pull.status)); }
 function watchPull() {
   if (pullTimer) return; const t0 = Date.now();
   pullTimer = setInterval(async () => {
     try { const r = await api("/api/pull-request"); const was = S.pull && S.pull.status + (S.pull.message || ""); S.pull = r;
-      if (r.status === "done") { clearInterval(pullTimer); pullTimer = null; setMsg("ETR + Blick pulled: " + (r.message || "done")); await loadHub(); render(); return; }
-      if (r.status === "error") { clearInterval(pullTimer); pullTimer = null; setMsg("Pull failed: " + (r.message || "unknown"), true); render(); return; }
-      if (/pending|working/.test(r.status) && Date.now() - t0 > 16 * 60000) { clearInterval(pullTimer); pullTimer = null; await api("/api/pull-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "error", message: "the Claude run didn't finish in 15 minutes" }) }); S.pull.status = "error"; setMsg("The pull didn't finish in 15 minutes. Check that Chrome is open with the Claude extension connected.", true); render(); return; }
-      if (r.status + (r.message || "") !== was) render();
+      const wk = r.kind === "weekly", mins = wk ? 45 : 15;
+      if (wk && S.hub && /done|error/.test(r.status)) await loadReads(true);
+      if (r.status === "done") { clearInterval(pullTimer); pullTimer = null; setMsg((wk ? "" : "ETR + Blick pulled: ") + (r.message || "done")); await loadHub(); render(); return; }
+      if (r.status === "error") { clearInterval(pullTimer); pullTimer = null; setMsg((wk ? "Weekly ETR read stopped: " : "Pull failed: ") + (r.message || "unknown"), true); render(); return; }
+      if (/pending|working/.test(r.status) && Date.now() - t0 > (mins + 1) * 60000) { clearInterval(pullTimer); pullTimer = null; await api("/api/pull-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "error", message: `the Claude run didn't finish in ${mins} minutes` }) }); S.pull.status = "error"; setMsg(`The run didn't finish in ${mins} minutes. Check that Chrome is open with the Claude extension connected.`, true); render(); return; }
+      if (r.status + (r.message || "") !== was) { if (S.tab === "notes" && $("#weekBox")) { await loadReads(true); paintWeek(); const pv = $("#pullVend"); if (pv) pv.disabled = pulling(); } else render(); }
     } catch { /* server restarting: keep waiting */ }
   }, 3000);
 }
@@ -245,12 +248,112 @@ async function renderChanges(main) {
   $("#bot").innerHTML = `<div class="bot"><span class="hint">Every Refresh (and the hourly game-day pull) snapshots the merged table. Mark as built in the Entry Manager (Simulator) when your lineups are set, so this diffs against that moment.</span></div>`;
 }
 /* ---------------- notes ---------------- */
+// ETR reports (NFL classic): a dropdown of the week's ETR articles + Establish The Show / The Million, plus the user's optional
+// Blick slate thoughts. Green = read into this slate's guide, red = not read yet or failed. Read the checked ones or all at once;
+// one Claude run (bench/read-etr-week.prompt.md) merges them into data/<slate>/slate-guide.json. Only this box re-renders while it runs.
+const weeklyOK = () => !!(S.hub && S.hub.slate && /nfl/i.test(S.hub.dir || ""));
+async function loadReads(force) { const d = S.hub.dir; if (!force && S.etr && S.etr.dir === d) return; try { S.etr = Object.assign(await api(`/api/etr-reads?dir=${encodeURIComponent(d)}`), { dir: d }); } catch { S.etr = { dir: d, catalog: [], reads: {}, blick: { text: "", images: [] } }; } if (!S.etrSel || S.etrSel.dir !== d) S.etrSel = Object.assign(new Set(), { dir: d }); }
+const unread = () => (S.etr ? S.etr.catalog : []).filter(c => (!c.upload || hasBlick()) && (S.etr.reads[c.id] || {}).status !== "ok").map(c => c.id);
+const hasBlick = () => !!(S.etr && S.etr.blick && (S.etr.blick.text.trim() || S.etr.blick.images.length));
+function weekBox() {
+  const E = S.etr || { catalog: [], reads: {} }, p = S.pull && S.pull.kind === "weekly" && S.pull.dir === S.hub.dir ? S.pull : null, run = !!(p && pulling()), busy = pulling();
+  const counted = E.catalog.filter(c => !c.upload || hasBlick() || E.reads[c.id]), ok = counted.filter(c => (E.reads[c.id] || {}).status === "ok").length, sel = S.etrSel || new Set();
+  const GREEN = "var(--green,#3ddc84)", RED = "var(--red,#ff4d6d)";
+  const row = c => { const r = E.reads[c.id], g = !!(r && r.status === "ok"), picked = run && p.only ? p.only.includes(c.id) : sel.has(c.id);
+    const tip = r ? `${g ? "Read" : "Failed"} ${when(r.at)}${r.title ? ` · ${r.title}` : ""}${r.note ? ` · ${r.note}` : ""}` : c.upload ? (hasBlick() ? "Uploaded, not read into the guide yet" : "Nothing uploaded yet") : "Not read yet";
+    return `<div class="er" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" data-er="${c.id}"${picked ? " checked" : ""}${busy ? " disabled" : ""}><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${g ? GREEN : RED};box-shadow:0 0 6px ${g ? GREEN : RED}"></span><span>${esc(c.name)}</span></label><span class="hint">${esc(tip)}</span>${r && r.url && r.url !== "#" ? `<a class="hint" href="${esc(r.url)}" target="_blank">open</a>` : ""}</div>${c.upload ? `<div style="margin:2px 0 6px 26px"><textarea class="txt" id="blickText" placeholder="Paste Blick's slate thoughts (Discord, notes). Saves as you type." style="width:100%;min-height:90px;font-family:inherit;font-size:12px">${esc((E.blick || {}).text || "")}</textarea><label class="drop sm" id="blickDrop" style="margin-top:6px">Drop Blick screenshots <input type="file" id="blickFile" accept="image/*" multiple></label><div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${((E.blick || {}).images || []).map(s => `<a href="${esc(s)}" target="_blank"><img src="${esc(s)}" style="max-width:140px;max-height:100px;border:1px solid var(--line2);border-radius:4px"></a>`).join("")}</div></div>` : ""}`; };
+  const status = run ? `Reading ${p.total ? `<b>${p.read || 0}/${p.total}</b> ` : ""}${esc(String(p.message || "").replace(/^\d+\/\d+:\s*/, ""))}` : p ? `Last run ${when(p.updated || p.at)}: ${esc(p.message || p.status)}${p.cost ? ` · $${(+p.cost).toFixed(2)}` : ""}` : "";
+  return `<details id="erDet"${S.etrOpen ? " open" : ""} style="border:1px solid var(--line2);border-radius:6px;padding:8px 12px">
+    <summary style="cursor:pointer;display:flex;align-items:center;gap:10px;flex-wrap:wrap"><b>ETR reports</b><span class="hint"><b style="color:${ok && ok === counted.length ? GREEN : "inherit"}">${ok}/${counted.length}</b> read into the guide</span>
+      <button class="btn sec" id="erSel"${busy || !sel.size ? " disabled" : ""}>Read selected${sel.size ? ` (${sel.size})` : ""}</button><button class="btn sec" id="erNew"${busy || !unread().length ? " disabled" : ""} title="Every report that is still red (not read yet or failed), plus your Blick thoughts if uploaded and not read">Read unread${unread().length ? ` (${unread().length})` : ""}</button><button class="btn sec" id="erAll"${busy ? " disabled" : ""} title="Every ETR report, plus your Blick thoughts if you uploaded any">Read all</button><span class="hint">${status}</span></summary>
+    <div style="margin-top:8px;display:grid;gap:4px">${E.catalog.map(row).join("")}</div>
+    <div class="hint" style="margin-top:8px">One Claude run in your logged-in Chrome reads what you pick and merges it into the slate guide (Simulator notes and the Brain). Shows have to be up on YouTube. All of them takes up to 45 minutes and a few dollars.</div></details>`;
+}
+async function startRead(ids) { try { S.pull = await api("/api/pull-request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dir: S.hub.dir, kind: "weekly", only: ids }) }); setMsg(`Asked Claude to read ${ids.length} report${ids.length > 1 ? "s" : ""}; this updates as it works`); paintWeek(); watchPull(); } catch (e) { setMsg("Could not file the request: " + e.message, true); } }
+function paintWeek() { const b = $("#weekBox"); if (!b) return; b.innerHTML = weekBox(); wireWeek(); }
+function wireWeek() {
+  const det = $("#erDet"); if (!det) return; det.addEventListener("toggle", () => { S.etrOpen = det.open; });
+  $$("[data-er]").forEach(c => c.addEventListener("change", e => { const id = e.target.dataset.er; if (e.target.checked) S.etrSel.add(id); else S.etrSel.delete(id); paintWeek(); }));
+  const bs = $("#erSel"); if (bs) bs.addEventListener("click", e => { e.preventDefault(); e.stopPropagation(); startRead([...S.etrSel]); });
+  const bn = $("#erNew"); if (bn) bn.addEventListener("click", e => { e.preventDefault(); e.stopPropagation(); startRead(unread()); });
+  const ba = $("#erAll"); if (ba) ba.addEventListener("click", e => { e.preventDefault(); e.stopPropagation(); startRead(S.etr.catalog.filter(c => !c.upload || hasBlick()).map(c => c.id)); });
+  const bt = $("#blickText"); let t = null; if (bt) bt.addEventListener("input", e => { S.etr.blick.text = e.target.value; clearTimeout(t); t = setTimeout(async () => { try { await fetch(`/api/blick-thoughts?dir=${encodeURIComponent(S.hub.dir)}`, { method: "POST", body: S.etr.blick.text }); setMsg("Blick thoughts saved"); } catch { setMsg("Blick thoughts not saved", true); } }, 600); });
+  const up = async f => { try { const r = await api(`/api/blick-image?dir=${encodeURIComponent(S.hub.dir)}&name=${encodeURIComponent(f.name)}`, { method: "POST", body: await f.arrayBuffer() }); S.etr.blick.images.push(r.path); paintWeek(); } catch (e) { setMsg("Image not saved: " + e.message, true); } };
+  const bf = $("#blickFile"); if (bf) bf.addEventListener("change", async e => { for (const f of Array.from(e.target.files || [])) await up(f); });
+  const z = $("#blickDrop"); if (z) { ["dragenter", "dragover"].forEach(ev => z.addEventListener(ev, e => { e.preventDefault(); z.classList.add("over"); })); ["dragleave", "drop"].forEach(ev => z.addEventListener(ev, e => { e.preventDefault(); z.classList.remove("over"); })); z.addEventListener("drop", async e => { for (const f of Array.from(e.dataTransfer.files || [])) await up(f); }); }
+}
+// Lab likes (server/likes.mjs): a few players per position from projection, value, leverage and ETR's DvP / XFP / PROE
+// tables, with the reasons; unfitted, scored after each slate by bench/likes-tracker-nfl.mjs
+async function loadLikesUI(force) { const d = S.hub.dir; if (!force && S.likes && S.likes.dir === d) return; try { S.likes = Object.assign(await api(`/api/likes?dir=${encodeURIComponent(d)}`, force ? { method: "POST" } : undefined), { dir: d }); } catch (e) { S.likes = { dir: d, error: e.message }; }
+  // Lab stacks (server/stacks.mjs): from the slate's generated field + sim and Blick's conditional ownership
+  try { S.stacks = await api(`/api/stacks?dir=${encodeURIComponent(d)}`, force ? { method: "POST" } : undefined); } catch (e) { S.stacks = { error: e.message }; } }
+function stacksBox() {
+  const T = S.stacks; if (!T) return "";
+  if (T.error) return `<div class="hint">Lab stacks: ${esc(T.error)}</div>`;
+  const GREEN = "var(--green,#3ddc84)", RED = "var(--red,#ff4d6d)", CYAN = "var(--cyan,#22d3ee)";
+  const card = (title, sub, reasons, color) => `<div style="border:1px solid var(--line2);border-left:3px solid ${color};border-radius:5px;padding:6px 9px"><div><b>${esc(title)}</b> <span class="hint">${esc(sub)}</span></div><ul style="margin:4px 0 0 16px;padding:0">${reasons.map(r => `<li class="hint" style="margin:1px 0">${esc(r)}</li>`).join("")}</ul></div>`;
+  let body = "";
+  if (T.format === "showdown") {
+    body = `<div><div style="margin-bottom:4px"><b>Sides</b></div><div style="display:grid;gap:6px">${(T.sides || []).slice(0, 4).map(x => card(x.side, `sim top-1% ${x.t1x}x`, [x.reason], CYAN)).join("")}</div></div>
+      <div><div style="margin-bottom:4px"><b>Captain + bring-back</b></div><div style="display:grid;gap:6px">${(T.pairs || []).map(p => card(`CPT ${p.cpt} + ${p.with}`, `score ${p.score}`, [p.reason], GREEN)).join("")}</div></div>`;
+  } else {
+    body = `<div><div style="margin-bottom:4px"><b>Top stacks</b></div><div style="display:grid;gap:6px">${(T.top || []).map(x => card(`${x.qb} + ${x.catchers.join(" + ")}${x.bringBack ? ` · bring back ${x.bringBack.name}` : ""}`, `score ${x.score}`, x.reasons, GREEN)).join("")}</div></div>
+      <div><div style="margin-bottom:4px"><b>Bring-back by QB</b></div><div style="display:grid;gap:6px">${(T.byQB || []).map(b => card(`${b.qb} → ${b.bringBack}`, `${b.own ?? "?"}% owned · with ${b.stack.join(" + ")}`, [b.reason], CYAN)).join("")}</div></div>
+      ${(T.avoid || []).length ? `<div><div style="margin-bottom:4px"><b style="color:${RED}">Avoid</b></div><div style="display:grid;gap:6px">${T.avoid.map(a => card(`${a.qb} + ${a.catchers.join(" + ")}`, `${a.freq}% of field`, a.reasons, RED)).join("")}</div></div>` : ""}`;
+  }
+  return `<details id="stDet"${S.stacksOpen !== false ? " open" : ""} style="border:1px solid var(--line2);border-radius:6px;padding:8px 12px;margin-bottom:10px">
+    <summary style="cursor:pointer;display:flex;align-items:center;gap:10px;flex-wrap:wrap"><b>Lab stacks</b><span class="hint">built ${when(T.generatedAt)} · sim ${esc(T.sim && T.sim.contest || "generated field")}${T.blick ? ` · Blick conditional: ${esc(T.blick.contest)} (${esc(T.blick.built)})` : " · no Blick conditional for this slate"}</span></summary>
+    <div style="margin-top:8px;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px">${body}</div>
+    <div class="hint" style="margin-top:8px">${esc(T.method || "")}</div></details>`;
+}
+function likesBox() {
+  const L = S.likes; if (!L) return "";
+  if (L.error) return `<div class="hint" style="padding:0 16px 12px">Lab likes unavailable: ${esc(L.error)}</div>`;
+  const GREEN = "var(--green,#3ddc84)", RED = "var(--red,#ff4d6d)";
+  const card = (p, bad) => `<div style="border:1px solid var(--line2);border-left:3px solid ${bad ? RED : GREEN};border-radius:5px;padding:6px 9px"><div><b>${esc(p.name)}</b> <span class="hint">${esc(p.team)} vs ${esc(p.opp || "")} · ${p.sal} · proj ${p.proj} · ${p.cptOwn != null ? `CPT own ${p.cptOwn}% · ` : ""}own ${p.own ?? "?"}% · score ${p.score}</span></div><ul style="margin:4px 0 0 16px;padding:0">${(p.reasons || []).map(r => `<li class="hint" style="margin:1px 0">${esc(r)}</li>`).join("")}</ul></div>`;
+  const groups = Object.entries(L.picks || {}).map(([pos, l]) => `<div><div style="margin-bottom:4px"><b>${esc(pos === "CPT" ? "Captain" : pos === "FLEX" ? "Flex values" : pos)}</b></div><div style="display:grid;gap:6px">${l.map(p => card(p)).join("")}</div></div>`).join("");
+  const fades = (L.fades || []).length ? `<div><div style="margin-bottom:4px"><b style="color:${RED}">Fades</b> <span class="hint">chalk with bad signals</span></div><div style="display:grid;gap:6px">${L.fades.map(p => card(p, true)).join("")}</div></div>` : "";
+  const inp = L.inputs || {};
+  return `<div style="padding:0 16px 12px">${stacksBox()}<details id="lkDet"${S.likesOpen !== false ? " open" : ""} style="border:1px solid var(--line2);border-radius:6px;padding:8px 12px">
+    <summary style="cursor:pointer;display:flex;align-items:center;gap:10px;flex-wrap:wrap"><b>Lab likes</b><span class="hint">built ${when(L.generatedAt)} · DvP: ${esc(inp.dvp || "-")} · XFP: ${esc(inp.xfp || "-")} · PROE: ${esc(inp.proe || "-")}</span><button class="btn sec" id="lkRe">Rebuild</button></summary>
+    <div style="margin-top:8px;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px">${groups}${fades}</div>
+    <div class="hint" style="margin-top:8px">${esc(L.method || "")}</div></details></div>`;
+}
+function wireLikes() {
+  const det = $("#lkDet"); if (det) det.addEventListener("toggle", () => { S.likesOpen = det.open; });
+  const sdt = $("#stDet"); if (sdt) sdt.addEventListener("toggle", () => { S.stacksOpen = sdt.open; });
+  const b = $("#lkRe"); if (b) b.addEventListener("click", async e => { e.preventDefault(); e.stopPropagation(); b.disabled = true; await loadLikesUI(true); const box = $("#likesBox"); if (box) { box.innerHTML = likesBox(); wireLikes(); } setMsg("Lab likes rebuilt"); });
+}
 async function renderNotes(main) {
   const H = S.hub;
+  // NFL (classic and showdown): the Notes tab is the ETR reports dropdown (Blick thoughts live in it); notes saved the old way
+  // stay visible, read-only, below it. Other leagues keep the free notes box.
+  // NFL classic sub-slates (Early Only, Afternoon, Primetime, Sun-Mon, Thu-Mon): no reads of their own; the server builds their
+  // guide from the Main slate's (filtered to their games) plus the showdown guides of prime-time games (server/subguide.mjs)
+  if (weeklyOK() && H.slate.type !== "SHOWDOWN" && !/-main$/.test(H.dir)) {
+    let g = null; try { g = await api(`/api/guide?dir=${encodeURIComponent(H.dir)}`); } catch {}
+    const own = g && g.theses && !g.derived, from = (g && g.from) || [];
+    const reads = await Promise.all(from.map(async d => { try { const r = await api(`/api/etr-reads?dir=${encodeURIComponent(d)}`); const c = r.catalog.filter(x => !x.upload || r.reads[x.id]); return { d, ok: c.filter(x => (r.reads[x.id] || {}).status === "ok").length, n: c.length }; } catch { return { d, ok: 0, n: 0 }; } }));
+    const GREEN = "var(--green,#3ddc84)", RED = "var(--red,#ff4d6d)", dot = on => `<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${on ? GREEN : RED};box-shadow:0 0 6px ${on ? GREEN : RED}"></span>`;
+    main.innerHTML = `<div style="padding:12px 16px"><div style="border:1px solid var(--line2);border-radius:6px;padding:10px 12px;display:grid;gap:8px">
+      <div><b>Slate guide</b> <span class="hint">${own ? "this slate has its own guide" : g && g.derived ? `built from the guides below, filtered to this slate's ${(H.slate.games || []).length} games: <b>${g.theses.length}</b> theses, <b>${Object.keys(g.stances).length}</b> player stances, <b>${g.notes.length}</b> notes` : "no Main slate guide for this week yet"}</span></div>
+      ${reads.map(x => `<div style="display:flex;align-items:center;gap:8px">${dot(x.n && x.ok === x.n)}<span>${esc(x.d)}</span><span class="hint">${x.ok}/${x.n} reports read</span><button class="btn sec" data-goslate="${esc(x.d)}">Open it</button></div>`).join("")}
+      <div class="hint">Read ETR reports on the Main slate (and on each prime-time showdown slate); this slate picks them up automatically. Games here not on the Main slate only get notes from their showdown guide.</div></div></div>`;
+    await loadLikesUI(); main.insertAdjacentHTML("beforeend", `<div id="likesBox">${likesBox()}</div>`); wireLikes();
+    $("#bot").innerHTML = `<div class="bot"><span class="hint">Guide is computed from ${esc(from.join(" + ") || "nothing yet")}.</span></div>`;
+    $$("[data-goslate]").forEach(b => b.addEventListener("click", async () => { S.dir = b.dataset.goslate; const d = S.dirs.find(x => x.dir === S.dir); if (d && d.slateId) S.slateId = d.slateId; if (S.dir.slice(0, 10) !== S.date) { S.date = S.dir.slice(0, 10); await loadSlates(); } await loadHub(); persist(); render(); }));
+    return;
+  }
+  if (weeklyOK()) { await loadReads(); if (S.etrOpen === undefined) S.etrOpen = true;
+    if (!S.notes || S.notes.dir !== H.dir) { try { S.notes = Object.assign(await api(`/api/notes?dir=${encodeURIComponent(H.dir)}`), { dir: H.dir }); } catch (e) { S.notes = { text: "", images: [], dir: H.dir }; } }
+    const old = S.notes.text.trim() || S.notes.images.length ? `<div style="padding:0 16px 12px"><div class="hint" style="margin-bottom:6px">Earlier notes on this slate (saved before the report list; the Brain still reads them)</div><pre class="txt" style="display:block;width:100%;box-sizing:border-box;white-space:pre-wrap;font-family:inherit;font-size:12px;padding:10px;margin:0">${esc(S.notes.text)}</pre>${S.notes.images.map(p => `<a href="${esc(p)}" target="_blank"><img src="${esc(p)}" style="max-width:180px;max-height:120px;margin:6px 6px 0 0;border:1px solid var(--line2);border-radius:4px"></a>`).join("")}</div>` : "";
+    await loadLikesUI();
+    main.innerHTML = `<div id="weekBox" style="padding:12px 16px">${weekBox()}</div><div id="likesBox">${likesBox()}</div>${old}`; wireLikes(); $("#bot").innerHTML = `<div class="bot"><span class="hint">Feeds data/${esc(H.dir)}/slate-guide.json; Blick thoughts in blick-thoughts.md and blick/.</span></div>`; wireWeek(); return; }
   if (!S.notes || S.notes.dir !== H.dir) { try { S.notes = Object.assign(await api(`/api/notes?dir=${encodeURIComponent(H.dir)}`), { dir: H.dir }); } catch (e) { S.notes = { text: "", images: [], dir: H.dir }; } }
-  main.innerHTML = `<div style="padding:12px 16px;display:grid;grid-template-columns:1fr 1fr;gap:14px" class="notesgrid"><div><div class="hint" style="margin-bottom:6px">Slate notes: Blick's reads, your own, what you want to remember in the review. Saves as you type.</div><textarea class="txt" id="notesText" style="width:100%;min-height:50vh;font-family:inherit;font-size:12.5px">${esc(S.notes.text)}</textarea></div>
+  main.innerHTML = `${weeklyOK() ? `<div id="weekBox" style="padding:12px 16px 0">${weekBox()}</div>` : ""}<div style="padding:12px 16px;display:grid;grid-template-columns:1fr 1fr;gap:14px" class="notesgrid"><div><div class="hint" style="margin-bottom:6px">Slate notes: Blick's reads, your own, what you want to remember in the review. Saves as you type.</div><textarea class="txt" id="notesText" style="width:100%;min-height:50vh;font-family:inherit;font-size:12.5px">${esc(S.notes.text)}</textarea></div>
     <div><label class="drop" id="imgDrop">Drop screenshots here (Discord, ETR, anything) <input type="file" id="imgFile" accept="image/*" multiple></label><div id="imgs" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">${S.notes.images.map(p => `<a href="${esc(p)}" target="_blank"><img src="${esc(p)}" style="max-width:220px;max-height:160px;border:1px solid var(--line2);border-radius:4px"></a>`).join("")}</div></div></div>`;
   $("#bot").innerHTML = `<div class="bot"><span class="hint">Stored in data/${esc(H.dir)}/notes.md and notes/.</span></div>`;
+  wireWeek();
   let t = null; $("#notesText").addEventListener("input", e => { S.notes.text = e.target.value; clearTimeout(t); t = setTimeout(async () => { try { await fetch(`/api/notes?dir=${encodeURIComponent(H.dir)}`, { method: "POST", body: S.notes.text }); setMsg("Notes saved"); } catch (err) { setMsg("Notes not saved", true); } }, 600); });
   const up = async f => { try { const r = await api(`/api/notes-image?dir=${encodeURIComponent(H.dir)}&name=${encodeURIComponent(f.name)}`, { method: "POST", body: await f.arrayBuffer() }); S.notes.images.push(r.path); render(); } catch (e) { setMsg("Image not saved: " + e.message, true); } };
   $("#imgFile").addEventListener("change", async e => { for (const f of Array.from(e.target.files || [])) await up(f); });

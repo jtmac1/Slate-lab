@@ -17,6 +17,9 @@ import { pullStokastic, pullInjuries, hubData, slateDirs, slateMeta } from "./so
 import { pullPinnacle } from "../bench/pull-pinnacle-nfl.mjs";
 import { ingestPass } from "../bench/ingest.mjs";
 import { loadEntries, importEntries, saveThesis, saveTag, loadGuide } from "./entries.mjs";
+import { saveLikes, loadLikes } from "./likes.mjs";
+import { saveStacks, loadStacks } from "./stacks.mjs";
+import { saveBlickCond } from "./blickcond.mjs";
 import { fourSourceSim } from "./foursim.mjs";
 import { generateAndSim, loadGen } from "./gensim.mjs";
 import { buildField, loadField, runSim, loadSimRun, stripField } from "./contestsim.mjs";
@@ -24,6 +27,7 @@ import { reviewLineups, reviewPortfolio, brainStatus, loadBrain } from "./brain.
 import { contestsFor } from "./contests.mjs";
 import { saveMerge, markBuilt, diff } from "./changes.mjs";
 import { lateSwap } from "./lateswap.mjs";
+import { fetchEtrData, saveContestSelection, slateData } from "./etrdata.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 process.chdir(ROOT);
@@ -48,12 +52,53 @@ async function refresh(q) {
   await step("lobby", () => run(["bench/dk-contests.mjs", "NFL"], 60000).then(() => { const j = JSON.parse(fs.readFileSync("data/dk-lobby/nfl.json", "utf8")); return { contests: j.contests.length, fetched: j.fetched }; }));
   if (!dir) { const dirs = slateDirs(); dir = dirs[0] || null; }
   const hub = dir ? await step("merge", () => { const h = hubData(dir); saveMerge(dir, h); return h; }) : null;
+  // Lab likes (server/likes.mjs) refresh with the numbers when the slate has a guide or ETR data tables
+  if (hub && /nfl/.test(dir) && (fs.existsSync(path.join("data", dir, "slate-guide.json")) || slateData(dir))) await step("likes", () => { const L = saveLikes(dir); return { picks: Object.values(L.picks).flat().length, fades: L.fades.length }; });
+  // Lab stacks (server/stacks.mjs) need the slate's generated field + sim; skipped until the Simulator has run
+  if (hub && /nfl/.test(dir) && fs.existsSync(path.join("data", dir, "simrun.json")) && fs.existsSync(path.join("data", dir, "field.json"))) await step("stacks", () => { const S = saveStacks(dir); return { top: (S.top || S.pairs || []).length, blick: !!S.blick }; });
   return { steps, hub };
 }
 // "Pull ETR + Blick" (user-approved 2026-10-03): a one-shot headless Claude Code run (claude -p --chrome) with the job in
 // bench/pull-vendors.prompt.md, allowed only the Chrome tools, writes under data/, and curl to this server. It posts its own
 // progress to /api/pull-status; when it exits, its final line (or the failure) becomes the status if it didn't post one.
 const PULL_MODEL = process.env.SLATELAB_PULL_MODEL || "claude-sonnet-5";
+// the ETR reports the Notes tab lists (menu = the start of its link text in ETR's NFL menu, or the YouTube title).
+// fmt: c = classic slates, s = showdown slates, cs = both (weekly articles that also cover the TNF/SNF/MNF games; checked
+// 2026-10-03: Matchups covers every game, OL/DL, Snaps and Pace, Rundown, Strength and the Leone lists touch them;
+// Top Plays, GPP Leverage, Cheap WR, Game Scores and the two weekly shows are main-slate only)
+const ETR_REPORTS = [
+  { id: "sd-breakdown", fmt: "s", name: "Showdown Breakdown (this game)", sd: "breakdown" },
+  { id: "sd-sim", fmt: "s", name: "DraftKings Showdown Sim Analysis", sd: "sim" },
+  { id: "sd-show", fmt: "s", name: "Prime-time live show (this game)", sd: "show", video: true },
+  { id: "million", fmt: "c", name: "Establish The Million", menu: "Establish The Million: Week", video: true },
+  { id: "show", fmt: "c", name: "Establish The Show", menu: "Establish The Show: Week", video: true },
+  { id: "top-plays", fmt: "c", name: "DFS Top Plays", menu: "DFS Top Plays" },
+  { id: "gpp-leverage", fmt: "c", name: "GPP Leverage", menu: "GPP Leverage" },
+  { id: "matchups", fmt: "cs", name: "Silva's Matchups", menu: "Evan Silva's Matchups" },
+  { id: "cheap-wr", fmt: "c", name: "Cheap WR Volume", menu: "ETR's Cheap WR Volume" },
+  { id: "ol-dl", fmt: "cs", name: "OL vs. DL Mismatches", menu: "OL vs. DL Mismatches" },
+  { id: "snaps-pace", fmt: "cs", name: "Snaps and Pace", menu: "Snaps and Pace" },
+  { id: "rundown", fmt: "cs", name: "The Rundown", menu: "The Rundown" },
+  { id: "strength", fmt: "cs", name: "Strength in Numbers", menu: "Strength in Numbers" },
+  { id: "game-scores", fmt: "c", name: "GPP Game Scores", menu: "GPP Game Scores" },
+  { id: "cash-review", fmt: "c", name: "Levitan's Cash Review (last week)", menu: "Levitan: Cash Review" },
+  { id: "leone-wrte", fmt: "cs", name: "Buy Leone Model: WR/TE", menu: "Buy Leone Model: WR/TE" },
+  { id: "leone-rb", fmt: "cs", name: "Buy Leone Model: RB", menu: "Buy Leone Model: RB" },
+  // ETR data tables (user-approved 2026-10-06): the job posts each table's cdn iframe src to /api/etr-data and the hub
+  // fetches and parses it into data/etr-data/<yyyy>-wk<nn>/; attached to every guide on load as guide.data (server/etrdata.mjs)
+  { id: "dvp", fmt: "cs", name: "Defense vs. Position (data table)", data: "dvp", page: "/establish-the-run-nfl-dvp/" },
+  { id: "xfp", fmt: "cs", name: "Expected Fantasy Points (data table)", data: "xfp", page: "/expected-vs-actual-fantasy-points/" },
+  { id: "proe", fmt: "cs", name: "Pass Rate Over Expectation (data table)", data: "proe", page: "/pass-rate-over-expectation/" },
+  { id: "contest-sel", fmt: "c", name: "Levitan's DK Contest Selection", page: "/levitans-dfs-game-selection-which-contests-to-play/", evergreen: true },
+  { id: "blick", fmt: "cs", name: "Blick slate thoughts (your upload, optional)", upload: true },
+];
+const reportsFor = dir => { const sd = slateMeta(dir).type === "SHOWDOWN"; return ETR_REPORTS.filter(x => x.fmt.includes(sd ? "s" : "c")); };
+// NFL week from the date when no Blick file names it (2026 season: week 1 is the week of Tue 2026-09-08)
+const nflWeek = date => Math.max(1, Math.floor((Date.parse(date + "T12:00:00Z") - Date.parse("2026-09-08T00:00:00Z")) / 864e5 / 7) + 1);
+const TEAM = { ARI: "Cardinals", ATL: "Falcons", BAL: "Ravens", BUF: "Bills", CAR: "Panthers", CHI: "Bears", CIN: "Bengals", CLE: "Browns", DAL: "Cowboys", DEN: "Broncos", DET: "Lions", GB: "Packers", HOU: "Texans", IND: "Colts", JAX: "Jaguars", KC: "Chiefs", LV: "Raiders", LAC: "Chargers", LAR: "Rams", LA: "Rams", MIA: "Dolphins", MIN: "Vikings", NE: "Patriots", NO: "Saints", NYG: "Giants", NYJ: "Jets", PHI: "Eagles", PIT: "Steelers", SF: "49ers", SEA: "Seahawks", TB: "Buccaneers", TEN: "Titans", WAS: "Commanders" };
+// which reports have been read into this slate's guide: data/<slate>/etr-reads.json {id: {status: "ok"|"failed", at, title, url, note}}
+const readsFile = dir => path.join("data", dir, "etr-reads.json");
+const loadReads = dir => { try { return JSON.parse(fs.readFileSync(readsFile(dir), "utf8")); } catch { return {}; } };
 function pullStatus(patch) { const sf = "data/requests/status.json"; const cur = fs.existsSync(sf) ? JSON.parse(fs.readFileSync(sf, "utf8")) : {}; fs.writeFileSync(sf, JSON.stringify(Object.assign(cur, patch, { updated: new Date().toISOString() }))); return cur; }
 function startPull(r) {
   const meta = slateMeta(r.dir), sd = meta.type === "SHOWDOWN", wk = (() => { const m = fs.readdirSync(path.join("data", r.dir)).join(" ").match(/(\d{4})wk(\d\d)/); return m ? m[1] + "wk" + m[2] : `${meta.date.slice(0, 4)}wk00`; })();
@@ -64,13 +109,37 @@ function startPull(r) {
      'rows '+D.length+' chars '+window.__C.length+' | '+((document.body.innerText.match(/DraftKings NFL DFS Projections[^\\n]*\\n[^\\n]*/)||[''])[0])
    Read window.__C in 950-character slices with browser_batch, join exactly, and Write data/${r.dir}/ETR-main-${meta.date}.csv .`;
   const etrSd = `Open https://establishtherun.com/draftkings-showdown-and-fanduel-single-game-projections/?site=DK and use get_page_text. It lists all player names first, then 10 fields per player (Pos, Team, Salary, Proj, Ceiling, Total Own, CPT Own, CPT Salary, CPT Proj, Slate); zip them in order, keep only this game (${meta.games.join(" ")}), strip $ , %, and Write data/${r.dir}/ETR-showdown-${meta.games.join("").replace("@", "")}-${meta.date}.csv with header Player,Pos,Team,Salary,Proj,Ceiling,Total Own,CPT Own,CPT Salary,CPT Proj .`;
-  const vars = { DIR: r.dir, TYPE: meta.type, DATE: meta.date, SLATEID: String(meta.slateId || ""), GAMES: meta.games.join(" "), ETR_STEPS: sd ? etrSd : etrMain,
+  // classic sub-slates: ETR's "Early Only and Afternoon Only" page has its own tables (projection + one ownership column):
+  // the first grid is the Early slate, the second the Late slate (Afternoon Only; Afternoon Turbo uses it too). Blick only
+  // publishes the main slate, so it's skipped for these.
+  const sub = !sd && /^(early only|afternoon only|afternoon turbo)$/i.test(meta.name || ""), late = /afternoon/i.test(meta.name || "");
+  const slateTeams = [...new Set(meta.games.flatMap(g => g.split("@")).flatMap(t => t === "LAR" ? ["LAR", "LA"] : [t]))];
+  const etrSub = `Open https://establishtherun.com/early-only-and-afternoon-only-dfs-projections/ and wait 5 seconds. The page has two AG Grids: the FIRST is "DraftKings NFL DFS Projections - Early Slate", the SECOND is "... - Late Slate". Use the ${late ? "SECOND (Late)" : "FIRST (Early)"} one and read every row from React in one step (no scrolling):
+     const el=document.querySelectorAll('.ag-root-wrapper')[${late ? 1 : 0}]; const fk=Object.keys(el).find(k=>k.startsWith('__reactFiber')); let f=el[fk]; while(f&&!(f.memoizedProps&&Array.isArray(f.memoizedProps.rowData))) f=f.return;
+     const T=${JSON.stringify(slateTeams)}; const D=f.memoizedProps.rowData.filter(o=>T.includes(String(o.team).toUpperCase())&&(o.projection>=2||o.ownership>0));
+     window.__C=['player,team,opponent,position,salary,projection,floor,ceiling,largeOwnership,smallOwnership'].concat(D.map(o=>[String(o.player).includes(',')?'"'+o.player+'"':o.player,o.team,o.opponent,o.position,o.salary,o.projection,'',o.ceiling||'',o.ownership,o.ownership].join(','))).join('\\n');
+     'rows '+D.length+' chars '+window.__C.length
+   Read window.__C in 950-character slices with browser_batch, join exactly, and Write data/${r.dir}/ETR-main-${meta.date}.csv .`;
+  const vars = { DIR: r.dir, TYPE: meta.type, DATE: meta.date, SLATEID: String(meta.slateId || ""), GAMES: meta.games.join(" "), ETR_STEPS: sd ? etrSd : sub ? etrSub : etrMain,
+    BLICK_SKIP: sub ? "SKIP THIS STEP ENTIRELY: Blick only publishes the main slate. In the final message write \"Blick: main slate only\" for Blick and use \"done\" if ETR worked." : "",
+    // Blick Conditional Ownership page (step 3b): /nfl/conditional-ownership and /nfl/conditional-ownership-showdown
+    BLICK_COND_SUFFIX: sd ? "-showdown" : "",
     BLICK_URL: sd ? "https://blickanalytics.com/nfl/showdown-ownership-gpp" : "https://blickanalytics.com/nfl/ownership-gpp", BLICK_NEXT: sd ? "%2Fnfl%2Fshowdown-ownership-gpp" : "%2Fnfl%2Fownership-gpp",
     BLICK_FILE: sd ? `nfl-${meta.games.join("-").replace("@", "-").toLowerCase()}-showdown-${wk}.csv` : `nfl-main-${wk}.csv` };
-  const prompt = fs.readFileSync("bench/pull-vendors.prompt.md", "utf8").replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? m);
+  // "Weekly ETR read" (user-approved 2026-10-03): same launcher, the job in bench/read-etr-week.prompt.md reads every NFL-menu
+  // article for the week plus Establish The Show and The Million and writes data/<slate>/slate-guide.json; classic slates only
+  const weekly = r.kind === "weekly"; vars.WEEK = String(+wk.slice(6) || nflWeek(meta.date));
+  if (weekly) vars.WINDIR = path.win32.join(path.resolve(ROOT), "data", r.dir);
+  if (weekly && sd) { const [aw, hm] = String(meta.games[0] || "").split("@"); const night = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][new Date(meta.date + "T12:00:00Z").getUTCDay()]; Object.assign(vars, { AWAY: aw, HOME: hm, AWAYNAME: TEAM[aw] || aw, HOMENAME: TEAM[hm] || hm, NIGHT: night }); }
+  if (weekly) { const pick = reportsFor(r.dir).filter(x => !r.only || r.only.includes(x.id)); vars.TOTAL = String(pick.length);
+    vars.REPORTS = pick.map(x => `   - id "${x.id}": ${x.upload ? "the user's upload: data/" + r.dir + "/blick-thoughts.md and images in data/" + r.dir + "/blick/" : x.data ? `ETR data table at https://establishtherun.com${x.page} (step 2b; kind "${x.data}")` : x.evergreen ? `ETR article at https://establishtherun.com${x.page} (step 2c; evergreen, read it whatever its date)` : x.sd === "breakdown" ? `ETR article "Showdown Breakdown: ${vars.AWAYNAME} at ${vars.HOMENAME}"` : x.sd === "sim" ? "ETR page \"DraftKings Showdown Sim Analysis\" (check it is for this game)" : x.sd === "show" ? `ETR "${vars.NIGHT} Night Football Live Show: ${vars.AWAYNAME} at ${vars.HOMENAME}" (YouTube video)` : x.video ? `YouTube video "${x.menu} ${vars.WEEK}"` : `ETR NFL menu link starting "${x.menu}"${sd ? " (use only what it says about this game's two teams)" : ""}`}`).join("\n"); }
+  const prompt = fs.readFileSync(weekly ? (sd ? "bench/read-etr-showdown.prompt.md" : "bench/read-etr-week.prompt.md") : "bench/pull-vendors.prompt.md", "utf8").replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? m);
   const args = ["-p", "--chrome", "--model", PULL_MODEL, "--output-format", "json", "--allowedTools", "mcp__claude-in-chrome", "Edit(data/**)", "Write(data/**)", "Read", "Bash(curl:*)", "--", prompt];
   pullStatus({ status: "working", message: "Claude started" });
-  const child = execFile("claude", args, { cwd: ROOT, timeout: 15 * 60000, maxBuffer: 32e6, windowsHide: true }, (err, out) => {
+  const child = execFile("claude", args, { cwd: ROOT, timeout: (weekly ? 45 : 15) * 60000, maxBuffer: 32e6, windowsHide: true }, (err, out) => {
+    // the weekly read rewrote the guide and the ETR data tables: rebuild the Lab likes on top of them
+    if (weekly && /nfl/.test(r.dir)) { try { saveLikes(r.dir); } catch {} try { saveStacks(r.dir); } catch {} }
+    if (!weekly && /nfl/.test(r.dir)) { try { saveStacks(r.dir); } catch {} }   // the vendor pull may have brought Blick's conditional field
     let result = null; try { result = JSON.parse(String(out)); } catch {}
     const cur = pullStatus({});
     if (cur.status === "done" || cur.status === "error") return pullStatus({ cost: result && result.total_cost_usd, ms: result && result.duration_ms });
@@ -100,6 +169,10 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/refresh" && req.method === "POST") { const q = JSON.parse((await body(req)).toString("utf8") || "{}"); if (refreshing) return json(res, 409, { error: "refresh already running" }); refreshing = refresh(q); try { return json(res, 200, await refreshing); } finally { refreshing = null; } }
     if (p === "/api/upload" && req.method === "POST") { const name = path.basename(u.searchParams.get("name") || "upload.csv").replace(/[^\w.@ -]/g, "_"); fs.mkdirSync("data/inbox", { recursive: true }); const f = path.join("data/inbox", name); fs.writeFileSync(f, await body(req)); const r = ingestPass([f]); lastIngest = Object.assign(r, { at: new Date().toISOString() }); return json(res, 200, r); }
     if (p === "/api/entries") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); const E = req.method === "POST" ? importEntries(d, (await body(req)).toString("utf8"), u.searchParams.get("name") || "") : loadEntries(d); return json(res, 200, Object.assign(E, { guide: loadGuide(d) })); }
+    if (p === "/api/stacks") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); try { return json(res, 200, req.method === "POST" || !loadStacks(d) ? saveStacks(d) : loadStacks(d)); } catch (e) { return json(res, 200, { error: e.message }); } }
+    // Blick Conditional Ownership, posted by the vendor pull as compact text (server/blickcond.mjs)
+    if (p === "/api/blick-cond" && req.method === "POST") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); try { const r = saveBlickCond(d, (await body(req)).toString("utf8")); try { if (fs.existsSync(path.join("data", d, "simrun.json"))) saveStacks(d); } catch {} return json(res, 200, r); } catch (e) { return json(res, 400, { error: e.message }); } }
+    if (p === "/api/likes") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); try { return json(res, 200, req.method === "POST" || !loadLikes(d) ? saveLikes(d) : loadLikes(d)); } catch (e) { return json(res, 500, { error: e.message }); } }
     if (p === "/api/guide") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); return json(res, 200, loadGuide(d) || {}); }
     if (p === "/api/sim" && req.method === "POST") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); if (simming) return json(res, 409, { error: "sim already running" }); simming = true; try { return json(res, 200, fourSourceSim(d)); } finally { simming = false; } }
     if (p === "/api/field") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); if (req.method === "POST") { if (simming) return json(res, 409, { error: "sim already running" }); simming = true; try { return json(res, 200, buildField(d, JSON.parse((await body(req)).toString("utf8") || "{}"))); } finally { simming = false; } } return json(res, 200, stripField(loadField(d))); }
@@ -107,7 +180,13 @@ const server = http.createServer(async (req, res) => {
     // "Pull ETR + Blick": the site files a request (data/requests/requests.log, one JSON line each); an open Claude session
     // watching that file pulls the CSVs through the user's logged-in Chrome, ingests them, refreshes, and reports progress back
     // through POST /api/pull-status. GET returns the latest request with its status.
-    if (p === "/api/pull-request") { const rq = "data/requests", sf = path.join(rq, "status.json"); fs.mkdirSync(rq, { recursive: true }); if (req.method === "POST") { const q = JSON.parse((await body(req)).toString("utf8") || "{}"); if (!safeDir(q.dir)) return json(res, 400, { error: "dir" }); const cur = fs.existsSync(sf) ? JSON.parse(fs.readFileSync(sf, "utf8")) : {}; if (/pending|working/.test(cur.status) && Date.now() - Date.parse(cur.at) < 20 * 60000) return json(res, 409, Object.assign({ error: "a pull is already running" }, cur)); const r = { id: Date.now().toString(36), dir: q.dir, sources: q.sources || ["etr", "blick"], at: new Date().toISOString(), status: "pending", message: "starting Claude" }; fs.appendFileSync(path.join(rq, "requests.log"), JSON.stringify(r) + "\n"); fs.writeFileSync(sf, JSON.stringify(r)); startPull(r); return json(res, 200, r); } return json(res, 200, fs.existsSync(sf) ? JSON.parse(fs.readFileSync(sf, "utf8")) : { status: "none" }); }
+    if (p === "/api/pull-request") { const rq = "data/requests", sf = path.join(rq, "status.json"); fs.mkdirSync(rq, { recursive: true }); if (req.method === "POST") { const q = JSON.parse((await body(req)).toString("utf8") || "{}"); if (!safeDir(q.dir)) return json(res, 400, { error: "dir" }); const cur = fs.existsSync(sf) ? JSON.parse(fs.readFileSync(sf, "utf8")) : {}; if (/pending|working/.test(cur.status) && Date.now() - Date.parse(cur.at) < (cur.kind === "weekly" ? 50 : 20) * 60000) return json(res, 409, Object.assign({ error: "a pull is already running" }, cur)); if (q.kind === "weekly" && !/nfl/i.test(q.dir)) return json(res, 400, { error: "the ETR read is for NFL slates" }); const only = Array.isArray(q.only) ? q.only.filter(id => safeDir(q.dir) && reportsFor(q.dir).some(x => x.id === id)) : null; if (q.kind === "weekly" && only && !only.length) return json(res, 400, { error: "no reports selected" }); const r = { id: Date.now().toString(36), dir: q.dir, kind: q.kind === "weekly" ? "weekly" : "vendors", only: q.kind === "weekly" ? only : undefined, sources: q.sources || ["etr", "blick"], at: new Date().toISOString(), status: "pending", message: "starting Claude" }; fs.appendFileSync(path.join(rq, "requests.log"), JSON.stringify(r) + "\n"); fs.writeFileSync(sf, JSON.stringify(r)); startPull(r); return json(res, 200, r); } return json(res, 200, fs.existsSync(sf) ? JSON.parse(fs.readFileSync(sf, "utf8")) : { status: "none" }); }
+    // Notes tab report list: GET the catalog + what's been read for this slate; the weekly job POSTs one report's result
+    if (p === "/api/etr-data") { if (req.method === "POST") { const q = JSON.parse((await body(req)).toString("utf8") || "{}"); try { if (q.kind === "contest-sel") return json(res, 200, saveContestSelection(q.text || "", +q.week || nflWeek(new Date().toISOString().slice(0, 10)))); return json(res, 200, await fetchEtrData(q.kind, q.url)); } catch (e) { return json(res, 400, { error: e.message }); } } if (!safeDir(d)) return json(res, 400, { error: "dir" }); return json(res, 200, slateData(d) || {}); }
+    if (p === "/api/etr-reads") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); if (req.method === "POST") { const q = JSON.parse((await body(req)).toString("utf8") || "{}"); if (!ETR_REPORTS.some(x => x.id === q.id)) return json(res, 400, { error: "unknown report id" }); const all = loadReads(d); all[q.id] = { status: q.status === "ok" ? "ok" : "failed", at: new Date().toISOString(), title: q.title || null, url: q.url || null, note: q.note || null }; fs.writeFileSync(readsFile(d), JSON.stringify(all, null, 1)); return json(res, 200, all[q.id]); } const bd = path.join("data", d, "blick"), bf = path.join("data", d, "blick-thoughts.md"); return json(res, 200, { catalog: reportsFor(d).map(({ id, name, video, upload }) => ({ id, name, video: !!video, upload: !!upload })), reads: loadReads(d), blick: { text: fs.existsSync(bf) ? fs.readFileSync(bf, "utf8") : "", images: fs.existsSync(bd) ? fs.readdirSync(bd).filter(x => /.(png|jpe?g|gif|webp)$/i.test(x)).map(x => `data/${d}/blick/${x}`) : [] } }); }
+    // Blick slate thoughts the user pastes or drops in the Notes tab (read by the weekly job when "blick" is selected)
+    if (p === "/api/blick-thoughts" && req.method === "POST") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); fs.writeFileSync(path.join("data", d, "blick-thoughts.md"), (await body(req)).toString("utf8")); return json(res, 200, { ok: true }); }
+    if (p === "/api/blick-image" && req.method === "POST") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); const name = path.basename(u.searchParams.get("name") || "image.png").replace(/[^w.-]/g, "_"); const bd = path.join("data", d, "blick"); fs.mkdirSync(bd, { recursive: true }); fs.writeFileSync(path.join(bd, name), await body(req)); return json(res, 200, { path: `data/${d}/blick/${name}` }); }
     if (p === "/api/pull-status" && req.method === "POST") { const sf = path.join("data/requests", "status.json"); const q = JSON.parse((await body(req)).toString("utf8") || "{}"); const cur = fs.existsSync(sf) ? JSON.parse(fs.readFileSync(sf, "utf8")) : {}; const r = Object.assign(cur, q, { updated: new Date().toISOString() }); fs.mkdirSync("data/requests", { recursive: true }); fs.writeFileSync(sf, JSON.stringify(r)); return json(res, 200, r); }
     // Entry Manager plan: which lineups go into which contests for the slate (data/<slate>/entry-plan.json); graded after the slate
     if (p === "/api/plan") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); const f = path.join("data", d, "entry-plan.json"); if (req.method === "POST") { const q = JSON.parse((await body(req)).toString("utf8") || "{}"); q.savedAt = new Date().toISOString(); fs.writeFileSync(f, JSON.stringify(q, null, 1)); return json(res, 200, q); } return json(res, 200, fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : { contests: [] }); }

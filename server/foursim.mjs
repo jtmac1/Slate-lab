@@ -35,10 +35,28 @@ export function loadPool(dir) {
   const hubBy = new Map(hub.rows.map(r => [keyOf(r.name, r.pos, r.team), r]));
   const vendors = ["stk", "etr", "blick"].filter(s => hub.sources[s === "stk" ? "stokastic" : s] && !(s === "blick" && hub.sources.blick.stale));
   const srcs = vendors.slice(); if (hub.sources.market) srcs.push("mkt");
+  shrinkDst(P, hub.rows);
   return { hub, pool, byKey, hubBy, vendors, srcs, sd, fkey };
 }
-export const ownOf = (r, s, vendors) => { if (!r) return null; if (s === "mkt" || s === "avg") return avg(vendors.map(v => r[v]?.own)); return r[s]?.own ?? r.stk?.own ?? null; };
-export const cptOf = (r, s, vendors) => { if (!r) return null; if (s === "mkt" || s === "avg") return avg(vendors.map(v => r[v]?.cptOwn)); return r[s]?.cptOwn ?? r.stk?.cptOwn ?? null; };
+// DST projections pulled halfway to the slate's DST average, per source (Sunday review 2026-10-04,
+// data/reports/review-2026-10-04-sources.json: every source's DST projection correlated negatively with actual).
+// One slate, so a modest shrink rather than dropping the spread; sigma stays at the graded 0.85.
+const DST_SHRINK = 0.5;
+function shrinkDst(P, rows) {
+  const pull = (list, get, set) => { const v = list.map(get).filter(x => x != null && !isNaN(x)); if (v.length < 2) return; const m = v.reduce((a, b) => a + b, 0) / v.length; for (const o of list) { const x = get(o); if (x != null && !isNaN(x)) set(o, +(m + DST_SHRINK * (x - m)).toFixed(2)); } };
+  pull(P.filter(p => isDst(p.pos)), p => p.proj, (p, x) => { p.proj = x; });
+  const D = rows.filter(r => isDst(r.pos));
+  for (const k of ["stk", "etr", "blick", "mkt"]) pull(D.filter(r => r[k]), r => r[k].proj, (r, x) => { r[k] = Object.assign({}, r[k], { proj: x }); });
+  for (const k of ["lab", "cons"]) pull(D, r => r[k], (r, x) => { r[k] = x; });
+}
+// "vavg": the vendors' average without Stokastic (classic; falls back to Stokastic alone); "blickHS": Blick's
+// high-stakes ownership, then its single-entry number, then vavg (see ownTier in server/contestsim.mjs)
+const vavgOf = (r, vendors, k) => { const v = vendors.filter(s => s !== "stk"); return (v.length ? avg(v.map(s => r[s]?.[k])) : null) ?? r.stk?.[k] ?? null; };
+export const ownOf = (r, s, vendors) => { if (!r) return null; if (s === "mkt" || s === "avg") return avg(vendors.map(v => r[v]?.own)); if (s === "vavg") return vavgOf(r, vendors, "own"); if (s === "blickHS") return r.blick?.ownHS ?? r.blick?.ownSE ?? vavgOf(r, vendors, "own"); return r[s]?.own ?? r.stk?.own ?? null; };
+export const cptOf = (r, s, vendors) => { if (!r) return null; if (s === "mkt" || s === "avg") return avg(vendors.map(v => r[v]?.cptOwn)); if (s === "vavg" || s === "blickHS") return vavgOf(r, vendors, "cptOwn"); return r[s]?.cptOwn ?? r.stk?.cptOwn ?? null; };
+// the ownership a per-source field is built on: classic drops Stokastic's (worst classic ownership in the 2026-10-04
+// review) for Stokastic's and the market's fields; showdown keeps every source's own (Stokastic best on FLEX there)
+export const fieldOwnSrc = (s, sd) => sd ? (s === "mkt" ? "avg" : s) : (s === "stk" || s === "mkt" ? "vavg" : s);
 export const projOf = (r, s, base) => !r ? base : s === "stk" ? base : s === "lab" ? (r.lab ?? base) : s === "cons" ? (r.cons ?? base) : (r[s]?.proj ?? base);
 
 // lus: arrays of pool indices (captain first in showdown). Returns { sources, per: {src: rows[]}, fieldN, N, fee }
@@ -49,7 +67,7 @@ export function simLineups(L, lus, opts = {}) {
   const fieldN = Math.min(N, opts.fieldN || FIELD_N), scale = fieldN / N, pay = fitPayouts(fieldN, prize * scale, Math.max(first * scale, prize * scale * 0.05), 20);
   const locked = opts.locked || null, per = {};
   for (const s of srcs) {
-    const players = P.map(p => { const k = keyOf(p.name, p.pos, p.team), r = hubBy.get(k); const own = ownOf(r, s, vendors) ?? p.own, cown = cptOf(r, s, vendors) ?? Math.max(0.1, own / 6); const q = Object.assign({}, p, { proj: Math.max(0, projOf(r, s, p.proj) ?? 0), own, cown, fown: own }); if (locked && locked[k] != null) { q.proj = locked[k]; q.sd = 0.01; q.ceil = null; } return q; });
+    const players = P.map(p => { const k = keyOf(p.name, p.pos, p.team), r = hubBy.get(k); const os = fieldOwnSrc(s, L.sd), own = ownOf(r, os, vendors) ?? p.own, cown = cptOf(r, os, vendors) ?? Math.max(0.1, own / 6); const q = Object.assign({}, p, { proj: Math.max(0, projOf(r, s, p.proj) ?? 0), own, cown, fown: own }); if (locked && locked[k] != null) { q.proj = locked[k]; q.sd = 0.01; q.ceil = null; } return q; });
     const ps = Object.assign({}, pool, { players }), model = buildModel(ps, {});
     // fitted presets (see server/contestsim.mjs): showdown leaves salary, classic stacks QB+2 far more than the old default
     const opt = Object.assign(fkey === "nfl_sd" ? { conc: 1.0, minSal: 44000, boost: 1.0, rounds: 3 } : { conc: 1.25, minSal: 48000, boost: 1.0, rounds: 3, nflStacks: { 1: 45, 2: 41, 3: 5, bring: 62 }, skill: [[0.15, 60], [0.35, 5]], dupeFloor: "auto" }, fieldProfile(fee, fkey, N) || {});

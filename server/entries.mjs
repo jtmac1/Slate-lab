@@ -10,13 +10,17 @@ import { FORMATS } from "../src/engine/formats.mjs";
 import { parseEntries } from "../src/engine/audit.mjs";
 import { nrm } from "../src/engine/csv.mjs";
 import { hubData } from "./sources.mjs";
+import { subGuide } from "./subguide.mjs";
+import { withData } from "./etrdata.mjs";
 
 const readJ = f => fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : null;
 const file = dir => path.join("data", dir, "entries.json");
 export const loadEntries = dir => readJ(file(dir)) || { dir, entries: [], importedAt: null };
 // slate guide: ETR's breakdown + sim analysis (+ Blick notes) for this specific slate, written per
 // slate as data/<slate>/slate-guide.json (see memory "slate-guide"); drives the "Slate" check group
-export const loadGuide = dir => readJ(path.join("data", dir, "slate-guide.json"));
+// NFL classic sub-slates (Early Only, Afternoon, Primetime, Sun-Mon...) without their own guide read the Main guide filtered to their games
+// ETR's data tables (DvP, XFP, PROE, contest selection) are attached on load as guide.data (server/etrdata.mjs)
+export const loadGuide = dir => withData(readJ(path.join("data", dir, "slate-guide.json")) || subGuide(dir), dir);
 const nm = s => nrm(String(s || ""));
 const isDst = p => /^(DST|D|DEF)$/i.test(p || "");
 const CATCH = /^(WR|TE|RB)$/;

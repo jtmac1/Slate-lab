@@ -15,12 +15,15 @@ import { fitPayouts } from "../src/engine/payouts.mjs";
 import { mulberry32 } from "../src/engine/rng.mjs";
 import { sigOf } from "../src/engine/lineups.mjs";
 import { ownModel } from "../server/sources.mjs";
+import { classicFeatures, markObviousBringBack, rulesFor, gradePool } from "../src/engine/grade.mjs";
 
 const arg = (k, d) => { const a = process.argv.find(x => x.startsWith(`--${k}=`)); return a ? a.slice(k.length + 3) : d; };
 const FROM = arg("from", "2025-09-01"), TO = arg("to", "2026-12-31"), K = +arg("k", 20), POOL = +arg("pool", 3000), ITERS = +arg("iters", 1000), RAWOWN = process.argv.includes("--rawown"), LIMIT = +arg("limit", 0), OUT = arg("out", "data/reports/loop-nfl.json");
 const [SI, SN] = (arg("shard", "0/1")).split("/").map(Number);
 // --gen='{"conc":1.25,"skill":[[0.15,60],[0.35,5]]}' overrides the generator settings (default: the app's classic marquee)
 const GEN = JSON.parse(arg("gen", "{}"));
+// lineup grade (src/engine/grade.mjs) with the rule weights from --rules (a rulebook JSON; use a window that ends before the contests graded)
+const RULEBOOK = JSON.parse(fs.readFileSync(arg("rules", "data/reports/rulebook-nfl.json"), "utf8")), GRADE_W = [0.3, 0.45, 0.6, 0.75];
 const mean = a => a.length ? a.reduce((s, x) => s + x, 0) / a.length : null, se = a => a.length > 1 ? Math.sqrt(a.reduce((s, x) => s + (x - mean(a)) ** 2, 0) / (a.length - 1) / a.length) : null;
 const NFL_DEF = { 1: 45, 2: 41, 3: 5, bring: 62 };
 
@@ -59,12 +62,18 @@ function gradeOne(c) {
   const rankOf = pts => { let lo = 0, hi = realFP.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (realFP[mid] > pts) lo = mid + 1; else hi = mid; } return lo + 1; };
   // construction of each pool lineup, on the model's ownership: QB stack size, bring-back, chalk count (20%+), salary left
   const GP = gp.players, shape = lu => { const qb = lu.map(i => GP[i]).find(p => p.pos === "QB"); const stackN = qb ? lu.filter(i => GP[i] !== qb && GP[i].team === qb.team && /^(WR|TE|RB)$/.test(GP[i].pos)).length : 0, bring = !!qb && lu.some(i => GP[i].team === qb.opp && GP[i].pos !== "DST"); return { stackN, bring, chalk: lu.filter(i => GP[i].own >= 20).length, left: f.cap - lu.reduce((s, i) => s + GP[i].sal, 0) }; };
-  const cand = res.rows.map(r => { const pts = score(r.lu); if (pts == null) return null; const rank = rankOf(pts), dup = sigs[sigOf(r.lu, f)] || 0, payout = rc.payouts[rank - 1] || 0; return Object.assign({ roi: r.roi, proj: r.proj, pts, rank, pct: 1 - (rank - 1) / N, top10: rank <= Math.ceil(N * 0.1), top1: rank <= Math.ceil(N * 0.01), actROI: 100 * (payout / (1 + dup) - 1), actROIraw: 100 * (payout - 1), dup, dupN: r.dupN, own: r.own }, shape(r.lu)); }).filter(Boolean);
+  const cand = res.rows.map(r => { const pts = score(r.lu); if (pts == null) return null; const rank = rankOf(pts), dup = sigs[sigOf(r.lu, f)] || 0, payout = rc.payouts[rank - 1] || 0; return Object.assign({ lu: r.lu, roi: r.roi, proj: r.proj, pts, rank, pct: 1 - (rank - 1) / N, top10: rank <= Math.ceil(N * 0.1), top1: rank <= Math.ceil(N * 0.01), actROI: 100 * (payout / (1 + dup) - 1), actROIraw: 100 * (payout - 1), dup, dupN: r.dupN, own: r.own }, shape(r.lu)); }).filter(Boolean);
   if (cand.length < K * 3) return { dir: c.dir, skip: "too few scorable pool lineups" };
   const byROI = cand.slice().sort((a, b) => b.roi - a.roi), byProj = cand.slice().sort((a, b) => b.proj - a.proj), rng = mulberry32(99);
   const pick = (arr, k) => { const a = arr.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a.slice(0, k); };
   const rules = x => x.stackN >= 2 && x.bring && x.chalk >= 4 && x.left < 600, rulesLite = x => x.stackN >= 1 && x.chalk >= 3 && x.left < 600;
+  // the grade: sim ROI percentile + rulebook percentile (no slate guide exists for past contests), at several sim weights
+  const games = new Set(GP.map(p => p.team)).size / 2, feats = markObviousBringBack(cand.map(x => classicFeatures(x.lu.map(i => GP[i]), f.cap)));
+  const RL = rulesFor(RULEBOOK, { sd: false, fee: c.fee, games }), byGrade = {};
+  for (const ws of GRADE_W) { const g = gradePool(cand.map((x, i) => ({ sim: x.roi, feats: feats[i] })), RL, { weights: { sim: ws, rules: 1 - ws, guide: 0 }, fee: c.fee }); byGrade[ws] = cand.map((x, i) => [x, g[i].grade]).sort((a, b) => b[1] - a[1]).map(z => z[0]); }
   const strategies = {
+    ...Object.fromEntries(GRADE_W.map(ws => [`grade (sim ${ws} / rules ${+(1 - ws).toFixed(2)})`, byGrade[ws].slice(0, K)])),
+    "rules + grade (sim 0.45)": byGrade[0.45].filter(rules).slice(0, K),
     "top K by sim ROI": byROI.slice(0, K),
     "sim ROI, no expected copies": byROI.filter(x => x.dupN <= 1).slice(0, K),
     "top K by projection": byProj.slice(0, K),

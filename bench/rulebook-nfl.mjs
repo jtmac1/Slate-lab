@@ -10,6 +10,7 @@ import path from "node:path";
 import { nrm } from "../src/engine/csv.mjs";
 import { listPost, readPost } from "./post-store.mjs";
 const args = process.argv.slice(2).filter(a => !a.startsWith("--")), flag = k => { const a = process.argv.find(x => x.startsWith(`--${k}=`)); return a ? a.slice(k.length + 3) : null; };
+const JROWS = [];
 const USER = flag("user") || "jtmac1999", MINFEE = +(flag("minfee") || 20), FROM = args[0] || "2025-09-01", TO = args[1] || "2099-12-31";
 const REF = new Map(); try { for (const p of JSON.parse(fs.readFileSync("data/nfl-ref/players-2026.json", "utf8"))) REF.set(nrm(p.name), p.pos); } catch {}
 const posOf = p => p.pos && p.pos !== "CPT" && p.pos !== "FLEX" ? p.pos : (REF.get(nrm(p.name)) || (/\s/.test(p.name) ? "?" : "DST"));
@@ -37,6 +38,14 @@ function feats(l, j, sd, rankOf, cut) {
     f.rbDst = ps.some(p => posOf(p) === "DST" && ps.some(q => posOf(q) === "RB" && q.team === p.team));
     f.dstVsOwnQB = !!qb && ps.some(p => posOf(p) === "DST" && p.team === qb.opp);
     f.maxTeam = Math.max(...Object.values(tc));
+    // ETR "How to Win NFL DFS Tournaments in 2026" tips (data/strategy/nfl-classic-playbook.json)
+    const n = pos => ps.filter(p => posOf(p) === pos).length, spend = pos => ps.filter(p => posOf(p) === pos).reduce((s, p) => s + (p.sal || 0), 0);
+    f.rbN = n("RB"); f.wrN = n("WR"); f.teN = n("TE");
+    f.rbSpend = spend("RB"); f.teSpend = spend("TE"); f.wrSpend = spend("WR"); f.qbSal = qb ? qb.sal || 0 : 0; f.dstSal = spend("DST");
+    f.bringN = qb ? ps.filter(p => p.team === qb.opp && posOf(p) !== "DST").length : 0;
+    f.qbId = f.stack >= 1 ? qb.id : null; f.oppIds = qb ? ps.filter(p => p.team === qb.opp && posOf(p) !== "DST").map(p => p.id) : [];
+    f.sub1 = ps.filter(p => (p.aown || 0) < 0.01).length; f.sub5 = ps.filter(p => (p.aown || 0) < 0.05).length; f.mid510 = ps.filter(p => (p.aown || 0) >= 0.05 && (p.aown || 0) < 0.10).length;
+    const dst = ps.find(p => posOf(p) === "DST"); f.rbDstPair = dst ? ps.filter(p => posOf(p) === "RB" && p.team === dst.team).map(p => [p.id, dst.id]) : [];
   }
   return f;
 }
@@ -49,6 +58,23 @@ const RULES = {
     ["4+ players at 20%+ owned", f => f.chalk >= 4], ["0-2 players at 20%+ owned", f => f.chalk <= 2],
     ["not duplicated", f => !f.dup], ["Stokastic sim top decile", f => f.simPct <= 0.1], ["Stokastic sim top half", f => f.simPct <= 0.5], ["Stokastic sim bottom quarter", f => f.simPct >= 0.75],
     ["max 3 from one team", f => f.maxTeam <= 3], ["4+ from one team", f => f.maxTeam >= 4], ["5 or fewer teams", f => f.teams <= 5],
+    ["ETR: RB in the flex (3 RBs)", f => f.rbN >= 3], ["ETR: WR in the flex (4 WRs)", f => f.wrN >= 4], ["ETR: TE in the flex (2 TEs)", f => f.teN >= 2],
+    ["ETR: RB spend above contest median", f => f.rbHi], ["ETR: TE spend above contest median", f => f.teHi], ["ETR: WR spend below contest median", f => f.wrLo], ["ETR: QB salary below contest median", f => f.qbLo],
+    ["ETR: QB under $6,000", f => f.qbSal > 0 && f.qbSal < 6000], ["ETR: QB $7,000+", f => f.qbSal >= 7000],
+    ["ETR: spend up RB+TE, down WR+QB (all four)", f => f.rbHi && f.teHi && f.wrLo && f.qbLo],
+    ["ETR: naked QB (no stack)", f => f.stack === 0], ["ETR: QB + exactly 1 (single stack)", f => f.stack === 1], ["ETR: QB + exactly 2 (double stack)", f => f.stack === 2],
+    ["ETR: double bring-back (2+ from opponent)", f => f.bringN >= 2], ["ETR: onslaught + bring-back", f => f.stack >= 3 && f.bringN >= 1],
+    ["ETR: DST $3,000+", f => f.dstSal >= 3000], ["ETR: DST spend above contest median", f => f.dstHi], ["ETR: DST $2,500 or less", f => f.dstSal > 0 && f.dstSal <= 2500],
+    ["ETR: RB + own DST, pair under 30% of the RB's lineups", f => f.rbDstLev === true], ["ETR: RB + own DST, pair 30%+ of the RB's lineups", f => f.rbDstLev === false],
+    ["ETR: any player under 1% owned", f => f.sub1 >= 1], ["ETR: 1-2 players under 5%", f => f.sub5 >= 1 && f.sub5 <= 2], ["ETR: 3+ players under 5%", f => f.sub5 >= 3], ["ETR: no player under 5%", f => f.sub5 === 0],
+    ["ETR: 3+ players at 5-10% owned", f => f.mid510 >= 3],
+    ["ETR: chalk combo, most common pair in 15%+ of field", f => f.maxPair >= 0.15], ["ETR: no pair in 8%+ of field", f => f.maxPair < 0.08],
+    // scoped rules (third element): compared only among QB stacks whose QB has an obvious bring-back
+    ["ETR BB: stack takes the obvious bring-back (vs fading it)", f => f.chalkBB === true, f => f.chalkBB != null],
+    ["ETR BB: fades it for a different bring-back", f => f.chalkBB === false && f.bringN >= 1, f => f.chalkBB != null],
+    ["ETR BB: fades it, no bring-back at all", f => f.chalkBB === false && f.bringN === 0, f => f.chalkBB != null],
+    ["ETR BB: fades it and plays 3 RBs", f => f.chalkBB === false && f.rbN >= 3, f => f.chalkBB != null],
+    ["ETR BB: takes it when 60%+ of the QB's stacks do", f => f.chalkBB === true, f => f.chalkBB != null && f.chalkBBShare >= 0.6],
   ],
   showdown: [
     ["5-1 split", f => f.split === "5-1"], ["4-2 split", f => f.split === "4-2"], ["3-3 split", f => f.split === "3-3"],
@@ -68,17 +94,43 @@ for (const f of listPost("nfl")) {
   for (const p of j.players) { if (p.pos === "CPT") { j.cptOwn.set(p.id, p.aown); if (!j.byId.has(p.id)) j.byId.set(p.id, p); } else j.byId.set(p.id, Object.assign({}, p, { flexSal: p.sal })); }
   const L = j.lineups, N = L.length, cut = Math.max(1, Math.ceil(N * 0.01));
   const order = L.slice().sort((a, b) => b.sroi - a.sroi), rank = new Map(order.map((l, i) => [l, i])), rankOf = l => rank.get(l) / N;
-  for (const l of L) { if (l.aroi == null) continue; const ft = feats(l, j, sd, rankOf, cut); ft.tier = tierOf(c.fee); ft.date = c.date; data[sd ? "showdown" : "classic"].push(ft); }
+  const games = new Set(j.players.map(p => p.team).filter(Boolean)).size / 2, fs_ = [];
+  for (const l of L) { if (l.aroi == null) continue; const ft = feats(l, j, sd, rankOf, cut); ft.tier = tierOf(c.fee); ft.date = c.date; ft.N = N; ft.games = games; ft._l = l; fs_.push(ft); data[sd ? "showdown" : "classic"].push(ft); }
+  if (!sd && fs_.length) {
+    // spend vs this contest's median lineup, and how common each lineup's player pairs are in this field
+    const med = k => { const v = fs_.map(f => f[k]).sort((a, b) => a - b); return v[v.length >> 1]; };
+    const m = { rb: med("rbSpend"), te: med("teSpend"), wr: med("wrSpend"), qb: med("qbSal"), dst: med("dstSal") };
+    const single = new Map(), pair = new Map(), key = (a, b) => a < b ? a + "|" + b : b + "|" + a;
+    for (const l of L) { const ids = l.ids.filter(Boolean); for (let i = 0; i < ids.length; i++) { single.set(ids[i], (single.get(ids[i]) || 0) + 1); for (let k = i + 1; k < ids.length; k++) { const q = key(ids[i], ids[k]); pair.set(q, (pair.get(q) || 0) + 1); } } }
+    for (const f of fs_) {
+      f.rbHi = f.rbSpend > m.rb; f.teHi = f.teSpend > m.te; f.wrLo = f.wrSpend < m.wr; f.qbLo = f.qbSal < m.qb; f.dstHi = f.dstSal > m.dst;
+      const ids = f._l.ids.filter(Boolean); let mx = 0; for (let i = 0; i < ids.length; i++) for (let k = i + 1; k < ids.length; k++) mx = Math.max(mx, pair.get(key(ids[i], ids[k])) || 0);
+      f.maxPair = mx / N;
+      f.rbDstLev = f.rbDstPair.length ? f.rbDstPair.every(([rb, d]) => (pair.get(key(rb, d)) || 0) / (single.get(rb) || 1) < 0.3) : null;
+    }
+    // Leone, "When Is a Chalk Bring-Back Worth It?": for each stacked QB, the obvious bring-back is the opposing player
+    // most often paired with him in this field; "obvious" when 40%+ of that QB's stacked lineups carry him
+    const byQB = new Map();
+    for (const f of fs_) if (f.qbId) { const q = byQB.get(f.qbId) || { n: 0, opp: new Map() }; q.n++; for (const o of f.oppIds) q.opp.set(o, (q.opp.get(o) || 0) + 1); byQB.set(f.qbId, q); }
+    for (const f of fs_) {
+      f.chalkBB = null; if (!f.qbId) continue; const q = byQB.get(f.qbId); if (q.n < 5) continue;
+      let top = null, c = 0; for (const [o, k] of q.opp) if (k > c) { top = o; c = k; }
+      if (top && c / q.n >= 0.4) { f.chalkBB = f.oppIds.includes(top); f.chalkBBShare = c / q.n; }
+    }
+  }
+  for (const f of fs_) { delete f._l; delete f.rbDstPair; delete f.qbId; delete f.oppIds; }
 }
 dates.sort(); const mid = dates[Math.floor(dates.length / 2)];
 const out = [`# NFL rulebook from the archive: ${nC} contests ($${MINFEE}+), ${dates[0]} to ${dates[dates.length - 1]}`, "", "ROI is the lineup's realized return; top-1% is the share of lineups finishing in the top 1% of their contest. t is Welch's t on ROI (follow vs not). KEPT = |t| >= 3, same sign in both halves of the window (split at " + mid + "), 300+ lineups each side. Lift = top-1% rate following / not following.", ""];
 for (const fmt of ["classic", "showdown"]) {
   const rows = data[fmt]; if (!rows.length) continue;
-  for (const tier of ["all", "$20-99", "$100-299", "$300+"]) {
-    const rs = tier === "all" ? rows : rows.filter(r => r.tier === tier); if (rs.length < 1000) continue;
+  const SEG = { "small field (2,000 or fewer)": r => r.N <= 2000, "large field (5,000+)": r => r.N >= 5000, "short slate (8 games or fewer)": r => r.games <= 8, "long slate (9+ games)": r => r.games >= 9 };
+  for (const tier of ["all", "$20-99", "$100-299", "$300+", ...(fmt === "classic" ? Object.keys(SEG) : [])]) {
+    const rs = tier === "all" ? rows : SEG[tier] ? rows.filter(SEG[tier]) : rows.filter(r => r.tier === tier); if (rs.length < 1000) continue;
     out.push(`## ${fmt} ${tier}: ${rs.length.toLocaleString()} lineups, ${rs.filter(r => r.mine).length} mine`, "", "| rule | follow n | ROI follow | ROI not | t | top-1% lift | half 1 t | half 2 t | field % | me % | verdict |", "|---|---|---|---|---|---|---|---|---|---|---|");
     const lines = [];
-    for (const [name, fn] of RULES[fmt]) {
+    const rsSeg = rs;
+    for (const [name, fn, scope] of RULES[fmt]) { const rs = scope ? rsSeg.filter(scope) : rsSeg;
       const a = rs.filter(fn), b = rs.filter(r => !fn(r)); if (a.length < 50 || b.length < 50) continue;
       const t = welch(a.map(r => r.roi), b.map(r => r.roi));
       const h1 = rs.filter(r => r.date < mid), h2 = rs.filter(r => r.date >= mid);
@@ -86,10 +138,13 @@ for (const fmt of ["classic", "showdown"]) {
       const lift = mean(a.map(r => r.top1)) / (mean(b.map(r => r.top1)) || 1e-9);
       const mine = rs.filter(r => r.mine); const mePct = mine.length ? mean(mine.map(r => fn(r) ? 1 : 0)) : NaN;
       const kept = Math.abs(t) >= 3 && Math.sign(t1) === Math.sign(t2) && Math.sign(t1) === Math.sign(t) && a.length >= 300 && b.length >= 300;
+      JROWS.push({ fmt, seg: tier, rule: name, n: a.length, notN: b.length, roiF: +(100 * mean(a.map(r => r.roi))).toFixed(1), roiN: +(100 * mean(b.map(r => r.roi))).toFixed(1), t: +t.toFixed(2), lift: +lift.toFixed(3), t1: isNaN(t1) ? null : +t1.toFixed(2), t2: isNaN(t2) ? null : +t2.toFixed(2), kept, follow: kept ? t > 0 : null });
       lines.push({ t, s: `| ${name} | ${a.length.toLocaleString()} | ${(100 * mean(a.map(r => r.roi))).toFixed(0)}% | ${(100 * mean(b.map(r => r.roi))).toFixed(0)}% | ${t.toFixed(1)} | ${lift.toFixed(2)} | ${isNaN(t1) ? "-" : t1.toFixed(1)} | ${isNaN(t2) ? "-" : t2.toFixed(1)} | ${(100 * a.length / rs.length).toFixed(0)}% | ${isNaN(mePct) ? "-" : (100 * mePct).toFixed(0) + "%"} | ${kept ? (t > 0 ? "KEEP: follow" : "KEEP: avoid") : ""} |` });
     }
     lines.sort((x, y) => Math.abs(y.t) - Math.abs(x.t)).forEach(x => out.push(x.s)); out.push("");
   }
 }
-fs.mkdirSync("data/reports", { recursive: true }); fs.writeFileSync("data/reports/rulebook-nfl.md", out.join("\n") + "\n");
+// machine-readable copy for the lineup grade (server/grade.mjs); --json=<file> to write a window-specific one (backtests)
+fs.mkdirSync("data/reports", { recursive: true }); fs.writeFileSync(flag("json") || "data/reports/rulebook-nfl.json", JSON.stringify({ built: new Date().toISOString(), from: FROM, to: TO, minfee: MINFEE, contests: nC, split: mid, rows: JROWS }, null, 1));
+if (!flag("json")) fs.writeFileSync("data/reports/rulebook-nfl.md", out.join("\n") + "\n");
 console.log(out.join("\n")); console.log("wrote data/reports/rulebook-nfl.md");

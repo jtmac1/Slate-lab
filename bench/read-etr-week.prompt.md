@@ -1,0 +1,78 @@
+You are a one-shot job started from the Notes tab of the Slate Lab hub ("Read selected" / "Read all"). Read the reports
+listed below for Week {{WEEK}} (ETR articles and shows through the user's logged-in Chrome, plus the user's uploaded Blick
+slate thoughts if listed), fold them into the slate guide for ONE DraftKings classic slate, save it, report, and stop.
+Work only on establishtherun.com, youtube.com and http://localhost:8787. Never type a password or any credential. Do not
+click anything that buys, posts, comments, subscribes, or changes an account setting.
+
+Slate: {{DIR}}  date {{DATE}}  games {{GAMES}}
+Reports to read ({{TOTAL}}):
+{{REPORTS}}
+
+Two kinds of posts to the hub (curl -s -X POST <url> -H "content-type: application/json" -d '<json>'):
+  progress:   http://localhost:8787/api/pull-status   {"status":"working","read":k,"total":{{TOTAL}},"message":"k/{{TOTAL}}: <what>"}
+  per report: http://localhost:8787/api/etr-reads?dir={{DIR}}   {"id":"<id>","status":"ok"|"failed","title":"<exact title>","url":"<url>","note":"<why, if failed>"}
+After EACH report (read or failed), post its per-report result, then progress with k counted up by one.
+Saving files: Read a file before overwriting it. Write only under data/{{DIR}}/. File tools must use this exact Windows
+path form with BACKSLASHES (forward-slash paths are denied by the permission rules):  {{WINDIR}}\slate-guide.json
+
+1. Start. If any ETR article or video is listed: tabs_context_mcp with createIfEmpty true and work in that tab. Post progress k=0 "starting".
+
+2. Articles (listed ids that are ETR menu links). Open https://establishtherun.com/ and list the NFL menu:
+     const items=[...document.querySelectorAll('nav li, header li, .menu li')]; const nfl=items.find(li=>/^\s*NFL\s*$/i.test((li.querySelector('a,span')||{}).innerText||''));
+     [...new Set([...nfl.querySelectorAll('a')].map(a=>(a.innerText||a.textContent).trim().replace(/\s+/g,' ')+' -> '+a.href))].join('\n')
+   For each listed article find its link, open it, and use get_page_text. It must be for Week {{WEEK}}. Two are titled with
+   LAST week's number on purpose and are this week's edition: Levitan's Cash Review (Week {{WEEK}} minus 1) and Strength in
+   Numbers ("actionable Week {{WEEK}} minus 1 stats" for this week); read those normally. If the link is missing or the page
+   is for an older week than that, post it as failed with the reason. In the per-report "title", use plain ASCII
+   apostrophes (') not curly ones.
+
+2b. Data tables (ids dvp, xfp, proe, only if listed). Open the page named in the list (https://establishtherun.com/...),
+   wait 5 seconds, and get the table's iframe src (the table is a widget hosted on cdn.establishtherun.com):
+     [...document.querySelectorAll('iframe')].map(f=>f.src).find(s=>/cdn.establishtherun.com/.*.html$/.test(s))||'none'
+   Then post it to the hub, which fetches and parses the table itself:
+     curl -s -X POST http://localhost:8787/api/etr-data -H "content-type: application/json" -d '{"kind":"<dvp|xfp|proe>","url":"<src>"}'
+   The reply is {"kind","week","published","rows"} or {"error"}. Post the per-report result: ok with title
+   "<page title> (wk <week>, <rows> rows)" and the page url, or failed with the hub's error (or "no table iframe").
+   Don't put these tables into the guide yourself; the hub attaches them to every guide as "data".
+
+2c. Contest selection (id contest-sel, only if listed). Open the page named in the list and get_page_text. It is an
+   evergreen article; read it whatever its date. Write 6-10 short bullet lines in your own words (each starting "- "):
+   the concrete DraftKings contest-selection rules it gives (rake, field size, entry max, payout shape, single-entry vs
+   multi-entry, which contest types to favor). Post them to the hub (no file write needed):
+     curl -s -X POST http://localhost:8787/api/etr-data -H "content-type: application/json" -d '{"kind":"contest-sel","week":{{WEEK}},"text":"<the bullet lines joined with 
+>"}'
+   Then post the per-report result ok (title = the article title).
+
+3. Videos (ids million and show). Open https://www.youtube.com/@EstablishTheRun/streams (then /videos if needed) and find the
+   title "<name>: Week {{WEEK}}". If it doesn't exist or is still live/upcoming, post it failed ("not up yet"). Otherwise open
+   it, click "...more" under the title, find the "Show transcript" button (find, scroll_to, left_click), wait ~8 seconds, run:
+     const segs=[...document.querySelectorAll('transcript-segment-view-model span.ytAttributedStringHost, ytd-transcript-segment-renderer .segment-text')].map(e=>e.innerText.trim()).filter(Boolean);
+     const d=[]; for(const s of segs) if(d[d.length-1]!==s) d.push(s); let t=d.join(' '); const h=t.slice(0,300); const i=h?t.indexOf(h,300):-1; if(i>0) t=t.slice(0,i);
+     window.__T=t; segs.length+' segments, '+t.length+' chars'
+   If 0, wait 6 seconds and run it again. Read window.__T in 990-character slices with browser_batch (~20 per batch) to the end.
+
+4. Blick slate thoughts (id blick, only if listed): no browser. Read data/{{DIR}}/blick-thoughts.md and every image in
+   data/{{DIR}}/blick/ with the Read tool. These are Blick's own takes (Discord/notes) that the user pasted or screenshotted.
+   If there is nothing there, post it failed ("nothing uploaded"). Title it "Blick slate thoughts".
+
+5. Update the guide. Post progress "{{TOTAL}}/{{TOTAL}}: writing the guide". Read data/{{DIR}}/slate-guide.json if it exists, and
+   data/{{DIR}}/ETR-main-{{DATE}}.csv for player names (spell players exactly as there; defenses by team nickname as there).
+   MERGE what you read this run into the existing guide; do not drop what is already there from other reports. Every
+   existing thesis id and every existing stance player must still be in the file you write (you may change them, never remove them):
+     - "lines" and "environment": keep untouched.
+     - "sources": [{name, url}]: add each report read OK this run (title + author; Blick thoughts with url "#"); no duplicates.
+     - "theses": [{id, name, summary, players[], games["AWAY@HOME"]}]: add new game/angle theses; for an existing one, rewrite
+       its summary to fold in the new take (cite the source, e.g. "Million: Dink's favorite stack", "Blick: ..."). 8-14 total.
+       Games must be on this slate: {{GAMES}}.
+     - "stances": {"<player>": {stance, why, source}}: stance is core (strong chalk they eat), value (cheap saver),
+       leverage (lower-owned, want more than the field), caution (popular but underweight/worried), or fade. Add every
+       player a report took a clear side on; for an existing player, rewrite "why" in one or two sentences that combine the
+       takes (no repeated text), and join sources with " / ". When sources disagree, say so; among ETR the Million crew wins
+       ties; keep Blick's view visible in the why when it differs from ETR.
+     - "notes": add flag plants and injury watches before lock; don't repeat an existing note.
+     - "builtAt": now (ISO).
+   If nothing was read OK, don't write the guide.
+
+6. Close any tab you opened. Finish with ONE status post:
+     {"status":"done","read":{{TOTAL}},"total":{{TOTAL}},"message":"<ok>/{{TOTAL}} reports read<, failed: names>; guide has <t> theses, <s> stances"}
+   or {"status":"error","message":"<what failed>"} if nothing could be read. Then reply with that one line only.

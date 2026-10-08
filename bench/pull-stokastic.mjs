@@ -7,7 +7,10 @@
 //   node bench/pull-stokastic.mjs 2025-09-01 2026-02-28 NFL --island --max 20000
 //   node bench/pull-stokastic.mjs --slate 35987 [--max N]     every contest Stokastic simulated on a slate (slate ids: bench/pull-projections.mjs)
 // --island  NFL showdowns on stand-alone games only (Mon-Sat, or Sunday 7pm+ kickoffs)
-// --max N   contests with more than N entries store players and stacks but not lineups
+// --max N   contests with more than N entries store players and stacks but not lineups, except contests --user
+//           entered: those always keep every lineup, so all of his entries can be graded
+// --user U  whose entries lift the --max cap (default jtmac1999)
+// --refetch-mine  re-pull saved players-only files for contests --user entered
 // --type T  only contests of this DK game type (Classic, Showdown)
 // --minfee F  skip contests with an entry fee under F
 // --skip-big  skip contests over --max entirely (no player table) instead of storing players only
@@ -15,14 +18,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parseCSV } from "../src/engine/csv.mjs";
-import { compact, writePost, postFile } from "./post-store.mjs";
+import { compact, writePost, postFile, readPost } from "./post-store.mjs";
 
 const API = "https://app-api-dfs-prod-main.azurewebsites.net/api/contests/";
 const args = process.argv.slice(2), flags = args.filter(a => a.startsWith("--")), pos = args.filter(a => !a.startsWith("--"));
 const [from, to = from, sportArg = ""] = pos;
 const ISLAND = flags.includes("--island"), MAX = flags.includes("--max") ? +args[args.indexOf("--max") + 1] : Infinity, SLATE = flags.includes("--slate") ? args[args.indexOf("--slate") + 1] : null,
   SLATES = flags.includes("--slates") ? JSON.parse(fs.readFileSync(args[args.indexOf("--slates") + 1], "utf8")) : null,
-  SHARD = ((args.find(a => a.startsWith("--shard=")) || "").slice(8) || "").split("/").map(Number), TYPE = flags.includes("--type") ? args[args.indexOf("--type") + 1] : null, MINFEE = flags.includes("--minfee") ? +args[args.indexOf("--minfee") + 1] : 0, SKIPBIG = flags.includes("--skip-big"), PAR = flags.includes("--par") ? Math.max(1, +args[args.indexOf("--par") + 1] || 1) : 1;
+  SHARD = ((args.find(a => a.startsWith("--shard=")) || "").slice(8) || "").split("/").map(Number), TYPE = flags.includes("--type") ? args[args.indexOf("--type") + 1] : null, MINFEE = flags.includes("--minfee") ? +args[args.indexOf("--minfee") + 1] : 0, SKIPBIG = flags.includes("--skip-big"), PAR = flags.includes("--par") ? Math.max(1, +args[args.indexOf("--par") + 1] || 1) : 1,
+  USER = flags.includes("--user") ? args[args.indexOf("--user") + 1] : "jtmac1999", REFETCH = flags.includes("--refetch-mine");
 if (!from && !SLATE && !SLATES) { console.error("usage: node bench/pull-stokastic.mjs <from> [to] [sport] [--island] [--max N]"); process.exit(1); }
 const money = s => +String(s).replace(/[$,]/g, "") || 0, sleep = ms => new Promise(r => setTimeout(r, ms));
 const weekday = d => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(d + "T12:00:00Z").getUTCDay()];
@@ -68,21 +72,27 @@ console.log(SLATES ? `${list.length} contests across the listed slates` : SLATE 
 const get = async q => { const r = await fetch(API + q); if (!r.ok) throw new Error(`${r.status} ${q.slice(0, 40)}`); return r.json(); };
 let pulled = 0, skipped = 0, failed = 0, bytes = 0;
 let skippedBig = 0;
+// did USER enter this contest? From the DK history row when there is one, else ask Stokastic (one small call)
+const entered = async c => { if (c.mine && c.mine.length) return true; try { const m = await get(`getRoiByLineup?siteContestId=${c.key}&user=${encodeURIComponent(USER)}&currentPage=1&pageSize=150&contestType=PostContest&sortBy=SIMROI&sortOrder=DESC&includeAllLineups=false`); return Array.isArray(m) && m.length > 0; } catch { return false; } };
 async function pullOne(c) {
   const file = postFile(c);
-  if (fs.existsSync(file) || fs.existsSync(file.replace(/.gz$/, ""))) { skipped++; return; }
-  if (SKIPBIG && c.entries > MAX) { skippedBig++; return; }
+  const mineBig = c.entries > MAX && await entered(c);
+  if (fs.existsSync(file) || fs.existsSync(file.replace(/.gz$/, ""))) {
+    let redo = false; if (REFETCH && mineBig) { try { redo = !!readPost(fs.existsSync(file) ? file : file.replace(/.gz$/, "")).lineupsSkipped; } catch {} }
+    if (!redo) { skipped++; return; }
+  }
+  if (SKIPBIG && c.entries > MAX && !mineBig) { skippedBig++; return; }
   const t0 = Date.now();
   try {
     const common = `siteContestId=${c.key}&user=&currentPage=1&pageSize=150&contestType=PostContest`;
     const players = await get(`getRoiByPlayer?${common}&opponent=&sortBy=SIMROI&sortOrder=DESC&includeAllPLayers=true`);
     if (!Array.isArray(players) || !players.length) throw new Error("no players (not simulated?)");
     const stacks = await get(`getRoiByStack?${common}&includeAllStacks=true`);
-    const big = c.entries > MAX, lineups = big ? [] : await get(`getRoiByLineup?${common}&sortBy=SIMROI&sortOrder=DESC&includeAllLineups=true`);
+    const big = c.entries > MAX && !mineBig, lineups = big ? [] : await get(`getRoiByLineup?${common}&sortBy=SIMROI&sortOrder=DESC&includeAllLineups=true`);
     if (!big && (!Array.isArray(lineups) || !lineups.length)) throw new Error("no lineups (not simulated?)");
     writePost(file, compact({ contest: c, pulledAt: new Date().toISOString(), lineupsSkipped: big, lineups, players, stacks }));
     const sz = fs.statSync(file).size; bytes += sz; pulled++;
-    console.log(`  ${c.date} ${c.sport} ${c.name.slice(0, 60).padEnd(60)} ${big ? "players only" : String(lineups.length).padStart(6) + " lineups"} ${String(players.length).padStart(4)} players  ${(sz / 1e6).toFixed(2)} MB  ${Date.now() - t0} ms`);
+    console.log(`  ${c.date} ${c.sport} ${c.name.slice(0, 60).padEnd(60)} ${big ? "players only" : String(lineups.length).padStart(6) + " lineups" + (mineBig ? " (entered)" : "")} ${String(players.length).padStart(4)} players  ${(sz / 1e6).toFixed(2)} MB  ${Date.now() - t0} ms`);
   } catch (e) { failed++; console.log(`  ${c.date} ${c.sport} ${c.name.slice(0, 60).padEnd(60)} FAILED: ${e.message}`); }
   await sleep(300);
 }
