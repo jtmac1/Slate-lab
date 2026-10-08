@@ -17,13 +17,11 @@ export async function renderEntries(main, ctx) {
     ${D.entries.length ? `<div class="pos">${[["all", "All"], ["FAIL", "Fail"], ["warn", "Warn"], ["ok", "Clean"]].map(([k, l]) => `<button data-filter="${k}" aria-selected="${S.ent.filter === k}">${l}</button>`).join("")}</div>` : ""}</div>`;
   if (!D.entries.length) { html += guidePanel() + `<div class="empty">No entries imported for this slate<small>Export your entries from DraftKings (Lineups → Export to CSV) and import the file here. Downloads are not watched for entry files, only projections.</small></div>`; main.innerHTML = html; wire(main, ctx); $("#bot").innerHTML = ""; return; }
   const simOn = !!D.sim;
-  // late swap mode: live points for started players, swaps for the open slots
-  if (S.ent.late) { renderLate(main, ctx, D); return; }
   // you vs winners' profile for this format and tier (data/reports/winners-profile-nfl.json)
   if (S.ent.profile === undefined) { try { S.ent.profile = await api("/api/winners-profile"); } catch { S.ent.profile = null; } }
   html += `<div class="kpi">${[["Entries", s.lineups], ["Contests", s.contests], ["Fees", "$" + s.fees.toLocaleString()], ["Clean", s.ok], ["Warn", s.warn], ["Fail", s.fail], ["Dup risk", s.dupHigh], ["Avg own", s.avgOwn == null ? "—" : s.avgOwn + "%"], ["Avg chalk", s.avgChalk ?? "—"], ["Avg left", s.avgLeft == null ? "—" : "$" + s.avgLeft], ...(simOn ? [["Sim +all", s.simPositive ?? 0]] : [])].map(([k, v]) => `<div class="box"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("")}
     <div class="box" style="display:flex;align-items:center;gap:10px"><button class="btn${simOn ? " sec" : ""}" id="runSim"${S.ent.simBusy ? " disabled" : ""}>${S.ent.simBusy ? "Simulating…" : simOn ? "Re-run 4-source sim" : "Run 4-source sim"}</button>${simOn ? `<span class="hint">${D.sim.sources.map(x => ({ stk: "Stokastic", etr: "ETR", blick: "Blick", mkt: "Market" }[x] || x)).join(" · ")} · field ${D.sim.fieldN.toLocaleString()} · ${new Date(D.sim.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} · ${(D.sim.ms / 1000).toFixed(0)}s</span>` : `<span class="hint">ROI under each projection source against a generated field; fills the sim rule</span>`}</div>
-    <div class="box" style="display:flex;align-items:center;gap:10px"><button class="btn sec" id="lateSwap"${S.ent.lateBusy ? " disabled" : ""}>${S.ent.lateBusy ? "Pulling live…" : "Late swap"}</button><span class="hint">live points for started players, swaps for open slots</span></div></div>
+    <div class="box" style="display:flex;align-items:center;gap:10px"><button class="btn sec" id="lateSwap">Late swap →</button><span class="hint">now its own tab: live points, swaps and the duplicate check</span></div></div>
     ${profileRow(S, D)}${guidePanel()}`;
   let rows = D.entries.filter(e => S.ent.filter === "all" || (S.ent.filter === "nothesis" ? e.ok && !e.thesis : e.verdict === S.ent.filter));
   // rules score: every rule followed counts one (ours, ETR, slate); a hard break costs three
@@ -76,9 +74,7 @@ function wire(main, ctx) {
   $$("th[data-esort]", main).forEach(h => h.addEventListener("click", () => { const k = h.getAttribute("data-esort"); S.ent.sort = S.ent.sort && S.ent.sort.k === k ? { k, d: -S.ent.sort.d } : { k, d: k === "n" ? 1 : -1 }; render(); }));
   S.ent.open = S.ent.open || new Set();
   $$(".rsum", main).forEach(el => el.addEventListener("click", () => { const id = el.getAttribute("data-open"), det = el.nextElementSibling; if (S.ent.open.has(id)) S.ent.open.delete(id); else S.ent.open.add(id); if (det) det.hidden = !S.ent.open.has(id); const arrow = el.querySelector(".mini:last-child"); if (arrow) arrow.textContent = S.ent.open.has(id) ? "▴" : "▾"; }));
-  const late = $("#lateSwap", main); if (late) late.addEventListener("click", async () => { S.ent.lateBusy = true; render(); setMsg("Pulling live box scores and re-simulating with started players locked…");
-    try { S.ent.late = await api(`/api/lateswap?dir=${encodeURIComponent(S.hub.dir)}`, { method: "POST" }); setMsg(`${S.ent.late.started.length} teams started, ${S.ent.late.locked} players locked`); } catch (err) { setMsg("Late swap failed: " + err.message, true); } S.ent.lateBusy = false; render(); });
-  const back = $("#lateBack", main); if (back) back.addEventListener("click", () => { S.ent.late = null; render(); });
+  const late = $("#lateSwap", main); if (late) late.addEventListener("click", () => { S.view = "late"; render(); });
   const run = $("#runSim", main); if (run) run.addEventListener("click", async () => { S.ent.simBusy = true; render(); setMsg("Simulating every entry under each projection source…");
     try { S.ent.data = await api(`/api/sim?dir=${encodeURIComponent(S.hub.dir)}`, { method: "POST" }); const d = S.ent.data; setMsg(`Simulated ${d.summary.matched} entries under ${d.sim.sources.length} sources in ${(d.sim.ms / 1000).toFixed(0)}s · ${d.summary.simPositive} positive under every source`); }
     catch (err) { setMsg("Sim failed: " + err.message, true); } S.ent.simBusy = false; render(); });
@@ -96,19 +92,4 @@ function profileRow(S, D) {
     <tr><td><b>Your entries</b></td>${cols.map(([, k, fn]) => `<td class="num"><b>${fn(you[k])}</b></td>`).join("")}</tr>
     <tr><td>Winners</td>${cols.map(([, k, fn]) => `<td class="num">${w[k] == null ? "—" : fn(w[k])}</td>`).join("")}</tr>
     <tr><td class="hint">Field</td>${cols.map(([, k, fn]) => `<td class="num hint">${f[k] == null ? "—" : fn(f[k])}</td>`).join("")}</tr></tbody></table></div>`;
-}
-// late swap table: locked players at live points, open slots with the best fits for the salary left
-function renderLate(main, ctx, D) {
-  const { S } = ctx, L = S.ent.late, pcs = v => v == null ? "—" : v.toFixed(0) + "%";
-  let html = `<div class="tool"><button class="btn sec" id="lateBack">← Back to entries</button><span class="hint">live ${new Date(L.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} · ${L.started.length} teams started · ${L.locked} players locked${L.sources.length ? " · re-simmed under " + L.sources.join(", ") : ""}</span><div class="grow"></div><button class="btn sec" id="lateSwap">⟳ Pull live again</button></div>
-    <div class="kpi">${L.games.map(g => `<div class="box"><div class="k">${esc(g.away)}@${esc(g.home)}</div><div class="v" style="font-size:13px">${g.started ? `${g.score[g.away]}-${g.score[g.home]} <span class="mini">${esc(g.detail)}</span>` : `<span class="mini">${esc(g.detail)}</span>`}</div></div>`).join("")}</div>`;
-  for (const e of L.entries) {
-    html += `<div style="padding:10px 16px 2px"><b>${esc(e.contest.replace(/^NFL (Showdown )?/, "").slice(0, 60))}</b> <span class="hint">$${e.fee} · locked ${e.lockedPts} + open ${e.openProj} = <b>${e.total}</b> projected${e.sim ? ` · sim worst ${e.sim.worst > 0 ? "+" : ""}${e.sim.worst}% (${e.sim.agree}/${e.sim.sources.length})` : ""} · $${e.left.toLocaleString()} left</span></div>
-      <div class="lu" style="padding:0 16px 6px">${e.players.map(p => `<span class="ps">${esc(p.slot)}</span><b style="${p.locked ? "color:var(--muted)" : ""}">${esc(p.name)}</b><span class="mini"> ${p.locked ? (p.final ? "final " : "live ") + p.pts : "proj " + p.proj}</span>`).join('<span class="sep">|</span>')}</div>`;
-    if (e.swaps.length) html += `<div class="tw" style="max-height:none;padding:0 16px 8px"><table style="font-size:11.5px"><thead><tr><th class="na">Open slot</th><th class="na">Current</th><th class="na num">Proj</th><th class="na num">Own</th><th class="na num">Budget</th><th class="na">Best fits (proj · own · gain)</th></tr></thead><tbody>
-      ${e.swaps.map(s => `<tr><td><b>${esc(s.slot)}</b></td><td>${esc(s.current)}</td><td class="num">${s.currentProj}</td><td class="num">${pcs(s.currentOwn)}</td><td class="num">$${s.budget.toLocaleString()}</td><td style="white-space:normal">${s.cands.map(c => `<span style="display:inline-block;margin:1px 10px 1px 0"><b>${esc(c.name)}</b> <span class="mini">${esc(c.team)} $${c.sal.toLocaleString()} · ${c.proj} · ${pcs(c.own)} · <span class="${c.gain > 0 ? "gap up" : "gap dn"}">${c.gain > 0 ? "+" : ""}${c.gain}</span>${c.inj ? " · " + esc(c.inj) : ""}</span></span>`).join("") || '<span class="mini">nothing fits</span>'}</td></tr>`).join("")}</tbody></table></div>`;
-    else html += `<div class="hint" style="padding:0 16px 8px">every slot locked</div>`;
-  }
-  main.innerHTML = html; wire(main, ctx);
-  $("#bot").innerHTML = `<div class="bot"><span class="hint">Swaps are ranked by the Lab projection and must fit the salary left; players listed Out, Doubtful or IR are excluded. Nothing here is written to the pre-lock record.</span></div>`;
 }

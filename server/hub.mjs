@@ -27,6 +27,7 @@ import { reviewLineups, reviewPortfolio, brainStatus, loadBrain } from "./brain.
 import { contestsFor } from "./contests.mjs";
 import { saveMerge, markBuilt, diff } from "./changes.mjs";
 import { lateSwap } from "./lateswap.mjs";
+import { saveStandings, loadStandings, pickUpStandings, summary as standingsSummary } from "./standings.mjs";
 import { fetchEtrData, saveContestSelection, slateData } from "./etrdata.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -192,7 +193,9 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/plan") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); const f = path.join("data", d, "entry-plan.json"); if (req.method === "POST") { const q = JSON.parse((await body(req)).toString("utf8") || "{}"); q.savedAt = new Date().toISOString(); fs.writeFileSync(f, JSON.stringify(q, null, 1)); return json(res, 200, q); } return json(res, 200, fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : { contests: [] }); }
     if (p === "/api/brain") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); if (req.method === "POST") { const q = JSON.parse((await body(req)).toString("utf8") || "{}"); try { return json(res, 200, q.portfolio ? await reviewPortfolio(d, q.sigs || []) : await reviewLineups(d, q.sigs || [], { max: q.max })); } catch (e) { return json(res, 500, { error: e.message }); } } return json(res, 200, Object.assign(brainStatus(d), { reviews: loadBrain(d).reviews || {} })); }
     if (p === "/api/gen") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); if (req.method === "POST") { if (simming) return json(res, 409, { error: "sim already running" }); simming = true; try { const cfg = JSON.parse((await body(req)).toString("utf8") || "{}"); return json(res, 200, generateAndSim(d, cfg)); } finally { simming = false; } } return json(res, 200, loadGen(d) || { rows: [] }); }
-    if (p === "/api/lateswap" && req.method === "POST") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); if (simming) return json(res, 409, { error: "sim already running" }); simming = true; try { return json(res, 200, await lateSwap(d)); } finally { simming = false; } }
+    // DraftKings contest standings exports for late swap (My Contests -> Export Lineups to CSV, .csv or .zip)
+    if (p === "/api/standings") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); if (req.method === "POST") { try { return json(res, 200, saveStandings(d, await body(req), u.searchParams.get("name") || "")); } catch (e) { return json(res, 400, { error: e.message }); } } pickUpStandings(d); return json(res, 200, loadStandings(d).map(standingsSummary)); }
+    if (p === "/api/lateswap" && req.method === "POST") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); if (simming) return json(res, 409, { error: "sim already running" }); simming = true; try { return json(res, 200, await lateSwap(d, { user: u.searchParams.get("user") || "" })); } finally { simming = false; } }
     if (p === "/api/thesis" && req.method === "POST") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); const q = JSON.parse((await body(req)).toString("utf8") || "{}"); return json(res, 200, saveThesis(d, q.entryId, q.thesis)); }
     if (p === "/api/tag" && req.method === "POST") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); const q = JSON.parse((await body(req)).toString("utf8") || "{}"); return json(res, 200, saveTag(d, q.entryId, q.tag)); }
     if (p === "/api/contests") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); return json(res, 200, contestsFor(slateMeta(d), { draftGroup: u.searchParams.get("group") })); }
