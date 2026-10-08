@@ -20,7 +20,7 @@ for (const c of listContests().filter(c => c.fkey === fkey && c.json)) {
   const cands = slates.filter(s => s.teams === teams && Math.abs(new Date(s.date) - new Date(c.date)) <= 864e5);
   if (!cands.length) { miss++; misses.push(`${c.date} ${teams}`); continue; }
   const s = cands.sort((a, b) => Math.abs(new Date(a.date) - new Date(c.date)) - Math.abs(new Date(b.date) - new Date(c.date)))[0];
-  const file = path.join(outDir, `${c.date}-${teams.replace("|", "")}.csv`);
+  const file = path.join(outDir, `${c.date}-${fkey.endsWith("_sd") ? teams.replace("|", "") : "s" + s.id}.csv`);
   if (!fs.existsSync(file)) { const proj = await stkProjections(s.id); fs.writeFileSync(file, stkToCSV(proj, sport)); }
   map[c.key] = { file, slateId: s.id, updated: s.updated }; hit++;
 }

@@ -68,6 +68,10 @@ const DUPE = { cfb: [0.124, 0.156, 0.273] };
 // under-builds it on bigger ones: 10+ games 1.0% vs 3.6%, 5-9 games 3.2% vs 6.1%. A floor of 1.9% copies on main slates (3.2% on 5-9 games) brings
 // it to about 3.7% with chalk per lineup unchanged (169 vs 167 actual-own). The share counted here is extra copies; the
 // share of ENTRIES in a duplicated lineup is about twice that.
+// NFL showdown: share of entries that are a copy of another entry, by field size. Fitted on 2025 real showdowns
+// (298 contests, rms residual 0.05; bench/sd-dupes-real.mjs, bench/fit-dupes-sd.mjs --fit): 0.28 at 300 entries, 0.43 at 1,300, 0.54 at 4,000, 0.68 at 16,000.
+export const SD_DUPE = { a: -0.298, b: 0.1011, max: 0.85 };
+export const sdDupeShare = n => Math.max(0, Math.min(SD_DUPE.max, SD_DUPE.a + SD_DUPE.b * Math.log(Math.max(2, n))));
 export const nflDupeFloor = games => games >= 10 ? 0.019 : games >= 5 ? 0.032 : 0;
 export function dupeTarget(n, sport, floorOnly) {
   const d = DUPE[sport]; if (d) return n < 300 ? d[0] : n < 1500 ? d[1] : d[2];
@@ -435,7 +439,7 @@ function stackMul(p, st, boost, sport) {
 // down. It is the same lesson as building the field on realized ownership: a field that copies
 // reality more closely is not the same thing as a field that ranks lineups better. Reachable with
 // --dupefloor for regrading on new data.
-function addDuplicates(field, P, f, rng, share, cC, cF) {
+function addDuplicates(field, P, f, rng, share, cC, cF, pow = 3) {
   const n = field.length, want = Math.round(n * share);
   if (!(want > 0) || n < 4) return 0;
   const seen = new Set(); let have = 0;
@@ -444,7 +448,7 @@ function addDuplicates(field, P, f, rng, share, cC, cF) {
   // chalk weight: a lineup's summed projected ownership, the same thing that makes people collide
   const own = field.map(lu => { let s = 0; for (let z = 0; z < lu.length; z++) { const p = P[lu[z]]; s += (f.mult && z === 0 ? (p.cown ?? p.own) : p.own) || 0; } return s; });
   const cum = new Float64Array(n); let tot = 0;
-  for (let i = 0; i < n; i++) { tot += Math.pow(Math.max(0.01, own[i]), 3); cum[i] = tot; }
+  for (let i = 0; i < n; i++) { tot += Math.pow(Math.max(0.01, own[i]), pow); cum[i] = tot; }
   const dec = (lu) => lu.forEach((id, z) => { if (f.mult && z === 0) cC[id]--; else cF[id]--; });
   const inc = (lu) => lu.forEach((id, z) => { if (f.mult && z === 0) cC[id]++; else cF[id]++; });
   let made = 0;
@@ -454,6 +458,36 @@ function addDuplicates(field, P, f, rng, share, cC, cF) {
     if (sigOf(field[dst], f) === sigOf(field[src], f)) continue;   // already a copy of the source
     dec(field[dst]); field[dst] = field[src].slice(); inc(field[dst]);
     need--; made++;
+  }
+  return made;
+}
+
+// Showdown copies come in groups: a few lineups are entered by many people (the largest group is about 2% of the field),
+// so single random copies (addDuplicates) give mostly pairs. Here a source lineup is drawn by its projection rank
+// (percentile^gamma), its group size from a power law g^-alpha up to maxFrac of the field, and that many UNIQUE entries
+// are replaced by it (never breaking an existing group), until copies reach the target share.
+function addCopyGroups(field, P, f, rng, share, cC, cF, o) {
+  const n = field.length, want = Math.round(n * share), alpha = o.dupeAlpha ?? 2, gamma = o.dupeGamma ?? 2, gmax = Math.max(4, Math.round(n * (o.dupeMaxFrac ?? 0.015)) + 6);
+  if (!(want > 0) || n < 4) return 0;
+  const sigs = field.map(lu => sigOf(lu, f)), cnt = {}; sigs.forEach(k => { cnt[k] = (cnt[k] || 0) + 1; });
+  let copies = n - Object.keys(cnt).length; if (copies >= want) return 0;
+  const proj = field.map(lu => lu.reduce((t, id, z) => t + (f.mult ? f.mult[z] : 1) * P[id].proj, 0));
+  const order = proj.map((v, i) => i).sort((a, b) => proj[a] - proj[b]), pct = new Float64Array(n); order.forEach((i, k) => { pct[i] = (k + 1) / n; });
+  const cum = new Float64Array(n); let tot = 0; for (let i = 0; i < n; i++) { tot += Math.pow(pct[i], gamma); cum[i] = tot; }
+  const gc = []; let gt = 0; for (let g = 2; g <= gmax; g++) { gt += Math.pow(g, -alpha); gc.push(gt); }
+  const singles = []; for (let i = 0; i < n; i++) if (cnt[sigs[i]] === 1) singles.push(i);
+  for (let i = singles.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [singles[i], singles[j]] = [singles[j], singles[i]]; }
+  const dec = lu => lu.forEach((id, z) => { if (f.mult && z === 0) cC[id]--; else cF[id]--; }), inc = lu => lu.forEach((id, z) => { if (f.mult && z === 0) cC[id]++; else cF[id]++; });
+  let made = 0, sp = 0;
+  for (let guard = 0; copies < want && sp < singles.length && guard < n * 4; guard++) {
+    const src = rng.pickCum(cum, n), k = sigs[src];
+    let t = rng() * gt, g = 2; for (let z = 0; z < gc.length; z++) if (t <= gc[z]) { g = z + 2; break; }
+    let add = Math.min(g - (cnt[k] > 1 ? 0 : 1), want - copies);   // a new group of g, or g more copies on an existing one
+    while (add > 0 && sp < singles.length) {
+      const dst = singles[sp++]; if (dst === src || cnt[sigs[dst]] !== 1) continue;
+      dec(field[dst]); delete cnt[sigs[dst]]; field[dst] = field[src].slice(); sigs[dst] = k; inc(field[dst]);
+      cnt[k]++; copies++; made++; add--;
+    }
   }
   return made;
 }
@@ -510,8 +544,11 @@ function genFieldSlots(pool, n, o, rng, log) {
     calibrate(wF, tF, cF, got.length, np); if (f.mult) calibrate(wC, tC, cC, got.length, np);
   }
   const cC = new Float64Array(np), cF = new Float64Array(np), field = draw(n, cC, cF);
+  // showdown copies (o.dupeFloor "auto"): real fields put 44-69% of entries in copy groups by field size, a generator ~20%
+  const share = typeof o.dupeFloor === "number" ? o.dupeFloor : o.dupeFloor === "auto" && f.mult ? sdDupeShare(field.length) * (o.dupeScale ?? 1) : 0;
+  const made = share ? (o.dupeFloor === "auto" ? addCopyGroups(field, P, f, rng, share, cC, cF, o) : addDuplicates(field, P, f, rng, share, cC, cF, o.dupePow ?? 3)) : 0;
   const expo = new Float64Array(np); for (let i = 0; i < np; i++) expo[i] = cC[i] + cF[i];
-  lines.push(`final: ${field.length} entries, mean ownership gap ${gap(tF, cF, field.length || 1, np).toFixed(2)} pts`);
+  lines.push(`final: ${field.length} entries, mean ownership gap ${gap(tF, cF, field.length || 1, np).toFixed(2)} pts${made ? `, ${made} copies added to reach ${(100 * share).toFixed(1)}%` : ""}`);
   if (log) lines.forEach(log);
   return { field, expo, cC, cF, log: lines };
 }

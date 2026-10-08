@@ -34,6 +34,24 @@ export function ownCurve(fmt, group = "flex") {
     return o => { if (o == null) return o; const s = seg.find(x => o >= x.lo && o < x.hi) || seg[seg.length - 1]; return +(o * s.m).toFixed(2); };
   } catch { return o => o; }
 }
+// Showdown ownership by position (bench/fit-own-pos-sd.mjs -> data/reports/own-pos-sd.json; Cody Main 10/06 on TEs):
+// real showdown fields play QBs and TEs at FLEX, and RBs and TEs at CPT, more than projected, and kickers, DSTs and
+// QB captains less. Fit on 58 games of 2025 showdowns, checked on 38 games of 2026: FLEX MAE 4.11 -> 3.88 (t -8.0,
+// better in 155 of 227 contests), CPT 2.15 -> 1.96 (t -14.1, 182 of 227). Shipped values are the geometric mean of the
+// 2025 and 2026 fits (both large samples; FLEX DST 0.70 in 2025 vs 0.96 in 2026, so 0.82). "raw" applies to the vendor
+// number the field generator is fed; "curve" to the number after the showdown bucket curve (the Data Hub's Lab own).
+// Within a slate the adjusted numbers are rescaled so FLEX and CPT keep their totals.
+export const SD_POS_OWN = {
+  raw: { flex: { QB: 1.07, RB: 0.925, WR: 1.0, TE: 1.08, K: 0.89, DST: 0.82 }, cpt: { QB: 0.845, RB: 1.17, WR: 0.96, TE: 1.15, K: 0.40, DST: 1.0 } },
+  curve: { flex: { QB: 0.97, RB: 0.92, WR: 1.03, TE: 1.14, K: 0.93, DST: 0.91 }, cpt: { QB: 0.80, RB: 1.15, WR: 0.945, TE: 1.19, K: 0.45, DST: 1.0 } }
+};
+// items: [{pos, own}] -> new own values, rescaled to the same total (positions outside the table keep 1.0)
+export function sdPosAdjust(items, table) {
+  const pos = p => { const s = String(p || "").split("/")[0].toUpperCase(); return /^(D|DEF|D\/ST)$/.test(s) ? "DST" : s; };
+  const s0 = items.reduce((s, x) => s + (x.own > 0 ? x.own : 0), 0), adj = items.map(x => x.own > 0 ? x.own * (table[pos(x.pos)] ?? 1) : x.own);
+  const s1 = adj.reduce((s, x) => s + (x > 0 ? x : 0), 0);
+  return adj.map(x => x > 0 && s1 > 0 ? +(x * s0 / s1).toFixed(2) : x);
+}
 // Player-level ownership model (bench/fit-own-error-nfl.mjs -> data/reports/own-error-nfl.json):
 // which players come in over/under their projected ownership, from position, salary, value, rank
 // within position, the team's QB ownership and the slate's chalk. 2026 hold-out on chalk (15%+):
@@ -46,6 +64,21 @@ export function vendorStamps(dir, src) {
   try { const v = JSON.parse(fs.readFileSync(path.join("data", dir, "vendor-stamps.json"), "utf8"))[src]; if (v && v.updated) return v; } catch {}
   try { const st = JSON.parse(fs.readFileSync("data/requests/status.json", "utf8")); if (st.dir === dir && st.status === "done") { const m = String(st.message).match(src === "etr" ? /ETR \d+ \(([^)]+)\)/ : /Blick \d+ \(([^)]+)\)/); if (m) return { updated: m[1], checked: st.updated }; } } catch {}
   return {};
+}
+// The model over-corrects the top end: its chalk comes in lighter than it says and its cheap/low-owned players heavier
+// (2026, top-10 projected: model biased -3.7 pts, raw vendor +3.6). CLASSIC_CHALK rescales the model's output by its share
+// of the slate's 900% (bench/fit-own-adj-nfl.mjs: fit on 2025 classic, 34 dates; checked on 2026, 291 contests / 6 dates:
+// MAE 2.62 -> 2.51, top-10 error 7.54 -> 6.14, better on 6 of 6 dates, bias -3.9 -> +0.2), keeping the model's total.
+// Bucket edges are % of the 900 total: <2, 2-5, 5-10, 10-20, 20-30, 30-45, 45+. ctx.chalkCurve false skips it.
+// Both are fit on Stokastic's ownership only. On the 10/04 main (80 contests) ETR and Blick numbers raw beat the same
+// numbers through model + curve in every tier (top-10 error, e.g. ETR+Blick average 7.06 raw vs 8.27 vs 11.08 model alone),
+// so callers pass ctx.only to keep ETR/Blick-sourced rows as they are.
+export const CLASSIC_CHALK = { edges: [0, 2, 5, 10, 20, 30, 45], mult: [1.35, 1.14, 1.205, 1.119, 0.996, 0.931, 0.87] };
+function classicChalk(R) {
+  const tot = R.reduce((s, r) => s + r.labOwn, 0); if (!(tot > 0)) return;
+  const { edges, mult } = CLASSIC_CHALK, bucket = o => { let b = 0; for (let i = 0; i < edges.length; i++) if (o >= edges[i]) b = i; return b; };
+  const adj = R.map(r => r.labOwn * mult[bucket(r.labOwn * 900 / tot)]), s = adj.reduce((a, b) => a + b, 0) || 1;
+  R.forEach((r, i) => { r.labOwn = +(adj[i] * tot / s).toFixed(2); r.ownDelta = +(r.labOwn - r.vown).toFixed(1); });
 }
 export function ownModel(fmt = "classic") {
   const identity = rows => rows.map(r => Object.assign(r, { labOwn: r.vown, ownDelta: null }));
@@ -66,6 +99,10 @@ export function ownModel(fmt = "classic") {
       const mult = Math.min(hi, Math.max(lo, Math.exp(x.reduce((s, v, i) => s + v * beta[i], 0))));
       r.labOwn = +Math.max(0, (r.vown + 1) * mult - 1).toFixed(2); r.ownDelta = +(r.labOwn - r.vown).toFixed(1);
     }
+    if (ctx.chalkCurve !== false) classicChalk(R.filter(r => POS.includes(posOf(r))));
+    // ctx.only(r) false: the row keeps its own number (the model and the curve were fit on Stokastic's ownership; on ETR
+    // and Blick numbers they over-shoot chalk, see CLASSIC_CHALK). Slate features above still see every row.
+    if (ctx.only) for (const r of rows) if (!ctx.only(r)) { r.labOwn = r.vown; r.ownDelta = r.vown != null ? 0 : null; }
     return rows;
   };
 }
@@ -191,14 +228,20 @@ export function hubData(d) {
     x.spread = srcs.length > 1 ? +(Math.max(...srcs.map(([, v]) => v.proj)) - Math.min(...srcs.map(([, v]) => v.proj))).toFixed(1) : null;
     x.mktGap = x.mkt && vendors.length ? +(x.mkt.proj - vendors.reduce((a, b) => a + b, 0) / vendors.length).toFixed(1) : null;
     x.own = x.stk?.own ?? x.etr?.own ?? x.blick?.own ?? null;
-    // calibrated ownership: the vendors' average, run through the player model (classic) or the bucket curve (showdown)
-    const vown = [x.stk?.own, x.etr?.own, x.blick?.own].filter(v => v != null); x.vown = vown.length ? +(vown.reduce((a, b) => a + b, 0) / vown.length).toFixed(2) : null;
+    // calibrated ownership: the vendors' average, run through the player model (classic) or the bucket curve (showdown);
+    // classic leaves Stokastic out when ETR or Blick has the player (worst classic ownership in the 2026-10-04 review)
+    const ve = [x.etr?.own, x.blick?.own].filter(v => v != null), vown = meta.type !== "SHOWDOWN" && ve.length ? ve : [x.stk?.own, x.etr?.own, x.blick?.own].filter(v => v != null); x.vown = vown.length ? +(vown.reduce((a, b) => a + b, 0) / vown.length).toFixed(2) : null;
     x.labOwn = x.vown != null ? curveFlex(x.vown) : null; x.ownDelta = null;
     if (meta.type === "SHOWDOWN") { const vc = [x.stk?.cptOwn, x.etr?.cptOwn, x.blick?.cptOwn].filter(v => v != null); x.labCptOwn = vc.length ? curveCpt(vc.reduce((a, b) => a + b, 0) / vc.length) : null; }
     x.value = x.cons != null && x.sal ? +(1000 * x.cons / x.sal).toFixed(2) : null;
     rows.push(x);
   }
-  if (meta.type !== "SHOWDOWN") ownModel("classic")(rows);
+  // Model own: the player model + chalk curve on Stokastic-only rows; ETR/Blick averages stand as they are (CLASSIC_CHALK)
+  if (meta.type !== "SHOWDOWN") ownModel("classic")(rows, { only: x => x.etr?.own == null && x.blick?.own == null });
+  else {
+    const f = sdPosAdjust(rows.map(x => ({ pos: x.pos, own: x.labOwn })), SD_POS_OWN.curve.flex), c = sdPosAdjust(rows.map(x => ({ pos: x.pos, own: x.labCptOwn })), SD_POS_OWN.curve.cpt);
+    rows.forEach((x, i) => { x.labOwn = f[i]; x.labCptOwn = c[i]; if (x.labOwn != null && x.vown != null) x.ownDelta = +(x.labOwn - x.vown).toFixed(1); });
+  }
   rows.sort((a, b) => (b.cons ?? -1) - (a.cons ?? -1));
   // games: slate games with Stokastic team totals and Pinnacle lines + movement since the first snapshot
   const stkTT = {}; for (const x of P.values()) if (x.stk && x.stk.tt > 0) stkTT[x.team] = Math.max(stkTT[x.team] || 0, x.stk.tt);
