@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import zlib from "node:zlib";
-import { parseLineup, parseStandings, standingsText, dupeCheck } from "../src/engine/standings.mjs";
+import { parseLineup, parseStandings, standingsText, dupeCheck, playerTable } from "../src/engine/standings.mjs";
 
 const NFL = ["CPT", "QB", "RB", "WR", "TE", "FLEX", "DST"];
 
@@ -57,4 +57,11 @@ test("payouts squeezed onto a smaller field keep their shape", async () => {
   const pay = [10, 6, 4, 2, 2, 1, 1, 0, 0, 0];
   assert.deepEqual(Array.from(scalePayouts(pay, 10, 5)), [8, 3, 1.5, 0.5, 0]);
   assert.deepEqual(Array.from(scalePayouts([5, 3], 2, 4)), [5, 3, 0, 0]);
+});
+
+test("player table: real ownership and DraftKings points, captain row folded in", () => {
+  const T = playerTable({ players: [{ name: "A One", pos: "CPT", drafted: 20, fpts: 18 }, { name: "A One", pos: "FLEX", drafted: 40, fpts: 12 }, { name: "B Two", pos: "CPT", drafted: 5, fpts: 9 }, { name: "Wa One", pos: "WR", drafted: 45.2, fpts: 2.1 }] });
+  assert.deepEqual(T.get("a one"), { name: "A One", own: 40, cpt: 20, fpts: 12 });
+  assert.equal(T.get("b two").fpts, 6); assert.equal(T.get("b two").own, null);
+  assert.equal(T.get("wa one").own, 45.2);
 });

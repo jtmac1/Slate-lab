@@ -86,3 +86,16 @@ export function dupeCheck(mine, field, lockedName) {
   const ifSwap = (idx, cand) => { const keys = openKeys.slice(), sh = shares.slice(); keys[idx] = keyOf(mine.open[idx].slot, cand.name); sh[idx] = Math.min(1, Math.max(0, cand.share ?? 0)); return shadows.reduce((s, o) => s + pSame(o, keys, sh), 0); };
   return { shadows: shadows.length, certain: shadows.filter(o => o.hidden === 0 && pSame(o, openKeys, shares) === 1).length, expected: +expected.toFixed(2), winShare: +(1 / (1 + expected)).toFixed(3), ifSwap, list: shadows };
 }
+
+// the export's player table by name: real %Drafted (own, and cpt for the captain row in showdown) and
+// DraftKings' points so far (fpts, the base points; a captain row's 1.5x is taken back out)
+export function playerTable(S) {
+  const m = new Map();
+  for (const p of S.players || []) {
+    const k = nrm(p.name), r = m.get(k) || { name: p.name, own: null, cpt: null, fpts: null };
+    if (p.pos === "CPT") { r.cpt = p.drafted; if (r.fpts == null && p.fpts != null) r.fpts = +(p.fpts / 1.5).toFixed(2); }
+    else { r.own = p.drafted; if (p.fpts != null) r.fpts = p.fpts; }
+    m.set(k, r);
+  }
+  return m;
+}
