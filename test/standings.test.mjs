@@ -51,3 +51,10 @@ test("duplicate check: shadows, certain copies, expected identical, swaps", () =
   // swapping F Six for a 10% player drops fish to zero and shark to 0.5*0.5*0.1
   assert.equal(+d.ifSwap(2, { name: "G Seven", share: 0.1 }).toFixed(3), 0.025);
 });
+
+test("payouts squeezed onto a smaller field keep their shape", async () => {
+  const { scalePayouts } = await import("../server/lateswapsim.mjs");
+  const pay = [10, 6, 4, 2, 2, 1, 1, 0, 0, 0];
+  assert.deepEqual(Array.from(scalePayouts(pay, 10, 5)), [8, 3, 1.5, 0.5, 0]);
+  assert.deepEqual(Array.from(scalePayouts([5, 3], 2, 4)), [5, 3, 0, 0]);
+});
