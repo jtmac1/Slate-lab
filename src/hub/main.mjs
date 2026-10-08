@@ -8,16 +8,17 @@ import { renderContests } from "./contests.mjs";
 import { renderReview } from "./review.mjs";
 import { renderSim, initSim } from "./sim.mjs";
 import { renderGen, initGen } from "./gen.mjs";
+import { renderLate, initLate } from "./late.mjs";
 
 const LS = "slatelab:hub";
 const saved = (() => { try { return JSON.parse(localStorage.getItem(LS) || "{}"); } catch { return {}; } })();
 const persist = () => { try { localStorage.setItem(LS, JSON.stringify({ date: S.date, slateId: S.slateId, dir: S.dir, tab: S.tab, view: S.view })); } catch {} };
 const nextSlateDate = () => { const d = new Date(), dow = d.getDay(); if (dow >= 2 && dow <= 6) d.setDate(d.getDate() + (7 - dow)); return d.toLocaleString("sv-SE").slice(0, 10); };
-const S = { view: ["hub", "entries", "review", "sim", "gen"].includes(saved.view) ? saved.view : "hub", date: saved.date || nextSlateDate(), slateId: saved.slateId || null, dir: saved.dir || null, slates: [], dirs: [], hub: null, tab: saved.tab || "players", q: "", pos: "ALL", sort: { k: "cons", d: -1 }, busy: false, steps: [], msg: "", err: false, showAll: false, slatesErr: "", changes: null, notes: null };
-initEntries(S); initSim(S); initGen(S);
+const S = { view: ["hub", "entries", "late", "review", "sim", "gen"].includes(saved.view) ? saved.view : "hub", date: saved.date || nextSlateDate(), slateId: saved.slateId || null, dir: saved.dir || null, slates: [], dirs: [], hub: null, tab: saved.tab || "players", q: "", pos: "ALL", sort: { k: "cons", d: -1 }, busy: false, steps: [], msg: "", err: false, showAll: false, slatesErr: "", changes: null, notes: null };
+initEntries(S); initSim(S); initGen(S); initLate(S);
 // every tab is rebuilt; "Old app" keeps the previous build reachable
 // no Contests tab: a record by contest family measures the old process, not the new one (user, 2026-10-02)
-const VIEWS = [["hub", "Data Hub", "Data Hub", true], ["gen", "Contest Generator", "Generator", true], ["sim", "Pre-Contest Simulator", "Simulator", true], ["entries", "Entries", "Entries", true], ["review", "Review", "Review", true], ["old", "Old app", "Old app"]];
+const VIEWS = [["hub", "Data Hub", "Data Hub", true], ["gen", "Contest Generator", "Generator", true], ["sim", "Pre-Contest Simulator", "Simulator", true], ["entries", "Entries", "Entries", true], ["late", "Late Swap", "Late swap", true], ["review", "Review", "Review", true], ["old", "Old app", "Old app"]];
 const api = async (p, opts) => { const r = await fetch(p, opts); const j = await r.json().catch(() => ({ error: r.statusText })); if (!r.ok) throw new Error(j.error || r.statusText); return j; };
 const f1 = v => v == null || isNaN(v) ? "—" : (+v).toFixed(1);
 const f0 = v => v == null || isNaN(v) ? "—" : (+v).toFixed(0);
@@ -148,6 +149,7 @@ function renderMain() {
   const main = $("#main"), H = S.hub;
   const ctx = { S, api, setMsg, render };
   if (S.view === "entries") { renderEntries(main, ctx); return; }
+  if (S.view === "late") { renderLate(main, ctx); return; }
   if (S.view === "contests") { renderContests(main, ctx); return; }
   if (S.view === "review") { renderReview(main, ctx); return; }
   if (S.view === "sim") { renderSim(main, ctx); return; }

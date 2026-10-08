@@ -29,7 +29,8 @@ export function simulate(a) {
   const base = Math.max(1, a.iters || 5000), maxIters = Math.max(base, a.maxIters || base), fieldMode = !!a.fieldMode, solo = !!a.solo && !fieldMode, onProgress = a.onProgress;
   const P = pool.players, f = pool.format, n = P.length, nl = lineups.length, mult = f.mult;
   // solo: each lineup is entered alone against the contest field (the field holds every entry; a lineup drawn from it finds its
-  // own copy there, which is not a duplicate); otherwise the lineups join the field together, or ARE the contest (fieldMode)
+  // own copy there, which is not a duplicate; a.selfInField === false is a real field without your entry, where every copy is
+  // someone else's); otherwise the lineups join the field together, or ARE the contest (fieldMode)
   const FS = fieldMode ? 0 : solo ? Math.min(field.length, entries) : Math.max(1, Math.min(field.length, entries - nl));
   const fld = field.slice(0, FS);
   const pay = payouts, paidN = paidCount(pay);
@@ -42,7 +43,7 @@ export function simulate(a) {
   const sigF = {}, sigL = {}, fdup = new Float64Array(nl);
   for (const l of fld) { const k = sigOf(l, f); sigF[k] = (sigF[k] || 0) + 1; }
   for (const l of lineups) { const k = sigOf(l, f); sigL[k] = (sigL[k] || 0) + 1; }
-  for (let i = 0; i < nl; i++) { const k = sigOf(lineups[i], f); fdup[i] = solo ? Math.max(0, (sigF[k] || 0) - (sigF[k] ? 1 : 0)) : (sigF[k] || 0) + (sigL[k] || 1) - 1; }
+  for (let i = 0; i < nl; i++) { const k = sigOf(lineups[i], f); fdup[i] = solo ? Math.max(0, (sigF[k] || 0) - (sigF[k] && a.selfInField !== false ? 1 : 0)) : (sigF[k] || 0) + (sigL[k] || 1) - 1; }
 
   const sc = new Float64Array(n), all = new Float64Array(solo ? FS : FS + nl), ms = new Float64Array(nl), scratch = makeScratch(model, pool);
   // story: the average score of every player in the draws where each lineup finishes top 1%
