@@ -19,7 +19,7 @@ import { loadPool, keyOf, ownOf, cptOf, projOf, prizesFromName } from "./foursim
 const MAX_POOL = 20000;
 import { ownModel, SD_POS_OWN, sdPosAdjust } from "./sources.mjs";
 import { evalContext, evaluateLineup, verdictOf, playerFrom, lobby, loadGuide } from "./entries.mjs";
-import { classicFeatures, showdownFeatures, markObviousBringBack, rulesFor, gradePool, DEFAULT_WEIGHTS } from "../src/engine/grade.mjs";
+import { classicFeatures, showdownFeatures, markObviousBringBack, markOwnRelative, rulesFor, FLAT_CHALK, gradePool, DEFAULT_WEIGHTS } from "../src/engine/grade.mjs";
 
 // Archetypes. Classic keeps the app's presets. Showdown is fitted on 30 real 2026 $20+ showdown
 // fields (bench/fit-field-nfl-sd.mjs, 2026-10-01): real fields leave salary ($580 on average), and
@@ -68,15 +68,18 @@ export const loadField = dir => readJ(path.join("data", dir, "field.json"));
 export const loadSimRun = dir => { const r = readJ(path.join("data", dir, "simrun.json")); if (!r || !Array.isArray(r.rows)) return r; const g = loadGuide(dir), sd = r.format === "nfl_sd"; for (const e of r.rows) if (e.players) { e.notes = matchNotes(e.players, g, sd); e.theses = e.notes.theses; } r.guide = !!g; gradeRun(dir, r, sd); return r; };
 // the lineup grade (src/engine/grade.mjs): Lab ROI percentile + the rulebook (data/reports/rulebook-nfl.json, ownership = Model own)
 // + the slate guide notes, weighted by data/reports/grade-weights.json when the backtest has written one
+// players in the pool projected 20%+ owned (Model own): how concentrated the slate is (src/engine/grade.mjs FLAT_CHALK)
+const chalkOf = rows => { const seen = new Map(); for (const e of rows) for (const p of e.players || []) seen.set(p.name + "|" + p.team, p.fown ?? p.own ?? 0); return [...seen.values()].filter(o => o >= 20).length; };
 function gradeRun(dir, r, sd) {
   const rb = readJ("data/reports/rulebook-nfl.json"); if (!rb) return;
   const wf = readJ("data/reports/grade-weights.json"), weights = wf && wf.weights || DEFAULT_WEIGHTS, fee = r.contest && r.contest.fee || 20;
   const games = (readJ(path.join("data", dir, "slate.json")) || {}).games || [], mk = p => ({ name: p.name, pos: p.pos, team: p.team, opp: p.opp, sal: p.sal, own: p.fown ?? p.own, cptOwn: p.cptOwn });
   const rows = r.rows.filter(e => e.players && e.sim), feats = rows.map(e => sd ? showdownFeatures(e.players.map(mk)) : classicFeatures(e.players.map(mk)));
-  if (!sd) markObviousBringBack(feats);
-  const G = gradePool(rows.map((e, i) => ({ sim: e.sim.lab ?? e.sim.mean, feats: feats[i], guide: r.guide ? e.notes : null })), rulesFor(rb, { sd, fee, games: games.length || 12 }), { weights, fee, sd });
+  if (!sd) { markObviousBringBack(feats); markOwnRelative(feats); }
+  const G = gradePool(rows.map((e, i) => ({ sim: e.sim.lab ?? e.sim.mean, feats: feats[i], guide: r.guide ? e.notes : null })), rulesFor(rb, { sd, fee, games: games.length || 12, chalkN: sd ? null : chalkOf(rows) }), { weights, fee, sd });
   rows.forEach((e, i) => { e.grade = G[i]; if (!sd && feats[i].chalkBB != null) e.grade.bringBack = { takes: feats[i].chalkBB, share: +(100 * feats[i].chalkBBShare).toFixed(0) }; });
-  r.gradeInfo = { weights: G[0] ? G[0].weights : null, rulebook: { from: rb.from, to: rb.to, contests: rb.contests }, fitted: !!(wf && wf.weights) };
+  const chalkN = sd ? null : chalkOf(rows);
+  r.gradeInfo = { chalkN, flat: chalkN != null && chalkN <= FLAT_CHALK, weights: G[0] ? G[0].weights : null, rulebook: { from: rb.from, to: rb.to, contests: rb.contests }, fitted: !!(wf && wf.weights) };
 }
 const mean = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0;
 

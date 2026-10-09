@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { FORMATS } from "../src/engine/formats.mjs";
+import { FLAT_CHALK } from "../src/engine/grade.mjs";
 import { parseEntries } from "../src/engine/audit.mjs";
 import { nrm } from "../src/engine/csv.mjs";
 import { hubData } from "./sources.mjs";
@@ -64,7 +65,9 @@ export function playerFrom(r, slot, isCpt) {
 // shared context for a slate: format, rulebook, dup model, guide
 export function evalContext(dir, hub) {
   const sd = hub.slate.type === "SHOWDOWN", fkey = sd ? "nfl_sd" : "nfl_cl", rules = readJ(`rules/${fkey}.json`);
-  return { sd, fkey, f: FORMATS[fkey], rules, ruleBy: Object.fromEntries((rules?.rules || []).map(r => [r.id, r])), model: dupModel(), guide: loadGuide(dir) };
+  // how concentrated the slate is: players projected 20%+ owned (src/engine/grade.mjs FLAT_CHALK; flat slates turn the ownership checks off)
+  const chalkN = sd ? null : (hub.rows || []).filter(r => (r.labOwn ?? r.vown ?? r.own ?? 0) >= 20).length;
+  return { sd, fkey, chalkN, flat: chalkN != null && chalkN <= FLAT_CHALK, f: FORMATS[fkey], rules, ruleBy: Object.fromEntries((rules?.rules || []).map(r => [r.id, r])), model: dupModel(), guide: loadGuide(dir) };
 }
 // construction + every check for one lineup (players in slot order, captain first in showdown)
 export function evaluateLineup(players, fee, N, ctx) {
@@ -83,11 +86,13 @@ export function evaluateLineup(players, fee, N, ctx) {
     add("qb_stack1", !!qb && stackN >= 1, qb ? `${qb.name} + ${stackN}` : "no QB");
     add("qb_stack2", !!qb && stackN >= 2, qb ? `${qb.name} + ${stackN}` : "no QB");
     add("bring_back", bring, qb ? (bring ? `from ${qb.opp}` : `nothing from ${qb.opp}`) : "no QB");
-    add("chalk_low", chalk >= 3, `${chalk} at 20%+`);
-    add("chalk4", chalk >= 4, `${chalk} at 20%+`);
+    // flat slate: the archive shows no ownership edge either way (bench/rulebook-nfl.mjs flat-slate segment), so no verdict
+    const flatNote = ctx.flat ? ` (flat slate, ${ctx.chalkN} players projected 20%+: not checked)` : "";
+    add("chalk_low", ctx.flat ? null : chalk >= 3, `${chalk} at 20%+${flatNote}`);
+    add("chalk4", ctx.flat ? null : chalk >= 4, `${chalk} at 20%+${flatNote}`);
     add("salary_left", left < 600, `$${left.toLocaleString()} left`);
     add("no_rb_own_dst", !(dst && players.some(p => p.pos === "RB" && p.team === dst.team)), dst ? `DST ${dst.team}` : "no DST");
-    add("own_200", fown >= 200, `own sum ${fown.toFixed(0)}% (model)`);
+    add("own_200", ctx.flat ? null : fown >= 200, `own sum ${fown.toFixed(0)}% (model)${flatNote}`);
     add("dup_risk", dup.meanDup == null ? null : dup.meanDup < 1, dup.meanDup == null ? "contest size unknown (pull the lobby)" : `~${dup.meanDup} copies expected, ${(100 * dup.pDup).toFixed(0)}% chance of any (field ${dup.N.toLocaleString()})`);
   } else {
     const cpt = players[0];

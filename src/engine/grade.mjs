@@ -45,7 +45,23 @@ const CL = {
   "ETR: double bring-back (2+ from opponent)": f => f.bringN >= 2, "ETR: onslaught + bring-back": f => f.stack >= 3 && f.bringN >= 1,
   "ETR: any player under 1% owned": f => f.sub1 >= 1, "ETR: 3+ players under 5%": f => f.sub5 >= 3, "ETR: no player under 5%": f => f.sub5 === 0, "ETR: 3+ players at 5-10% owned": f => f.mid510 >= 3,
   "ETR BB: stack takes the obvious bring-back (vs fading it)": f => f.chalkBB === true,
+  // ownership vs the pool (markOwnRelative): the archive's contest-relative versions (bench/rulebook-nfl.mjs, 2026-10-09)
+  "own sum above the contest median": f => f.ownPct > 0.5, "own sum in the contest's top 30%": f => f.ownPct >= 0.7, "own sum in the contest's bottom 30%": f => f.ownPct <= 0.3,
+  "chalk count above the contest median": f => f.chalk > f.chalkMed, "chalk count below the contest median": f => f.chalk < f.chalkMed,
 };
+// Ownership rules hold only on concentrated slates (archive 2025-09 to 2026-10, 792 contests: 8+ players at 20%+ actual
+// ownership, own sum above the contest median t 8.8, chalk above median t 9.0; on flat slates, 7 or fewer at 20%+, no
+// ownership rule is kept and the signs flip). So on a flat slate these rules come only from the flat-slate segment.
+const OWN_RULES = new Set(["own sum < 200%", "own sum 200-260%", "own sum >= 260%", "4+ players at 20%+ owned", "0-2 players at 20%+ owned",
+  "own sum above the contest median", "own sum in the contest's top 30%", "own sum in the contest's bottom 30%", "chalk count above the contest median", "chalk count below the contest median"]);
+export const FLAT_CHALK = 7, SEG_FLAT = "flat slate (7 or fewer players at 20%+)", SEG_CONC = "concentrated slate (8+ players at 20%+)";
+// pool-relative ownership for each lineup: the percentile of its own sum and the pool's median chalk count
+export function markOwnRelative(feats) {
+  const v = feats.map(f => f.ownSum).sort((a, b) => a - b), c = feats.map(f => f.chalk).sort((a, b) => a - b), chalkMed = c[c.length >> 1] ?? 0;
+  const below = x => { let lo = 0, hi = v.length; while (lo < hi) { const m = (lo + hi) >> 1; if (v[m] < x) lo = m + 1; else hi = m; } return lo; };
+  for (const f of feats) { f.ownPct = v.length ? below(f.ownSum) / v.length : 0.5; f.chalkMed = chalkMed; }
+  return feats;
+}
 const CL_SCOPE = { "ETR BB: stack takes the obvious bring-back (vs fading it)": f => f.chalkBB != null };
 const SD = {
   "5-1 split": f => f.split === "5-1", "4-2 split": f => f.split === "4-2", "3-3 split": f => f.split === "3-3", "CPT is a QB": f => f.cptPos === "QB", "CPT is a WR": f => f.cptPos === "WR",
@@ -55,10 +71,14 @@ const SD = {
 };
 export const tierOf = fee => fee < 100 ? "$20-99" : fee < 300 ? "$100-299" : "$300+";
 // the kept rules that apply to a contest: the fee tier's verdict first, then slate length (classic), then all; one row per rule
-export function rulesFor(rulebook, { sd, fee = 20, games = 12 } = {}) {
+// chalkN: players on the slate projected 20%+ owned (classic); flat slates (FLAT_CHALK or fewer) take ownership rules only
+// from the flat-slate segment, concentrated ones from the concentrated segment first. null = unknown, the old order.
+export function rulesFor(rulebook, { sd, fee = 20, games = 12, chalkN = null } = {}) {
   const fmt = sd ? "showdown" : "classic", defs = sd ? SD : CL, rows = (rulebook && rulebook.rows || []).filter(r => r.fmt === fmt && defs[r.rule]);
   const segs = [tierOf(fee), ...(sd ? [] : [games <= 8 ? "short slate (8 games or fewer)" : "long slate (9+ games)"]), "all"], out = [];
-  for (const name of Object.keys(defs)) { const r = segs.map(s => rows.find(x => x.rule === name && x.seg === s && x.kept)).find(Boolean); if (r && r.lift > 0 && Math.sign(Math.log(r.lift)) === Math.sign(r.t)) out.push({ name, test: defs[name], scope: sd ? null : CL_SCOPE[name] || null, pts: Math.log(r.lift), lift: r.lift, t: r.t, seg: r.seg, roiF: r.roiF, roiN: r.roiN }); }
+  const flat = !sd && chalkN != null && chalkN <= FLAT_CHALK, conc = !sd && chalkN != null && chalkN > FLAT_CHALK;
+  const segsFor = name => !OWN_RULES.has(name) ? segs : flat ? [SEG_FLAT] : conc ? [SEG_CONC, ...segs] : segs;
+  for (const name of Object.keys(defs)) { const r = segsFor(name).map(s => rows.find(x => x.rule === name && x.seg === s && x.kept)).find(Boolean); if (r && r.lift > 0 && Math.sign(Math.log(r.lift)) === Math.sign(r.t)) out.push({ name, test: defs[name], scope: sd ? null : CL_SCOPE[name] || null, pts: Math.log(r.lift), lift: r.lift, t: r.t, seg: r.seg, roiF: r.roiF, roiN: r.roiN }); }
   return out;
 }
 
