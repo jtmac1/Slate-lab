@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Slate Lab Grabber</title>
+<style>
+  :root { --bg: #0b0f14; --panel: #111823; --line: #223044; --text: #e6edf5; --muted: #8a9ab0; --neon: #22d3ee; --green: #3ddc84; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 22px; letter-spacing: .04em; margin: 0 0 6px; }
+  h2 { font-size: 16px; margin: 28px 0 8px; color: var(--neon); }
+  p, li { color: var(--muted); } b { color: var(--text); }
+  .bm { display: inline-block; margin: 14px 0; padding: 12px 18px; border: 1px solid var(--neon); border-radius: 8px; color: var(--neon); font-weight: 700; text-decoration: none; background: var(--panel); cursor: grab; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; } td { border-top: 1px solid var(--line); padding: 8px 6px; vertical-align: top; color: var(--muted); }
+  td:first-child { color: var(--text); white-space: nowrap; }
+  .err { color: #ff6b81; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Slate Lab Grabber</h1>
+  <p>Does what <b>Pull ETR + Blick</b> and the <b>ETR reports</b> read do, with no Claude. You click it on each page yourself; it saves a file to Downloads and the hub files it on <b>Refresh</b> (or drop the file on the hub).</p>
+  <h2>1. Install (once)</h2>
+  <p>Show the bookmarks bar (Ctrl+Shift+B), then drag this button onto it:</p>
+  <a class="bm" id="bm" href="#">⤓ Slate Lab grab</a>
+  <p id="msg"></p>
+  <h2>2. Use it on Sunday</h2>
+  <table>
+    <tr><td>ETR projections</td><td>Open ETR's DraftKings projections page (or the showdown, or Early/Afternoon page), wait for the table, click the button.</td></tr>
+    <tr><td>Blick ownership</td><td>Open Blick's GPP ownership page (classic or showdown), click.</td></tr>
+    <tr><td>Blick conditional</td><td>Open Blick's conditional ownership page, wait a few seconds, click. Feeds the Lab stacks.</td></tr>
+    <tr><td>ETR data tables</td><td>Open the DvP, Expected Fantasy Points or Pass Rate Over Expectation page, click.</td></tr>
+    <tr><td>ETR articles</td><td>Open any article (Top Plays, GPP Leverage, Silva's Matchups...), click. Saved word for word for the Brain and marked read on the Notes tab.</td></tr>
+    <tr><td>Shows</td><td>On YouTube (the Million, Establish The Show), open the transcript ("...more", then "Show transcript"), click.</td></tr>
+    <tr><td>Then</td><td>Press <b>Refresh</b> in the hub. Type your own player calls in the Notes tab's reads box, and pick <b>Lab rules</b> in the Simulator's Brain menu if you're going without Claude.</td></tr>
+  </table>
+  <p>Without Claude, articles are saved as text but not turned into the slate guide's likes and fades; that's what your reads box is for.</p>
+</main>
+<script>
+fetch("grab.js").then(r => r.text()).then(src => {
+  const code = src.split("\n").filter(l => !/^\s*\/\//.test(l)).join("\n");
+  document.getElementById("bm").href = "javascript:" + encodeURIComponent(code);
+  document.getElementById("msg").textContent = "Ready (" + Math.round(code.length / 1000) + "K). After an update to Slate Lab, drag it again to get the new version.";
+}).catch(e => { const m = document.getElementById("msg"); m.className = "err"; m.textContent = "Couldn't load the grabber: " + e.message + ". Open this page from the hub (localhost:8787)."; });
+</script>
+</body>
+</html>

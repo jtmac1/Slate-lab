@@ -71,7 +71,7 @@ async function refresh() {
 async function upload(file) {
   setMsg(`Uploading ${file.name}…`);
   try { const r = await api(`/api/upload?name=${encodeURIComponent(file.name)}`, { method: "POST", body: await file.arrayBuffer() });
-    if (r.done.length) { setMsg(`Filed ${r.done.map(d => `${d.src} -> ${d.dest}`).join(", ")}`); await loadDirs(); if (r.done[0].dest) S.dir = r.done[0].dest.replace(/^data[\\/]/, "").split(/[\\/]/)[0]; await loadHub(); }
+    if (r.done.length) { setMsg(`Filed ${r.done.map(d => `${d.src} -> ${d.dest}`).join(", ")}`); await loadDirs(); if (r.done[0].dest && r.done[0].src !== "grab") S.dir = r.done[0].dest.replace(/^data[\\/]/, "").split(/[\\/]/)[0]; await loadHub(); }
     else setMsg(`Not filed: ${r.notes.join("; ") || "already ingested or not a projections file"}`, true);
   } catch (e) { setMsg("Upload failed: " + e.message, true); }
   render();
@@ -100,7 +100,8 @@ function ctl() {
     <div class="f wide"><label>Slate ${S.slatesErr ? `<span class="hint">(Stokastic: ${esc(S.slatesErr)})</span>` : ""}</label><select class="sel" id="slate" style="min-width:260px">${slateOpts ? `<optgroup label="Stokastic · ${S.date}">${slateOpts}</optgroup>` : `<option value="">no DK slates on ${S.date}</option>`}${dirOpts ? `<optgroup label="Saved folders">${dirOpts}</optgroup>` : ""}</select></div>
     <div class="f cta"><label>&nbsp;</label><button class="btn refresh${S.busy ? " busy" : ""}" id="refresh"${S.busy ? " disabled" : ""}>${S.busy ? "Refreshing…" : "⟳ Refresh"}</button></div>
     <div class="f"><label>&nbsp;</label><button class="btn sec" id="pullVend" title="Starts a short Claude run that pulls ETR and Blick in your logged-in Chrome, files them and refreshes. Chrome must be open with the Claude extension connected."${S.hub && !pulling() ? "" : " disabled"}>${pulling() && S.pull.kind !== "weekly" ? `Pulling… <span class="mini">${esc(S.pull.message || "")}</span>` : "⤓ Pull ETR + Blick"}</button></div>
-    <div class="f"><label>&nbsp;</label><label class="drop sm btn sec" id="drop" title="ETR or Blick CSV">Drop ETR / Blick CSV <input type="file" id="file" accept=".csv" multiple></label></div></div>`;
+    <div class="f"><label>&nbsp;</label><label class="drop sm btn sec" id="drop" title="ETR or Blick CSV, or a file the Slate Lab grabber saved">Drop ETR / Blick CSV <input type="file" id="file" accept=".csv,.txt" multiple></label></div>
+    <div class="f"><label>&nbsp;</label><a class="btn ghost" href="src/grab/index.html" target="_blank" title="A browser button that pulls ETR, Blick and the shows with no Claude">No-Claude grabber</a></div></div>`;
 }
 function wireCtl() {
   $("#date").addEventListener("change", async e => { S.date = e.target.value; persist(); await loadSlates(); render(); });

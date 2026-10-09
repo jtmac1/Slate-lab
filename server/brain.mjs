@@ -22,11 +22,12 @@ const readT = (dir, f) => { try { return fs.readFileSync(path.join("data", dir, 
 const notesText = dir => { const n = readT(dir, "notes.md"), b = readT(dir, "blick-thoughts.md"); return [n, b && `BLICK SLATE THOUGHTS (pasted by the user):\n${b}`].filter(Boolean).join("\n\n"); };
 // what each report said (ETR articles, shows, Blick): the weekly read writes data/<slate>/reads/<id>.md per report it read.
 // A sub-slate without its own reads uses the slates its guide was derived from (the Main and showdown folders).
-const READ_CAP = 5000, READS_CAP = 60000;
+// grabbed articles (server/grab.mjs) are the full text, not takeaways: they get more room
+const READ_CAP = 5000, FULL_CAP = 12000, READS_CAP = 60000;
 export function readsText(dir, guide) {
   const dirs = [dir, ...((guide && guide.derived && guide.from) || [])], seen = new Set(), out = [];
   for (const d of dirs) { const rd = path.join("data", d, "reads"); let fs_ = []; try { fs_ = fs.readdirSync(rd).filter(f => f.endsWith(".md")).sort((a, b) => (a === "blick.md") - (b === "blick.md") || a.localeCompare(b)); } catch { continue; }
-    for (const f of fs_) { if (seen.has(f)) continue; seen.add(f); const t = readT(path.join(d, "reads"), f); if (t) out.push(t.length > READ_CAP ? t.slice(0, READ_CAP) + "\n- (cut for length)" : t); } }
+    for (const f of fs_) { if (seen.has(f)) continue; seen.add(f); const t = readT(path.join(d, "reads"), f); const cap = /^\(full text/m.test(t.slice(0, 300)) ? FULL_CAP : READ_CAP; if (t) out.push(t.length > cap ? t.slice(0, cap) + "\n- (cut for length)" : t); } }
   let text = out.join("\n\n"); if (text.length > READS_CAP) text = text.slice(0, READS_CAP) + "\n(more reports cut for length)";
   return { text, n: out.length };
 }

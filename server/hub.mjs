@@ -29,6 +29,7 @@ import { contestsFor } from "./contests.mjs";
 import { saveMerge, markBuilt, diff } from "./changes.mjs";
 import { lateSwap } from "./lateswap.mjs";
 import { fetchEtrData, saveContestSelection, slateData } from "./etrdata.mjs";
+import { ingestGrabs } from "./grab.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 process.chdir(ROOT);
@@ -43,12 +44,15 @@ const safeDir = d => d && !/[\\/]/.test(d) && fs.existsSync(path.join("data", d)
 const run = (args, timeout = 300000) => new Promise((resolve, reject) => execFile(process.execPath, args, { cwd: ROOT, timeout, maxBuffer: 16e6 }, (err, out, errOut) => err ? reject(new Error((errOut || err.message).split("\n").slice(-3).join(" ").slice(0, 300))) : resolve(String(out).trim().split("\n").slice(-4).join("\n"))));
 let refreshing = null, simming = false, nightlyRunning = false, lastIngest = { done: [], notes: [], at: null }, lastNightly = null;
 
+const grabPass = (files = []) => ingestGrabs({ reports: ETR_REPORTS, team: TEAM, files, weekOf: nflWeek });
 async function refresh(q) {
   const steps = [], step = async (name, fn) => { const t = Date.now(); try { const info = await fn(); steps.push({ name, ok: true, ms: Date.now() - t, info }); return info; } catch (e) { steps.push({ name, ok: false, ms: Date.now() - t, error: e.message }); return null; } };
   let dir = q.dir || null;
   if (q.slateId && q.date) { const r = await step("stokastic", () => pullStokastic(q.date, q.slateId, "NFL")); if (r) dir = r.dir; }
   await step("pinnacle", () => pullPinnacle().then(r => ({ stamp: r.stamp, games: r.games, props: r.props, projected: r.projected })));
   await step("ingest", () => { const r = ingestPass(); lastIngest = Object.assign(r, { at: new Date().toISOString() }); return { copied: r.done.map(d => `${d.src}: ${d.file} -> ${d.dest}`), notes: r.notes }; });
+  // the grabber bookmarklet's files (ETR articles, shows, data tables, Blick conditional): the no-Claude pull
+  await step("grabs", () => grabPass());
   await step("injuries", pullInjuries);
   await step("lobby", () => run(["bench/dk-contests.mjs", "NFL"], 60000).then(() => { const j = JSON.parse(fs.readFileSync("data/dk-lobby/nfl.json", "utf8")); return { contests: j.contests.length, fetched: j.fetched }; }));
   if (!dir) { const dirs = slateDirs(); dir = dirs[0] || null; }
@@ -168,7 +172,7 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/ingest") return json(res, 200, lastIngest);
     if (p === "/api/status") return json(res, 200, { lastNightly, nightlyRunning, refreshing: !!refreshing, simming, now: new Date().toISOString() });
     if (p === "/api/refresh" && req.method === "POST") { const q = JSON.parse((await body(req)).toString("utf8") || "{}"); if (refreshing) return json(res, 409, { error: "refresh already running" }); refreshing = refresh(q); try { return json(res, 200, await refreshing); } finally { refreshing = null; } }
-    if (p === "/api/upload" && req.method === "POST") { const name = path.basename(u.searchParams.get("name") || "upload.csv").replace(/[^\w.@ -]/g, "_"); fs.mkdirSync("data/inbox", { recursive: true }); const f = path.join("data/inbox", name); fs.writeFileSync(f, await body(req)); const r = ingestPass([f]); lastIngest = Object.assign(r, { at: new Date().toISOString() }); return json(res, 200, r); }
+    if (p === "/api/upload" && req.method === "POST") { const name = path.basename(u.searchParams.get("name") || "upload.csv").replace(/[^\w.@ -]/g, "_"); fs.mkdirSync("data/inbox", { recursive: true }); const f = path.join("data/inbox", name); fs.writeFileSync(f, await body(req)); if (/^slatelab-.*\.txt$/i.test(name)) { const g = await grabPass([f]); return json(res, 200, { done: g.done.map(x => ({ src: "grab", dest: x })), notes: g.notes }); } const r = ingestPass([f]); lastIngest = Object.assign(r, { at: new Date().toISOString() }); return json(res, 200, r); }
     if (p === "/api/entries") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); const E = req.method === "POST" ? importEntries(d, (await body(req)).toString("utf8"), u.searchParams.get("name") || "") : loadEntries(d); return json(res, 200, Object.assign(E, { guide: loadGuide(d) })); }
     if (p === "/api/stacks") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); try { return json(res, 200, req.method === "POST" || !loadStacks(d) ? saveStacks(d) : loadStacks(d)); } catch (e) { return json(res, 200, { error: e.message }); } }
     // Blick Conditional Ownership, posted by the vendor pull as compact text (server/blickcond.mjs)
