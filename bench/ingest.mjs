@@ -25,6 +25,8 @@ export function classify(file, H) {
   if (h.some(x => /gpp score/.test(x))) return "blick";
   if (h[0] === "player" && h[1] === "team" && h[3] === "position" && h[5] === "projection") return "etr";
   if (h[0] === "player" && h[1] === "pos" && h[2] === "team" && h.includes("cpt own")) return "etr";
+  // ETR's DraftKings showdown upload file (names + DK ids, projection, ownership as fractions; no team or salary)
+  if (h[0] === "player name and id" && h.includes("captain ownership")) return "etr-upload";
   return "unknown";
 }
 const col = (h, ...names) => { for (const n of names) { const i = h.indexOf(n); if (i >= 0) return i; } return h.findIndex(x => names.some(n => x.includes(n))); };
@@ -79,6 +81,7 @@ export function ingestPass(extraFiles = []) {
     if (!all.length || all.length < 3) { ledger[id] = { skipped: "empty" }; continue; }
     const H = all[0], rows = all.slice(1).filter(r => r.length > 2), src = classify(file, H);
     if (!src) { ledger[id] = { skipped: "not projections" }; continue; }
+    if (src === "etr-upload") { ledger[id] = { skipped: "ETR upload file" }; notes.push(`${f}: ETR's DraftKings upload file (no teams or salaries), not projections; download ETR's projections table instead, or use the No-Claude grabber on that page`); continue; }
     if (src === "unknown") { ledger[id] = { skipped: "unknown layout" }; notes.push(`${f}: unknown layout (${H.slice(0, 6).join(",")})`); continue; }
     const { teams, sport } = teamsAndSport(H, rows);
     if (sport !== "nfl") { ledger[id] = { skipped: sport }; notes.push(`${f}: ${src} but not NFL, left alone`); continue; }

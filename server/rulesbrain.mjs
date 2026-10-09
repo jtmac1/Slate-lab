@@ -34,7 +34,9 @@ export function rulesReview(e, sd) {
   if (s.dupN != null && s.dupN < 0.3) pro.push("Rarely duplicated"); else if (s.dupN >= 1.5) con.push(`Expect ${(+s.dupN).toFixed(1)} copies in the field`);
   if (G.parts.sim >= 80) pro.push(`Sim ROI in the top ${100 - G.parts.sim || 1}% of this pool`); else if (G.parts.sim <= 30) con.push("Sim ROI in the bottom third of this pool");
   if (e.wins && e.wins.length) pro.push(`Wins when ${e.wins[0].name}`);
-  const take = `${G.grade}/100: sim ${G.parts.sim}, your rulebook ${G.parts.rules}${G.parts.guide == null ? "" : `, notes ${G.parts.guide}`}. ${pro[0] ? `Best case for it: ${pro[0]}.` : ""} ${con[0] ? `Biggest worry: ${con[0]}.` : ""}`.replace(/\s+/g, " ").trim();
+  // $300+ classic: the grade caps the sim's top decile at 60 on purpose (src/engine/grade.mjs gradePool, rulebook t -3.4)
+  const capped = G.parts.sim === 60 && (e.sim && e.sim.lab != null) ? " (capped: in $300+ contests the sim's top 10% lost in your results)" : "";
+  const take = `${G.grade}/100: sim ${G.parts.sim}${capped}, your rulebook ${G.parts.rules}${G.parts.guide == null ? "" : `, notes ${G.parts.guide}`}. ${pro[0] ? `Best case for it: ${pro[0]}.` : ""} ${con[0] ? `Biggest worry: ${con[0]}.` : ""}`.replace(/\s+/g, " ").trim();
   return { grade: letterOf(G.grade), thesis: thesisOf(e, sd), take, for: pro.slice(0, 5), against: con.slice(0, 5), model: MODEL_RULES };
 }
 export const loadRules = dir => { try { return JSON.parse(fs.readFileSync(path.join("data", dir, "brain-rules.json"), "utf8")); } catch { return { reviews: {} }; } };
