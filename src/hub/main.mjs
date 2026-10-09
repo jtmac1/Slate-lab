@@ -347,17 +347,31 @@ async function renderNotes(main) {
   if (weeklyOK()) { await loadReads(); if (S.etrOpen === undefined) S.etrOpen = true;
     if (!S.notes || S.notes.dir !== H.dir) { try { S.notes = Object.assign(await api(`/api/notes?dir=${encodeURIComponent(H.dir)}`), { dir: H.dir }); } catch (e) { S.notes = { text: "", images: [], dir: H.dir }; } }
     const old = S.notes.text.trim() || S.notes.images.length ? `<div style="padding:0 16px 12px"><div class="hint" style="margin-bottom:6px">Earlier notes on this slate (saved before the report list; the Brain still reads them)</div><pre class="txt" style="display:block;width:100%;box-sizing:border-box;white-space:pre-wrap;font-family:inherit;font-size:12px;padding:10px;margin:0">${esc(S.notes.text)}</pre>${S.notes.images.map(p => `<a href="${esc(p)}" target="_blank"><img src="${esc(p)}" style="max-width:180px;max-height:120px;margin:6px 6px 0 0;border:1px solid var(--line2);border-radius:4px"></a>`).join("")}</div>` : "";
-    await loadLikesUI();
-    main.innerHTML = `<div id="weekBox" style="padding:12px 16px">${weekBox()}</div><div id="likesBox">${likesBox()}</div>${old}`; wireLikes(); $("#bot").innerHTML = `<div class="bot"><span class="hint">Feeds data/${esc(H.dir)}/slate-guide.json; Blick thoughts in blick-thoughts.md and blick/.</span></div>`; wireWeek(); return; }
+    await loadLikesUI(); await loadMyReads();
+    main.innerHTML = `<div id="weekBox" style="padding:12px 16px">${weekBox()}</div>${myReadsBox()}<div id="likesBox">${likesBox()}</div>${old}`; wireLikes(); wireMyReads(); $("#bot").innerHTML = `<div class="bot"><span class="hint">Feeds data/${esc(H.dir)}/slate-guide.json; Blick thoughts in blick-thoughts.md and blick/.</span></div>`; wireWeek(); return; }
   if (!S.notes || S.notes.dir !== H.dir) { try { S.notes = Object.assign(await api(`/api/notes?dir=${encodeURIComponent(H.dir)}`), { dir: H.dir }); } catch (e) { S.notes = { text: "", images: [], dir: H.dir }; } }
   main.innerHTML = `${weeklyOK() ? `<div id="weekBox" style="padding:12px 16px 0">${weekBox()}</div>` : ""}<div style="padding:12px 16px;display:grid;grid-template-columns:1fr 1fr;gap:14px" class="notesgrid"><div><div class="hint" style="margin-bottom:6px">Slate notes: Blick's reads, your own, what you want to remember in the review. Saves as you type.</div><textarea class="txt" id="notesText" style="width:100%;min-height:50vh;font-family:inherit;font-size:12.5px">${esc(S.notes.text)}</textarea></div>
     <div><label class="drop" id="imgDrop">Drop screenshots here (Discord, ETR, anything) <input type="file" id="imgFile" accept="image/*" multiple></label><div id="imgs" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">${S.notes.images.map(p => `<a href="${esc(p)}" target="_blank"><img src="${esc(p)}" style="max-width:220px;max-height:160px;border:1px solid var(--line2);border-radius:4px"></a>`).join("")}</div></div></div>`;
-  $("#bot").innerHTML = `<div class="bot"><span class="hint">Stored in data/${esc(H.dir)}/notes.md and notes/.</span></div>`;
+  await loadMyReads(); main.insertAdjacentHTML("afterbegin", myReadsBox()); wireMyReads();
+  $("#bot").innerHTML = `<div class="bot"><span class="hint">Stored in data/${esc(H.dir)}/notes.md and notes/; your reads in my-reads.txt.</span></div>`;
   wireWeek();
   let t = null; $("#notesText").addEventListener("input", e => { S.notes.text = e.target.value; clearTimeout(t); t = setTimeout(async () => { try { await fetch(`/api/notes?dir=${encodeURIComponent(H.dir)}`, { method: "POST", body: S.notes.text }); setMsg("Notes saved"); } catch (err) { setMsg("Notes not saved", true); } }, 600); });
   const up = async f => { try { const r = await api(`/api/notes-image?dir=${encodeURIComponent(H.dir)}&name=${encodeURIComponent(f.name)}`, { method: "POST", body: await f.arrayBuffer() }); S.notes.images.push(r.path); render(); } catch (e) { setMsg("Image not saved: " + e.message, true); } };
   $("#imgFile").addEventListener("change", async e => { for (const f of Array.from(e.target.files || [])) await up(f); });
   const z = $("#imgDrop"); ["dragenter", "dragover"].forEach(ev => z.addEventListener(ev, e => { e.preventDefault(); z.classList.add("over"); })); ["dragleave", "drop"].forEach(ev => z.addEventListener(ev, e => { e.preventDefault(); z.classList.remove("over"); })); z.addEventListener("drop", async e => { for (const f of Array.from(e.dataTransfer.files || [])) await up(f); });
+}
+
+// your own player reads: work with no Claude read at all (they fill the slate guide's stances; server/entries.mjs parseReads)
+async function loadMyReads() { const H = S.hub; if (!S.myReads || S.myReads.dir !== H.dir) { try { S.myReads = Object.assign(await api(`/api/my-reads?dir=${encodeURIComponent(H.dir)}`), { dir: H.dir }); } catch { S.myReads = { text: "", count: 0, bad: [], dir: S.hub.dir }; } } }
+function myReadsBox() {
+  const R = S.myReads || { text: "", count: 0, bad: [] };
+  return `<div style="padding:12px 16px"><div class="hint" style="margin-bottom:6px">Your reads, one player per line: <b>Name like: why</b>, <b>Name fade: why</b> (also core, value, leverage, dart, caution), or <b>+Name: why</b> / <b>-Name: why</b>. They count in the notes columns and the grade over ETR's, and need no Claude. Saves as you type.</div>
+    <textarea class="txt" id="myReads" rows="6" style="width:100%;box-sizing:border-box" placeholder="Bijan Robinson like: cheap for his usage&#10;-Ja'Marr Chase: chalk in a bad spot">${esc(R.text)}</textarea>
+    <div class="hint" id="myReadsN">${R.count} read${R.count === 1 ? "" : "s"}${R.bad.length ? ` · not understood: ${esc(R.bad.slice(0, 3).join(" | "))}` : ""}</div></div>`;
+}
+function wireMyReads() {
+  const el = $("#myReads"); if (!el) return; let t = null;
+  el.addEventListener("input", e => { const H = S.hub; S.myReads.text = e.target.value; clearTimeout(t); t = setTimeout(async () => { try { const r = await api(`/api/my-reads?dir=${encodeURIComponent(H.dir)}`, { method: "POST", body: S.myReads.text }); Object.assign(S.myReads, r); const n = $("#myReadsN"); if (n) n.innerHTML = `${r.count} read${r.count === 1 ? "" : "s"}${r.bad.length ? ` · not understood: ${esc(r.bad.slice(0, 3).join(" | "))}` : ""}`; if (S.sim) S.sim.data = null; setMsg("Reads saved"); } catch (err) { setMsg("Reads not saved: " + err.message, true); } }, 600); });
 }
 
 /* ---------------- boot ---------------- */

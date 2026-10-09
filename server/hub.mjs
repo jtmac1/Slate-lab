@@ -16,7 +16,7 @@ import { stkSlates } from "../src/engine/stokastic.mjs";
 import { pullStokastic, pullInjuries, hubData, slateDirs, slateMeta } from "./sources.mjs";
 import { pullPinnacle } from "../bench/pull-pinnacle-nfl.mjs";
 import { ingestPass } from "../bench/ingest.mjs";
-import { loadEntries, importEntries, saveThesis, saveTag, loadGuide } from "./entries.mjs";
+import { loadEntries, importEntries, saveThesis, saveTag, loadGuide, parseReads, loadMyReads } from "./entries.mjs";
 import { saveLikes, loadLikes } from "./likes.mjs";
 import { saveStacks, loadStacks } from "./stacks.mjs";
 import { saveBlickCond } from "./blickcond.mjs";
@@ -198,6 +198,8 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/contests") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); return json(res, 200, contestsFor(slateMeta(d), { draftGroup: u.searchParams.get("group") })); }
     if (p === "/api/changes") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); return json(res, 200, diff(d, hubData(d))); }
     if (p === "/api/built" && req.method === "POST") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); markBuilt(d, hubData(d)); return json(res, 200, { ok: true }); }
+    // the user's own player reads (Notes tab): fill guide.stances without any Claude read (server/entries.mjs parseReads)
+    if (p === "/api/my-reads") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); const f = path.join("data", d, "my-reads.txt"); if (req.method === "POST") fs.writeFileSync(f, (await body(req)).toString("utf8")); const text = loadMyReads(d), r = parseReads(text); return json(res, 200, { text, count: Object.keys(r.stances).length, bad: r.bad }); }
     if (p === "/api/notes") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); const f = path.join("data", d, "notes.md"); if (req.method === "POST") { fs.writeFileSync(f, (await body(req)).toString("utf8")); return json(res, 200, { ok: true }); } const imgDir = path.join("data", d, "notes"); return json(res, 200, { text: fs.existsSync(f) ? fs.readFileSync(f, "utf8") : "", images: fs.existsSync(imgDir) ? fs.readdirSync(imgDir).filter(x => /\.(png|jpe?g|gif|webp)$/i.test(x)).map(x => `data/${d}/notes/${x}`) : [] }); }
     if (p === "/api/notes-image" && req.method === "POST") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); const name = path.basename(u.searchParams.get("name") || "image.png").replace(/[^\w.-]/g, "_"); const imgDir = path.join("data", d, "notes"); fs.mkdirSync(imgDir, { recursive: true }); fs.writeFileSync(path.join(imgDir, name), await body(req)); return json(res, 200, { path: `data/${d}/notes/${name}` }); }
     if (p === "/api/ledger") { const f = "data/reports/entries-ledger-nfl.json"; return json(res, 200, fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : { ledger: [], entries: 0 }); }

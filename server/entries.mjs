@@ -20,7 +20,28 @@ export const loadEntries = dir => readJ(file(dir)) || { dir, entries: [], import
 // slate as data/<slate>/slate-guide.json (see memory "slate-guide"); drives the "Slate" check group
 // NFL classic sub-slates (Early Only, Afternoon, Primetime, Sun-Mon...) without their own guide read the Main guide filtered to their games
 // ETR's data tables (DvP, XFP, PROE, contest selection) are attached on load as guide.data (server/etrdata.mjs)
-export const loadGuide = dir => withData(readJ(path.join("data", dir, "slate-guide.json")) || subGuide(dir), dir);
+export const loadGuide = dir => withData(withReads(readJ(path.join("data", dir, "slate-guide.json")) || subGuide(dir), dir), dir);
+// the user's own player reads (Notes tab, data/<slate>/my-reads.txt), one per line: "Name like: why", "Name fade why",
+// "+Name why" (like) or "-Name why" (fade). They go into guide.stances over ETR's, so the notes columns and the grade work
+// with no Claude read at all. Stances: like/core/value/leverage/dart/play count for, fade/avoid/caution against.
+const STANCE = "like|love|core|value|leverage|dart|play|fade|avoid|caution";
+export function parseReads(text) {
+  const out = {}, bad = [];
+  for (const raw of String(text || "").split(/\r?\n/)) {
+    const l = raw.trim(); if (!l || l.startsWith("#")) continue;
+    let m = l.match(/^([+-])\s*([^:,]+?)(?:\s*[:,\u2013-]\s+|\s*:\s*|$)(.*)$/);
+    if (m) { out[m[2].trim()] = { stance: m[1] === "+" ? "like" : "fade", why: m[3].trim(), source: "you" }; continue; }
+    m = l.match(new RegExp(`^(.*?)[\\s:,\u2013-]+(${STANCE})\\b[\\s:,\u2013-]*(.*)$`, "i"));
+    if (m && m[1].trim()) { const st = m[2].toLowerCase(); out[m[1].trim()] = { stance: st === "love" ? "like" : st, why: m[3].trim(), source: "you" }; }
+    else bad.push(l);
+  }
+  return { stances: out, bad };
+}
+export const loadMyReads = dir => { try { return fs.readFileSync(path.join("data", dir, "my-reads.txt"), "utf8"); } catch { return ""; } };
+function withReads(guide, dir) {
+  const { stances } = parseReads(loadMyReads(dir)); if (!Object.keys(stances).length) return guide;
+  return Object.assign({}, guide || {}, { stances: Object.assign({}, (guide && guide.stances) || {}, stances) });
+}
 const nm = s => nrm(String(s || ""));
 const isDst = p => /^(DST|D|DEF)$/i.test(p || "");
 const CATCH = /^(WR|TE|RB)$/;
