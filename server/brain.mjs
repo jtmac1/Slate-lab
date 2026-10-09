@@ -21,7 +21,7 @@ const readJ = f => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catc
 const readT = (dir, f) => { try { return fs.readFileSync(path.join("data", dir, f), "utf8").trim(); } catch { return ""; } };
 const notesText = dir => { const n = readT(dir, "notes.md"), b = readT(dir, "blick-thoughts.md"); return [n, b && `BLICK SLATE THOUGHTS (pasted by the user):\n${b}`].filter(Boolean).join("\n\n"); };
 const hash = s => crypto.createHash("sha1").update(s).digest("hex").slice(0, 12);
-export const brainStatus = dir => { const b = readJ(path.join("data", dir, "brain.json")); return { key: !!keyOf(), model: MODEL, reviews: b ? Object.keys(b.reviews || {}).length : 0, portfolio: b ? b.portfolio || null : null, at: b ? b.at : null }; };
+export const brainStatus = dir => { const b = readJ(path.join("data", dir, "brain.json")); return { key: !!keyOf(), model: MODEL, reviews: b ? Object.keys(b.reviews || {}).length : 0, portfolio: b ? b.portfolio || null : null, at: b ? b.at : null, pending: b && b.pending ? { lineups: Object.values(b.pending.ids).filter(s => !(b.reviews || {})[s]).length, portfolio: b.pending.favs.length > 0, at: b.pending.at, file: `data/${dir}/brain-request.md`, text: readT(dir, "brain-request.md") } : null }; };
 export const loadBrain = dir => readJ(path.join("data", dir, "brain.json")) || { reviews: {}, portfolio: null };
 
 // what the brain knows about the slate, built once per call
@@ -82,4 +82,67 @@ export async function reviewPortfolio(dir, sigs) {
   B.portfolio = Object.assign({ sigs, at: new Date().toISOString(), model: MODEL }, data);
   fs.writeFileSync(path.join("data", dir, "brain.json"), JSON.stringify(B));
   return { portfolio: B.portfolio, usage: { in: usage?.input_tokens || 0, out: usage?.output_tokens || 0 } };
+}
+
+// Manual mode (no API key needed): the hub writes the same review job as one request file,
+// data/<slate>/brain-request.md, and Claude answers it outside the hub (pasted into any Claude chat,
+// or Claude in the user's project reading the file and writing data/<slate>/brain-answer.json).
+// Lineups go out as short ids (L1, L2, ...); brain.json keeps the id -> signature map until answered.
+const GRADES = new Set(["A", "A-", "B+", "B", "B-", "C+", "C", "D", "F"]);
+export function manualRequest(dir, sigs, favs = []) {
+  const R = loadSimRun(dir); if (!R || !R.rows) throw new Error("run the Pre-Contest Simulator first");
+  const ctx = slateContext(dir), B = loadBrain(dir); if (B.stamp !== ctx.stamp) { B.reviews = {}; B.portfolio = null; B.stamp = ctx.stamp; }
+  const bySig = new Map(R.rows.map(e => [e.sig, e])), want = [...new Set(sigs)].map(s => bySig.get(s)).filter(Boolean), todo = want.filter(e => !B.reviews[e.sig]);
+  const fav = [...new Set(favs)].filter(s => bySig.has(s)), ids = {}, line = (e, k) => { ids["L" + (k + 1)] = e.sig; return `[L${k + 1}] ${lineupText(e)}`; };
+  if (!todo.length && !fav.length) throw new Error(want.length ? "every lineup already has a review; nothing to ask" : "no lineups to review");
+  const favIds = fav.map(s => { const k = todo.findIndex(e => e.sig === s); if (k >= 0) return "L" + (k + 1); todo.push(bySig.get(s)); return "L" + todo.length; });
+  const text = `# Slate Brain request: ${ctx.hub.slate.name || dir}
+Made by Slate Lab ${new Date().toISOString()} (slate folder data/${dir}). Answer with the JSON at the end and nothing else.
+
+## Your role
+${SYSTEM}
+
+## The slate
+${ctx.text}
+
+## Lineups to review (${todo.length})
+${todo.map(line).join("\n\n")}
+
+## What to return
+One JSON object:
+{"reviews": [{"id": "L1", "grade": "A"|"A-"|"B+"|"B"|"B-"|"C+"|"C"|"D"|"F", "thesis": "the bet in 3-8 words", "take": "under 60 words", "for": ["short point", ...], "against": ["short point", ...]}, ...]${fav.length ? `,
+ "portfolio": {"take": "under 100 words on what this set bets on and whether it is one thesis or several", "overlap": ["players or stacks shared by most of them"], "missing": ["theses or leverage from the notes with no exposure"], "swap": "one concrete change that would improve the set, under 40 words"}}
+The portfolio is the user's favorites, entered together: ${favIds.join(", ")}.` : "}"}
+Review every lineup above, one entry per id.
+`;
+  fs.writeFileSync(path.join("data", dir, "brain-request.md"), text);
+  B.pending = { ids, favs: fav, stamp: ctx.stamp, at: new Date().toISOString() };
+  fs.writeFileSync(path.join("data", dir, "brain.json"), JSON.stringify(B));
+  return { text, file: `data/${dir}/brain-request.md`, lineups: todo.length, portfolio: fav.length > 0 };
+}
+// the answer: the JSON Claude returned (code fences and any text around it are fine)
+export function manualAnswer(dir, raw, by = "Claude (manual)") {
+  const B = loadBrain(dir), P = B.pending; if (!P) throw new Error("no open request: press Ask Claude first");
+  const s = String(raw || "").replace(/```(?:json)?/g, ""), a = s.indexOf("{"), z = s.lastIndexOf("}");
+  let d; try { d = JSON.parse(s.slice(a, z + 1)); } catch { throw new Error("that answer isn't the JSON the request asked for"); }
+  const list = Array.isArray(d) ? d : d.reviews || [], at = new Date().toISOString(), bad = [];
+  let n = 0;
+  for (const r of list) { const sig = P.ids[r.id]; const g = String(r.grade || "").trim().toUpperCase();
+    if (!sig || !GRADES.has(g)) { bad.push(r.id || "?"); continue; }
+    B.reviews[sig] = { grade: g, thesis: r.thesis || "", take: r.take || "", for: r.for || [], against: r.against || [], at, model: by }; n++; }
+  if (!n && !d.portfolio) throw new Error("no lineup in that answer matched the request");
+  if (d.portfolio && P.favs.length) B.portfolio = Object.assign({ sigs: P.favs, at, model: by }, d.portfolio);
+  const left = Object.keys(P.ids).filter(id => !B.reviews[P.ids[id]]);
+  // answers made from an older slate guide still count; they're flagged so the user can re-ask
+  const stale = (() => { try { return slateContext(dir).stamp !== P.stamp; } catch { return false; } })();
+  B.stamp = P.stamp; B.at = at; if (!left.length) delete B.pending;
+  fs.writeFileSync(path.join("data", dir, "brain.json"), JSON.stringify(B));
+  return { reviewed: n, skipped: bad, missing: left.length, portfolio: !!(d.portfolio && P.favs.length), stale };
+}
+// Claude in the project writes data/<slate>/brain-answer.json; the hub picks it up when the Brain is next opened
+export function pickUpAnswer(dir) {
+  const f = path.join("data", dir, "brain-answer.json"); if (!fs.existsSync(f)) return null;
+  const B = loadBrain(dir); if (!B.pending) return null;
+  try { const r = manualAnswer(dir, fs.readFileSync(f, "utf8"), "Claude (project)"); fs.renameSync(f, f.replace(/\.json$/, `-${Date.now()}.json`)); return r; }
+  catch (e) { return { error: e.message }; }
 }
