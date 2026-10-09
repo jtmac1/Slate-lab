@@ -55,9 +55,10 @@ const CL = {
 const OWN_RULES = new Set(["own sum < 200%", "own sum 200-260%", "own sum >= 260%", "4+ players at 20%+ owned", "0-2 players at 20%+ owned",
   "own sum above the contest median", "own sum in the contest's top 30%", "own sum in the contest's bottom 30%", "chalk count above the contest median", "chalk count below the contest median"]);
 export const FLAT_CHALK = 7, SEG_FLAT = "flat slate (7 or fewer players at 20%+)", SEG_CONC = "concentrated slate (8+ players at 20%+)";
-// pool-relative ownership for each lineup: the percentile of its own sum and the pool's median chalk count
-export function markOwnRelative(feats) {
-  const v = feats.map(f => f.ownSum).sort((a, b) => a - b), c = feats.map(f => f.chalk).sort((a, b) => a - b), chalkMed = c[c.length >> 1] ?? 0;
+// contest-relative ownership for each lineup: the percentile of its own sum and the median chalk count, measured against
+// ref (the contest's field: [{ ownSum, chalk }]) like the archive does, or against the graded pool itself when there is no field
+export function markOwnRelative(feats, ref = null) {
+  const R = ref && ref.length ? ref : feats, v = R.map(f => f.ownSum).sort((a, b) => a - b), c = R.map(f => f.chalk).sort((a, b) => a - b), chalkMed = c[c.length >> 1] ?? 0;
   const below = x => { let lo = 0, hi = v.length; while (lo < hi) { const m = (lo + hi) >> 1; if (v[m] < x) lo = m + 1; else hi = m; } return lo; };
   for (const f of feats) { f.ownPct = v.length ? below(f.ownSum) / v.length : 0.5; f.chalkMed = chalkMed; }
   return feats;

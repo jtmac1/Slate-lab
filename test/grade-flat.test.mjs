@@ -24,3 +24,8 @@ test("pool-relative ownership features", () => {
   const f = markOwnRelative([{ ownSum: 100, chalk: 1 }, { ownSum: 150, chalk: 2 }, { ownSum: 200, chalk: 4 }, { ownSum: 250, chalk: 5 }]);
   assert.deepEqual(f.map(x => x.ownPct), [0, 0.25, 0.5, 0.75]); assert.equal(f[0].chalkMed, 4);
 });
+test("ownership relative to the contest field when one is given", () => {
+  const field = [{ ownSum: 200, chalk: 3 }, { ownSum: 220, chalk: 4 }, { ownSum: 240, chalk: 4 }, { ownSum: 260, chalk: 5 }];
+  const f = markOwnRelative([{ ownSum: 150, chalk: 2 }, { ownSum: 230, chalk: 5 }], field);
+  assert.deepEqual(f.map(x => x.ownPct), [0, 0.5]); assert.equal(f[1].chalkMed, 4);
+});

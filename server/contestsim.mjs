@@ -70,12 +70,20 @@ export const loadSimRun = dir => { const r = readJ(path.join("data", dir, "simru
 // + the slate guide notes, weighted by data/reports/grade-weights.json when the backtest has written one
 // players in the pool projected 20%+ owned (Model own): how concentrated the slate is (src/engine/grade.mjs FLAT_CHALK)
 const chalkOf = rows => { const seen = new Map(); for (const e of rows) for (const p of e.players || []) seen.set(p.name + "|" + p.team, p.fown ?? p.own ?? 0); return [...seen.values()].filter(o => o >= 20).length; };
+// the generated contest field's own sums and chalk counts on the same Model own the lineups are graded on, so "above the
+// contest median" means the field's median (the archive's definition), not the Lab pool's; null without a field.json
+function fieldOwn(dir, rows) {
+  const F = loadField(dir); if (!F || !Array.isArray(F.rows) || !F.rows.length) return null;
+  const own = new Map(); for (const p of F.players || []) own.set(p.name, p.own ?? 0);
+  for (const e of rows) for (const p of e.players || []) own.set(p.name, p.fown ?? p.own ?? 0);
+  return F.rows.filter(x => Array.isArray(x.names)).map(x => { const o = x.names.map(n => own.get(n) ?? 0); return { ownSum: o.reduce((a, b) => a + b, 0), chalk: o.filter(v => v >= 20).length }; });
+}
 function gradeRun(dir, r, sd) {
   const rb = readJ("data/reports/rulebook-nfl.json"); if (!rb) return;
   const wf = readJ("data/reports/grade-weights.json"), weights = wf && wf.weights || DEFAULT_WEIGHTS, fee = r.contest && r.contest.fee || 20;
   const games = (readJ(path.join("data", dir, "slate.json")) || {}).games || [], mk = p => ({ name: p.name, pos: p.pos, team: p.team, opp: p.opp, sal: p.sal, own: p.fown ?? p.own, cptOwn: p.cptOwn });
   const rows = r.rows.filter(e => e.players && e.sim), feats = rows.map(e => sd ? showdownFeatures(e.players.map(mk)) : classicFeatures(e.players.map(mk)));
-  if (!sd) { markObviousBringBack(feats); markOwnRelative(feats); }
+  if (!sd) { markObviousBringBack(feats); markOwnRelative(feats, fieldOwn(dir, rows)); }
   const G = gradePool(rows.map((e, i) => ({ sim: e.sim.lab ?? e.sim.mean, feats: feats[i], guide: r.guide ? e.notes : null })), rulesFor(rb, { sd, fee, games: games.length || 12, chalkN: sd ? null : chalkOf(rows) }), { weights, fee, sd });
   rows.forEach((e, i) => { e.grade = G[i]; if (!sd && feats[i].chalkBB != null) e.grade.bringBack = { takes: feats[i].chalkBB, share: +(100 * feats[i].chalkBBShare).toFixed(0) }; });
   const chalkN = sd ? null : chalkOf(rows);
