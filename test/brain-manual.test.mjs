@@ -49,3 +49,14 @@ test("the Brain sees each report's takeaways, Blick last, and the request carrie
   assert.equal(readsText("2026-10-11-nfl-early", { derived: true, from: [DIR] }).n, 2);
   const q = manualRequest(DIR, [], ["s1"]); assert.match(q.text, /WHAT EACH REPORT SAID[\s\S]*Alpha stack is the favorite build/);
 });
+test("the Lab rules Brain writes a card from the grade alone, no Claude", async () => {
+  const { rulesReview, letterOf } = await import("../server/rulesbrain.mjs");
+  assert.equal(letterOf(95), "A"); assert.equal(letterOf(55), "B-"); assert.equal(letterOf(5), "F");
+  const e = { sig: "x", players: [{ name: "Josh Allen", pos: "QB", team: "BUF", opp: "MIA" }, { name: "Khalil Shakir", pos: "WR", team: "BUF" }, { name: "Dalton Kincaid", pos: "TE", team: "BUF" }, { name: "Tyreek Hill", pos: "WR", team: "MIA" }],
+    sim: { dupN: 2.1 }, fieldDelta: -7, notes: { for: [{ kind: "Leverage", names: ["Dalton Kincaid"], note: "Million: low owned" }], against: [{ kind: "Fade", names: ["Tyreek Hill"] }] },
+    grade: { grade: 83, parts: { sim: 90, rules: 70, guide: 60 }, rules: [{ name: "QB + 2 pass catchers or more", pts: 0.4, lift: 1.5 }, { name: "own sum >= 260%", pts: -0.2, lift: 0.8 }] } };
+  const r = rulesReview(e, false);
+  assert.equal(r.grade, "A-"); assert.equal(r.thesis, "BUF Allen + 2, 1 bring-back"); assert.equal(r.model, "Lab rules");
+  assert.match(r.for.join("|"), /QB \+ 2 pass catchers.*\|.*Leverage: Dalton Kincaid.*lighter/); assert.match(r.against.join("|"), /own sum >= 260%.*Fade: Tyreek Hill.*2\.1 copies/);
+  assert.equal(rulesReview({ sig: "y" }, false), null);
+});
