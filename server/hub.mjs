@@ -106,7 +106,7 @@ const readsFile = dir => path.join("data", dir, "etr-reads.json");
 const loadReads = dir => { try { return JSON.parse(fs.readFileSync(readsFile(dir), "utf8")); } catch { return {}; } };
 function pullStatus(patch) { const sf = "data/requests/status.json"; const cur = fs.existsSync(sf) ? JSON.parse(fs.readFileSync(sf, "utf8")) : {}; fs.writeFileSync(sf, JSON.stringify(Object.assign(cur, patch, { updated: new Date().toISOString() }))); return cur; }
 function startPull(r) {
-  const meta = slateMeta(r.dir), sd = meta.type === "SHOWDOWN", wk = (() => { const m = fs.readdirSync(path.join("data", r.dir)).join(" ").match(/(\d{4})wk(\d\d)/); return m ? m[1] + "wk" + m[2] : `${meta.date.slice(0, 4)}wk00`; })();
+  const meta = slateMeta(r.dir), sd = meta.type === "SHOWDOWN", wk = (() => { const m = fs.readdirSync(path.join("data", r.dir)).join(" ").match(/(\d{4})wk(0[1-9]|[1-9]\d)/); return m ? m[1] + "wk" + m[2] : `${meta.date.slice(0, 4)}wk${String(nflWeek(meta.date)).padStart(2, "0")}`; })();   // no week-named file yet: the NFL week from the date (was wk00)
   const etrMain = `Open https://establishtherun.com/draftkings-fanduel-yahoo-projections/ and wait 4 seconds. The DraftKings table is the FIRST AG Grid on the page; read every row from React in one step (no scrolling):
      const el=document.querySelectorAll('.ag-root-wrapper')[0]; const fk=Object.keys(el).find(k=>k.startsWith('__reactFiber')); let f=el[fk]; while(f&&!(f.memoizedProps&&Array.isArray(f.memoizedProps.rowData))) f=f.return;
      const D=f.memoizedProps.rowData.filter(o=>o.projection>=2||o.largeOwnership>0);
