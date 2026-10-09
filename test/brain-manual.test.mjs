@@ -39,3 +39,13 @@ test("Claude's answer file is picked up once, then the request closes", () => {
 test("nothing to ask when every lineup is reviewed and there are no favorites", () => {
   assert.throws(() => manualRequest(DIR, ["s1", "s2"], []), /already has a review/);
 });
+test("the Brain sees each report's takeaways, Blick last, and the request carries them", async () => {
+  const { readsText } = await import("../server/brain.mjs");
+  const rd = path.join("data", DIR, "reads"); fs.mkdirSync(rd, { recursive: true });
+  fs.writeFileSync(path.join(rd, "blick.md"), "# Blick slate thoughts\n#\n- Charlie is the leverage QB");
+  fs.writeFileSync(path.join(rd, "million.md"), "# The Million: Week 6\nDink | url\n- Alpha stack is the favorite build");
+  const r = readsText(DIR, null); assert.equal(r.n, 2); assert.ok(r.text.indexOf("Million") < r.text.indexOf("Blick"));
+  // a sub-slate with no reads of its own uses the slates its guide came from
+  assert.equal(readsText("2026-10-11-nfl-early", { derived: true, from: [DIR] }).n, 2);
+  const q = manualRequest(DIR, [], ["s1"]); assert.match(q.text, /WHAT EACH REPORT SAID[\s\S]*Alpha stack is the favorite build/);
+});
