@@ -17,16 +17,21 @@ const rows = new Map(H.rows.map(r => [nm(r.name), r]));
 const DST = { Cardinals: "ARI", Falcons: "ATL", Ravens: "BAL", Bills: "BUF", Panthers: "CAR", Bears: "CHI", Bengals: "CIN", Browns: "CLE", Cowboys: "DAL", Broncos: "DEN", Lions: "DET", Packers: "GB", Texans: "HOU", Colts: "IND", Jaguars: "JAX", Chiefs: "KC", Raiders: "LV", Chargers: "LAC", Rams: "LAR", Dolphins: "MIA", Vikings: "MIN", Patriots: "NE", Saints: "NO", Giants: "NYG", Jets: "NYJ", Eagles: "PHI", Steelers: "PIT", "49ers": "SF", Seahawks: "SEA", Buccaneers: "TB", Titans: "TEN", Commanders: "WAS" };
 const rowOf = name => rows.get(nm(name)) || H.rows.find(r => r.pos === "DST" && (r.team === DST[name] || nm(r.name) === nm(name))) || null;
 const pct = v => v == null ? "—" : `${(+v).toFixed(0)}%`, money = v => v ? `$${(v / 1000).toFixed(1)}K` : "—";
-const sentences = (s, n) => (String(s).match(/[^.!?]+[.!?]+(\s|$)/g) || [String(s)]).slice(0, n).join("").trim();
+// split only where a sentence really ends: punctuation after a lowercase word of 2+ letters (or a closing bracket/quote),
+// then a space and a capital. Keeps "54.5", "vs. a", "Jr. 5", "St. Brown", "No. 1" and "ESPN.com" in one piece.
+const splitSentences = s => String(s || "").split(/(?<=(?:[a-z]{2}|[)\]'"’])[.!?])\s+(?=[A-Z"'])/);
+const sentences = (s, n) => splitSentences(s).slice(0, n).join(" ").trim();
 const kickoff = iso => new Date(iso).toLocaleString("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: "America/Chicago" }) + " CT";
 
-// games, highest total first, each with the guide's thesis for it
-const theses = G.theses || [];
+// games, highest total first, each with the guide's thesis for that one game; theses spanning several games (or none) are
+// slate-wide and shown once above the games. The call chip comes only from the guide's gameCalls (ETR Game Scores), never
+// guessed from a thesis name.
+const theses = G.theses || [], slateWide = theses.filter(t => (t.games || []).length !== 1);
 const games = H.games.slice().sort((a, b) => b.total - a.total).map(g => {
-  const fav = g.spread < 0 ? g.home : g.away, th = theses.filter(t => (t.games || []).includes(g.game));
-  return { ...g, fav, line: `${fav} −${Math.abs(g.spread)}`, th };
+  const fav = g.spread < 0 ? g.home : g.away, th = theses.filter(t => (t.games || []).length === 1 && t.games[0] === g.game);
+  return { ...g, fav, line: `${fav} −${Math.abs(g.spread)}`, th, call: (G.gameCalls || {})[g.game] || null };
 });
-const verdictOf = t => /fade|trap|avoid|worst/i.test(t.name) ? ["avoid", "Avoid"] : /shootout|anchor|stack/i.test(t.name) ? ["stack", "Stack"] : ["look", "Angle"];
+const CALL = { stack: ["stack", "Game stack"], mini: ["look", "Mini-stack"], pieces: ["", "Single players"], avoid: ["avoid", "Avoid"] };
 
 // players by position from the stances, ordered core > leverage > value > caution > fade, then salary
 const ORDER = { core: 0, leverage: 1, value: 2, caution: 3, fade: 4 }, POS = ["QB", "RB", "WR", "TE", "DST"];
@@ -49,7 +54,9 @@ const digests = fs.existsSync(path.join(dir, "reads")) ? fs.readdirSync(path.joi
 const rules = RB.rows.filter(r => r.fmt === "classic" && r.kept && /^\$(100|300)/.test(r.seg)).sort((a, b) => Math.abs(b.t) - Math.abs(a.t));
 const checklist = [...new Map(rules.map(r => [r.rule, r])).values()].slice(0, 10);
 
-const stacks = ((G.labStacks || {}).top || []).slice(0, 5), notReady = Object.entries(reads).filter(([, v]) => v.status !== "ok").map(([k, v]) => ({ id: k, note: v.note }));
+const catalog = await (await fetch(`http://localhost:8787/api/etr-reads?dir=${slate}`)).json().then(r => r.catalog || []).catch(() => []);
+const nameOf = id => (catalog.find(c => c.id === id) || {}).name || id;
+const stacks = ((G.labStacks || {}).top || []).slice(0, 5), notReady = Object.entries(reads).filter(([, v]) => v.status !== "ok").map(([k, v]) => ({ id: k, name: nameOf(k), note: v.note }));
 const src = H.sources || {}, stamp = (label, v) => v ? `<span><b>${label}</b> ${esc(v)}</span>` : "";
 const etrAt = src.etr && src.etr.checked, stkAt = src.stokastic && src.stokastic.projUpdated, blAt = src.blick && src.blick.checked;
 const fmtAt = s => s ? new Date(s.endsWith("Z") || /[+-]\d\d:\d\d$/.test(s) ? s : s + "Z").toLocaleString("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: "America/Chicago" }) : null;
@@ -86,6 +93,9 @@ section{display:flex;flex-direction:column;gap:10px;scroll-margin-top:52px}
 .ghead .ln{font-size:12.5px;color:var(--ink2);font-variant-numeric:tabular-nums}
 .ghead .ln b{color:var(--ink)}
 .game p{margin:0;color:var(--ink2);font-size:13px}
+.game p.call{color:var(--ink)} .game.wide{border-style:dashed}
+details.more summary{cursor:pointer;font-size:12px;color:var(--neon);width:max-content} details.more p{margin-top:6px}
+.legend{margin:0;font-size:12px;color:var(--muted);line-height:1.9}
 .chip{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:2px 7px;border-radius:10px;border:1px solid currentColor;white-space:nowrap}
 .chip.stack,.chip.core{color:var(--green)} .chip.look,.chip.leverage{color:var(--neon)} .chip.avoid,.chip.fade{color:var(--red)} .chip.value{color:var(--yellow)} .chip.caution{color:#ffa94d} .chip.lab{color:var(--pink)} .chip.labfade{color:var(--muted)}
 .pos{display:flex;flex-direction:column;gap:2px}
@@ -127,11 +137,14 @@ footer{font-size:12px;color:var(--muted)}
   <div class="stamps">${stamp("Lock", kickoff(H.games.map(g => g.start).sort()[0]))}${stamp("ETR", fmtAt(etrAt))}${stamp("Stokastic", fmtAt(stkAt))}${stamp("Blick", fmtAt(blAt))}${stamp("Built", fmtAt(new Date().toISOString()))}</div>
 </header>
 <nav aria-label="Sections"><a href="#games">Games</a><a href="#players">Players</a><a href="#stacks">Stacks</a><a href="#news">Late news</a><a href="#shows">Shows</a><a href="#rules">$100+ rules</a></nav>
-${notReady.length ? `<div class="warn">Not read yet: ${notReady.map(x => esc(x.id)).join(", ")}. This sheet updates after they are.</div>` : ""}
-<section id="games"><h2>Games <small>highest total first</small></h2>
-${games.map(g => { const v = g.th.length ? verdictOf(g.th[0]) : null; return `<div class="game ${v ? v[0] : ""}"><div class="ghead"><span class="mu">${esc(g.away)} @ ${esc(g.home)}</span><span class="ln"><b>${g.total}</b> total · ${esc(g.line)} · ${esc(g.away)} ${g.ttAway} / ${esc(g.home)} ${g.ttHome}</span>${v ? chip(v[0], v[1]) : ""}</div>${g.th.map(t => `<p><b>${esc(t.name)}.</b> ${esc(sentences(t.summary, 3))}</p>`).join("")}</div>`; }).join("\n")}
+${notReady.length ? `<div class="warn">Not read yet: ${notReady.map(x => esc(x.name)).join(", ")}. This sheet updates after they are.</div>` : ""}
+<section id="games"><h2>Games <small>highest total first · lines from Pinnacle</small></h2>
+${slateWide.map(t => `<div class="game wide"><p><b>${esc(t.name)}.</b> ${esc(t.summary)}</p></div>`).join("\n")}
+${games.map(g => { const c = g.call && CALL[g.call.call], more = g.th.map(t => splitSentences(t.summary)).filter(s => s.length > 2);
+  return `<div class="game ${c ? c[0] : ""}"><div class="ghead"><span class="mu">${esc(g.away)} @ ${esc(g.home)}</span><span class="ln"><b>${g.total}</b> total · ${esc(g.line)} · ${esc(g.away)} ${g.ttAway} / ${esc(g.home)} ${g.ttHome}</span>${c ? chip(c[0], c[1]) : ""}</div>${g.call ? `<p class="call">${esc(g.call.why)}</p>` : ""}${g.th.map(t => `<p><b>${esc(t.name)}.</b> ${esc(sentences(t.summary, 2))}</p>`).join("")}${more.length ? `<details class="more"><summary>More on this game</summary>${g.th.map(t => `<p>${esc(splitSentences(t.summary).slice(2).join(" "))}</p>`).join("")}</details>` : ""}</div>`; }).join("\n")}
 </section>
 <section id="players"><h2>Players <small>tap a name for why</small></h2>
+<p class="legend">${chip("core", "core")} ${chip("leverage", "leverage")} ${chip("value", "value")} ${chip("caution", "caution")} ${chip("fade", "fade")} are ETR's calls, as written up in the guide. ${chip("lab", "Lab like")} ${chip("labfade", "Lab fade")} is Slate Lab's own model, which can disagree. Proj and Own are Slate Lab's blend.</p>
 <div class="hdr"><span>Player</span><span>Team</span><span>Salary</span><span>Proj</span><span>Own</span><span></span></div>
 ${byPos.map(([p, l]) => `<div class="pos"><h3>${p}</h3>${l.map(playerRow).join("")}</div>`).join("\n")}
 ${other.length ? `<div class="pos"><h3>Not on the DK slate</h3>${other.map(playerRow).join("")}</div>` : ""}

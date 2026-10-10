@@ -83,6 +83,11 @@ path form with BACKSLASHES (forward-slash paths are denied by the permission rul
        player a report took a clear side on; for an existing player, rewrite "why" in one or two sentences that combine the
        takes (no repeated text), and join sources with " / ". When sources disagree, say so; among ETR the Million crew wins
        ties; keep Blick's view visible in the why when it differs from ETR.
+     - "gameCalls": {"AWAY@HOME": {call, dk, why, source}} for EVERY game on the slate, from GPP Game Scores (and Matchups when
+       it says to lean in or away): call is stack (a real game-stack anchor), mini (a mild positive: mini-stack or two-man
+       correlation), pieces (neutral or negative: single players only) or avoid (the worst environment, or a writer says lean
+       away); dk = the DK Game Score; why = one plain sentence. Keep existing calls unless a report this run changes them.
+       The cheat sheet shows these calls; never infer a call from a thesis name.
      - "notes": add flag plants and injury watches before lock; don't repeat an existing note.
      - "builtAt": now (ISO).
    If nothing was read OK, don't write the guide.
