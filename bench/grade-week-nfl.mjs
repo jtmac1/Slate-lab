@@ -22,7 +22,7 @@ const sigNames = names => names.map(nm).sort().join("|");
 // older sim runs (before Lab ROI) carry only the plain mean; the sharp-construction filter is a classic idea, so showdown gets none
 const sim = loadSimRun(path.basename(dir)), labOf = e => e.sim.lab ?? e.sim.mean ?? e.sim.roi ?? null, classic = sim && sim.format !== "nfl_sd";
 const sharpOf = e => classic ? e.stackN >= 2 && !!e.bring && e.left < 600 && e.chalk >= 3 : null;
-const viewOf = (e, rank, of, source) => ({ source, lab: labOf(e), rank, of, sharp: sharpOf(e), dupN: e.sim.dupN, type: e.type, grade: e.grade ? e.grade.grade : null });
+const viewOf = (e, rank, of, source) => ({ source, lab: labOf(e), rank, of, sharp: sharpOf(e), dupN: e.sim.dupN, type: e.type, grade: e.grade ? e.grade.grade : null, rules: e.grade ? e.grade.parts.rules ?? null : null, notes: e.grade ? e.grade.parts.guide ?? null : null });
 const simBy = new Map(); if (sim && sim.rows) { const order = sim.rows.slice().sort((a, b) => (labOf(b) ?? -1e9) - (labOf(a) ?? -1e9)); order.forEach((e, i) => simBy.set(sigNames(e.players.map(p => p.name)), viewOf(e, i + 1, order.length, "from sim"))); }
 // plan shapes: Entry Manager (contests[].entries[].lineup, from the DraftKings entries file) or the older contests[].lineups
 const planLineups = c => c.entries ? c.entries.map(e => e.lineup).filter(l => l && l.length) : (c.lineups || []);
@@ -68,22 +68,26 @@ fs.writeFileSync(path.join(dir, "week-grade.json"), JSON.stringify(out, null, 1)
 // at +2400% can't swamp a $4,444 entry; the median and the plain mean ride along.
 const sbF = "data/reports/scoreboard-nfl.json", sb = readJ(sbF) || { rows: [] };
 sb.rows = sb.rows.filter(r => r.slate !== out.slate);
-for (const c of out.contests) for (const l of c.lineups || []) sb.rows.push({ slate: out.slate, contest: c.key, name: c.name, fee: c.fee, entries: c.entries, finish: l.finish, pct: l.pct, roi: l.roi, dupes: l.dupes, planned: l.planned, source: l.sim ? l.sim.source : null, grade: l.sim ? l.sim.grade ?? null : null, lab: l.sim ? l.sim.lab ?? null : null, labRank: l.sim ? l.sim.rank ?? null : null, simOf: l.sim ? l.sim.of ?? null : null, sharp: l.sim ? l.sim.sharp ?? null : null });
+for (const c of out.contests) for (const l of c.lineups || []) sb.rows.push({ slate: out.slate, contest: c.key, name: c.name, fee: c.fee, entries: c.entries, finish: l.finish, pct: l.pct, roi: l.roi, dupes: l.dupes, planned: l.planned, source: l.sim ? l.sim.source : null, grade: l.sim ? l.sim.grade ?? null : null, rules: l.sim ? l.sim.rules ?? null : null, notes: l.sim ? l.sim.notes ?? null : null, lab: l.sim ? l.sim.lab ?? null : null, labRank: l.sim ? l.sim.rank ?? null : null, simOf: l.sim ? l.sim.of ?? null : null, sharp: l.sim ? l.sim.sharp ?? null : null });
 const median = a => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 const summary = rows => { if (!rows.length) return null; const fees = rows.reduce((t, r) => t + (r.fee || 0), 0), won = rows.reduce((t, r) => t + (r.fee || 0) * (1 + (r.roi ?? -100) / 100), 0), rois = rows.map(r => r.roi ?? -100);
   return { entries: rows.length, fees: +fees.toFixed(2), won: +won.toFixed(2), roi: fees ? +(100 * (won / fees - 1)).toFixed(1) : null, medianRoi: median(rois), meanRoi: +(rois.reduce((t, x) => t + x, 0) / rois.length).toFixed(1), top10: +(100 * rows.filter(r => r.pct != null && r.pct >= 90).length / rows.length).toFixed(1) }; };
 const R = sb.rows;
 sb.totals = { all: summary(R), fromSim: summary(R.filter(r => r.source === "from sim" || (r.source == null && r.lab != null))), handBuilt: summary(R.filter(r => r.source === "hand-built" || (r.source == null && r.lab == null))), sharp: summary(R.filter(r => r.sharp === true)), notSharp: summary(R.filter(r => r.sharp === false)),
+  // do the grade's parts earn their weight? entries in the top vs bottom half of the pool on each part (notes start at 20% unproven)
+  rulesTop: summary(R.filter(r => r.rules != null && r.rules >= 50)), rulesBottom: summary(R.filter(r => r.rules != null && r.rules < 50)),
+  notesTop: summary(R.filter(r => r.notes != null && r.notes >= 50)), notesBottom: summary(R.filter(r => r.notes != null && r.notes < 50)),
   bySlate: Object.fromEntries([...new Set(R.map(r => r.slate))].map(s => [s, summary(R.filter(r => r.slate === s))])) };
 sb.updated = out.at; fs.writeFileSync(sbF, JSON.stringify(sb, null, 1));
 // print
 for (const c of out.contests) {
   console.log(`\n$${c.fee} ${c.name} (${(c.entries || 0).toLocaleString()} entries)`);
   if (c.error) { console.log("  " + c.error); continue; }
-  for (const l of c.lineups) console.log(`  finish ${l.finish}${l.pct != null ? ` (top ${(100 - l.pct).toFixed(1)}%)` : ""}  ${l.points != null ? (+l.points).toFixed(1) : "?"} pts  ROI ${l.roi}%  dupes ${l.dupes}  ${l.sim && l.sim.lab != null ? `[${l.sim.source}] grade ${l.sim.grade ?? "?"}  Lab ROI ${l.sim.lab}% (#${l.sim.rank} of ${l.sim.of})${l.sim.sharp ? " sharp" : ""}` : l.sim ? `[${l.sim.source}] ${l.sim.error || "ungraded"}` : "not graded (no sim run)"}${l.planned ? "" : "  [not in the plan]"}\n    ${l.names.join(", ")}`);
+  for (const l of c.lineups) console.log(`  finish ${l.finish}${l.pct != null ? ` (top ${(100 - l.pct).toFixed(1)}%)` : ""}  ${l.points != null ? (+l.points).toFixed(1) : "?"} pts  ROI ${l.roi}%  dupes ${l.dupes}  ${l.sim && l.sim.lab != null ? `[${l.sim.source}] grade ${l.sim.grade ?? "?"} (rulebook ${l.sim.rules ?? "-"}, notes ${l.sim.notes ?? "-"})  Lab ROI ${l.sim.lab}% (#${l.sim.rank} of ${l.sim.of})${l.sim.sharp ? " sharp" : ""}` : l.sim ? `[${l.sim.source}] ${l.sim.error || "ungraded"}` : "not graded (no sim run)"}${l.planned ? "" : "  [not in the plan]"}\n    ${l.names.join(", ")}`);
   if (c.top.length) console.log(`  winner: ${(+c.top[0].points).toFixed(1)} pts (${c.top[0].user}) ${c.top[0].names.join(", ")}`);
 }
 const fmt = s => s ? `${s.entries} entries, $${s.fees.toLocaleString()} in, ROI ${s.roi}% (median ${s.medianRoi}%, mean ${s.meanRoi}%), top-10% ${s.top10}%` : "none";
 const t = sb.totals, here = summary(R.filter(r => r.slate === out.slate));
 console.log(`\nThis slate: ${fmt(here)}${out.handBuilt ? `  | hand-built graded ${out.handBuilt.graded}/${out.handBuilt.lineups}` : ""}`);
 console.log(`Scoreboard so far: ${fmt(t.all)}\n  from the sim ${fmt(t.fromSim)} | hand-built ${fmt(t.handBuilt)} | sharp-filter ${fmt(t.sharp)} | outside it ${fmt(t.notSharp)}`);
+console.log(`  rulebook top half ${fmt(t.rulesTop)} | bottom half ${fmt(t.rulesBottom)}\n  notes top half ${fmt(t.notesTop)} | bottom half ${fmt(t.notesBottom)}`);
