@@ -75,8 +75,18 @@ const ETR_REPORTS = [
   { id: "sd-breakdown", fmt: "s", name: "Showdown Breakdown (this game)", sd: "breakdown" },
   { id: "sd-sim", fmt: "s", name: "DraftKings Showdown Sim Analysis", sd: "sim" },
   { id: "sd-show", fmt: "s", name: "Prime-time live show (this game)", sd: "show", video: true },
-  { id: "million", fmt: "c", name: "Establish The Million", menu: "Establish The Million: Week", video: true },
-  { id: "show", fmt: "c", name: "Establish The Show", menu: "Establish The Show: Week", video: true },
+  // weekly shows (show = the start of its link text on ETR's show-links page, /in-season-weekly-show-schedule/; each links an
+  // ETR page with the YouTube video embedded, unlisted, so a channel search misses it. Added 2026-10-09 at the user's ask:
+  // Projections Context, Man vs. Machine, Leone's Lineup Build, Wake and Rake (Sunday 10 a.m. ET; the cheat sheet follows
+  // it) and the DFS Tournament Review of last week's slate. Not the Last-Minute Livestream; Macro vs. Micro is FanDuel-only)
+  { id: "million", fmt: "c", name: "Establish The Million", show: "Establish The Million: Week", video: true },
+  { id: "show", fmt: "c", name: "Establish The Show", show: "Establish The Show: Week", video: true },
+  { id: "proj-context", fmt: "c", name: "Projections Context Show", show: "Projections Context Show: Week", video: true },
+  { id: "man-machine", fmt: "c", name: "Man vs. Machine", show: "Man vs. Machine: Week", video: true },
+  { id: "lineup-build", fmt: "c", name: "Leone DFS Lineup Build Show (Sat night)", show: "Leone DFS Lineup Build Show: Week", video: true },
+  { id: "wake-rake", fmt: "c", name: "Wake and Rake (Sun 10 a.m. ET)", show: "Wake and Rake: Week", video: true },
+  { id: "tourney-review", fmt: "c", name: "DFS Tournament Review (last week)", show: "DFS Tournament Review: Week", video: true, lastWeek: true },
+  { id: "update-log", fmt: "cs", name: "Silva's Update Log", menu: "Silva's Update Log: Week" },
   { id: "top-plays", fmt: "c", name: "DFS Top Plays", menu: "DFS Top Plays" },
   { id: "gpp-leverage", fmt: "c", name: "GPP Leverage", menu: "GPP Leverage" },
   { id: "matchups", fmt: "cs", name: "Silva's Matchups", menu: "Evan Silva's Matchups" },
@@ -137,7 +147,7 @@ function startPull(r) {
   if (weekly) vars.WINDIR = path.win32.join(path.resolve(ROOT), "data", r.dir);
   if (weekly && sd) { const [aw, hm] = String(meta.games[0] || "").split("@"); const night = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][new Date(meta.date + "T12:00:00Z").getUTCDay()]; Object.assign(vars, { AWAY: aw, HOME: hm, AWAYNAME: TEAM[aw] || aw, HOMENAME: TEAM[hm] || hm, NIGHT: night }); }
   if (weekly) { const pick = reportsFor(r.dir).filter(x => !r.only || r.only.includes(x.id)); vars.TOTAL = String(pick.length);
-    vars.REPORTS = pick.map(x => `   - id "${x.id}": ${x.upload ? "the user's upload: data/" + r.dir + "/blick-thoughts.md and images in data/" + r.dir + "/blick/" : x.data ? `ETR data table at https://establishtherun.com${x.page} (step 2b; kind "${x.data}")` : x.evergreen ? `ETR article at https://establishtherun.com${x.page} (step 2c; evergreen, read it whatever its date)` : x.sd === "breakdown" ? `ETR article "Showdown Breakdown: ${vars.AWAYNAME} at ${vars.HOMENAME}"` : x.sd === "sim" ? "ETR page \"DraftKings Showdown Sim Analysis\" (check it is for this game)" : x.sd === "show" ? `ETR "${vars.NIGHT} Night Football Live Show: ${vars.AWAYNAME} at ${vars.HOMENAME}" (YouTube video)` : x.video ? `YouTube video "${x.menu} ${vars.WEEK}"` : `ETR NFL menu link starting "${x.menu}"${sd ? " (use only what it says about this game's two teams)" : ""}`}`).join("\n"); }
+    vars.REPORTS = pick.map(x => `   - id "${x.id}": ${x.upload ? "the user's upload: data/" + r.dir + "/blick-thoughts.md and images in data/" + r.dir + "/blick/" : x.data ? `ETR data table at https://establishtherun.com${x.page} (step 2b; kind "${x.data}")` : x.evergreen ? `ETR article at https://establishtherun.com${x.page} (step 2c; evergreen, read it whatever its date)` : x.sd === "breakdown" ? `ETR article "Showdown Breakdown: ${vars.AWAYNAME} at ${vars.HOMENAME}"` : x.sd === "sim" ? "ETR page \"DraftKings Showdown Sim Analysis\" (check it is for this game)" : x.sd === "show" ? `ETR "${vars.NIGHT} Night Football Live Show: ${vars.AWAYNAME} at ${vars.HOMENAME}" (YouTube video)` : x.show ? `ETR show "${x.show} ${x.lastWeek ? +vars.WEEK - 1 : vars.WEEK}" (step 3: its page from the show-links page${x.lastWeek ? "; LAST week's edition on purpose: a review of the previous slate, so its lessons go to notes, not this slate's stances" : ""})` : x.video ? `YouTube video "${x.menu} ${vars.WEEK}"` : `ETR NFL menu link starting "${x.menu}"${sd ? " (use only what it says about this game's two teams)" : ""}`}`).join("\n"); }
   const prompt = fs.readFileSync(weekly ? (sd ? "bench/read-etr-showdown.prompt.md" : "bench/read-etr-week.prompt.md") : "bench/pull-vendors.prompt.md", "utf8").replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? m);
   const args = ["-p", "--chrome", "--model", PULL_MODEL, "--output-format", "json", "--allowedTools", "mcp__claude-in-chrome", "Edit(data/**)", "Write(data/**)", "Read", "Bash(curl:*)", "--", prompt];
   pullStatus({ status: "working", message: "Claude started" });

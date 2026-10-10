@@ -49,13 +49,21 @@ path form with BACKSLASHES (forward-slash paths are denied by the permission rul
 >"}'
    Then post the per-report result ok (title = the article title).
 
-3. Videos (ids million and show). Open https://www.youtube.com/@EstablishTheRun/streams (then /videos if needed) and find the
-   title "<name>: Week {{WEEK}}". If it doesn't exist or is still live/upcoming, post it failed ("not up yet"). Otherwise open
-   it, click "...more" under the title, find the "Show transcript" button (find, scroll_to, left_click), wait ~8 seconds, run:
+3. Shows (listed as ETR show "<name>: Week N"). ETR embeds each one as an unlisted YouTube video on its own page, so a channel
+   search will not find it. Open https://establishtherun.com/in-season-weekly-show-schedule/ and list its links:
+     [...(document.querySelector('.entry-content')||document.body).querySelectorAll('a')].map(a=>a.textContent.trim().replace(/\s+/g,' ')+' -> '+a.href).join('\n')
+   Find the link whose text starts with "<name>: Week N" (that page lists only the current week; for a LAST-week show not on
+   it, open https://establishtherun.com/?s=<name, + for spaces> and take the result titled "<name>: Week N"). Open that page and get
+   the video id: (document.querySelector('iframe[src*="youtube.com/embed/"]')||{}).src . Open https://www.youtube.com/watch?v=<id>.
+   If the video is upcoming, still live, or has no transcript yet, post it failed ("not up yet"). Otherwise
+   click "...more" under the title, find the "Show transcript" button (find, scroll_to, left_click), wait ~8 seconds, run:
      const segs=[...document.querySelectorAll('transcript-segment-view-model span.ytAttributedStringHost, ytd-transcript-segment-renderer .segment-text')].map(e=>e.innerText.trim()).filter(Boolean);
      const d=[]; for(const s of segs) if(d[d.length-1]!==s) d.push(s); let t=d.join(' '); const h=t.slice(0,300); const i=h?t.indexOf(h,300):-1; if(i>0) t=t.slice(0,i);
      window.__T=t; segs.length+' segments, '+t.length+' chars'
    If 0, wait 6 seconds and run it again. Read window.__T in 990-character slices with browser_batch (~20 per batch) to the end.
+   Fallback for Establish The Show and Establish The Million when the transcript won't load: ETR posts written summaries as
+   PDFs on https://establishtherun.com/etr-podcast-summaries/ ("<name>: Week N" links). If this week's is there, open it and
+   read it with get_page_text instead; otherwise post the show failed with the reason.
 
 4. Blick slate thoughts (id blick, only if listed): no browser. Read data/{{DIR}}/blick-thoughts.md and every image in
    data/{{DIR}}/blick/ with the Read tool. These are Blick's own takes (Discord/notes) that the user pasted or screenshotted.
