@@ -18,6 +18,9 @@ report read OK, except the data tables (dvp, xfp, proe), Write {{WINDIR}}\reads\
   report's concrete takes on THIS slate: players and stacks they are on or off and why, ownership and leverage calls, game
   scripts, captain or construction ideas, injury notes. Your own words, short quotes fine, keep their numbers. For Blick,
   include what the screenshots say. Overwrite the file if it exists (this week's edition replaces last week's).
+  Show transcripts mishear names ("Kurt Cousins", "Drake May", "Trey Harris"): spell every player as in
+  data/{{DIR}}/ETR-main-{{DATE}}.csv, and when you give a team, use that file's team for him (players change teams; never
+  go from memory). For context sources (see step 5) write facts only, in DFS terms, no season-long rankings or start/sit.
 Saving files: Read a file before overwriting it. Write only under data/{{DIR}}/. File tools must use this exact Windows
 path form with BACKSLASHES (forward-slash paths are denied by the permission rules):  {{WINDIR}}\slate-guide.json
 
@@ -78,11 +81,22 @@ path form with BACKSLASHES (forward-slash paths are denied by the permission rul
      - "theses": [{id, name, summary, players[], games["AWAY@HOME"]}]: add new game/angle theses; for an existing one, rewrite
        its summary to fold in the new take (cite the source, e.g. "Million: Dink's favorite stack", "Blick: ..."). 8-14 total.
        Games must be on this slate: {{GAMES}}.
-     - "stances": {"<player>": {stance, why, source}}: stance is core (strong chalk they eat), value (cheap saver),
-       leverage (lower-owned, want more than the field), caution (popular but underweight/worried), or fade. Add every
-       player a report took a clear side on; for an existing player, rewrite "why" in one or two sentences that combine the
-       takes (no repeated text), and join sources with " / ". When sources disagree, say so; among ETR the Million crew wins
-       ties; keep Blick's view visible in the why when it differs from ETR.
+     - DFS ONLY. This guide is for DraftKings tournaments, not season-long fantasy. Two kinds of reports:
+         DFS sources (may set a stance): DFS Top Plays, GPP Leverage, GPP Game Scores, Buy Leone models, Levitan's Cash Review,
+           Establish The Show, Establish The Million, Leone's Lineup Build, Wake and Rake, DFS Tournament Review,
+           Projections Context, Blick.
+         Context sources (facts only, never a stance on their own): Silva's Matchups and Update Log, Strength in Numbers,
+           Snaps and Pace, OL vs. DL. Use them for roles, snap/target shares, injuries, pace and line mismatches, written as
+           DFS facts.
+       Never carry season-long language into the guide: no "streamable/stream", "start/sit", "add", "waiver", "flex
+       option", or rankings like "QB1", "WR2", "RB3", "TE1 play". Rewrite as the fact behind it (role, matchup, volume) or leave it out.
+     - "stances": {"<player>": {stance, why, source}}, set ONLY from a DFS source's clear GPP call: core (their main GPP plays,
+       at any ownership), value (a cheap salary saver they like), leverage (they want more than the field will have),
+       caution (popular but they are underweight or worried), or fade. A player only a context source talks about gets no
+       stance. For an existing player, rewrite "why" in one or two sentences that combine the takes (no repeated text), and
+       join sources with " / ". When sources disagree, say so; among ETR the Million crew wins ties; keep Blick's view
+       visible in the why when it differs from ETR. If an existing stance has no DFS source, remove it (the one exception to
+       never removing stances).
      - "gameCalls": {"AWAY@HOME": {call, dk, why, source}} for EVERY game on the slate, from GPP Game Scores (and Matchups when
        it says to lean in or away): call is stack (a real game-stack anchor), mini (a mild positive: mini-stack or two-man
        correlation), pieces (neutral or negative: single players only) or avoid (the worst environment, or a writer says lean

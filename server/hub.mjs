@@ -77,12 +77,12 @@ const ETR_REPORTS = [
   { id: "sd-show", fmt: "s", name: "Prime-time live show (this game)", sd: "show", video: true },
   // weekly shows (show = the start of its link text on ETR's show-links page, /in-season-weekly-show-schedule/; each links an
   // ETR page with the YouTube video embedded, unlisted, so a channel search misses it. Added 2026-10-09 at the user's ask:
-  // Projections Context, Man vs. Machine, Leone's Lineup Build, Wake and Rake (Sunday 10 a.m. ET; the cheat sheet follows
-  // it) and the DFS Tournament Review of last week's slate. Not the Last-Minute Livestream; Macro vs. Micro is FanDuel-only)
+  // Projections Context, Leone's Lineup Build, Wake and Rake (Sunday 10 a.m. ET; the cheat sheet follows it) and the DFS
+  // Tournament Review of last week's slate. Not the Last-Minute Livestream; Macro vs. Micro is FanDuel-only; Man vs. Machine
+  // was dropped 10/10 as season-long rankings (user: no season-long content; Matchups and the like are facts only)
   { id: "million", fmt: "c", name: "Establish The Million", show: "Establish The Million: Week", video: true },
   { id: "show", fmt: "c", name: "Establish The Show", show: "Establish The Show: Week", video: true },
   { id: "proj-context", fmt: "c", name: "Projections Context Show", show: "Projections Context Show: Week", video: true },
-  { id: "man-machine", fmt: "c", name: "Man vs. Machine", show: "Man vs. Machine: Week", video: true },
   { id: "lineup-build", fmt: "c", name: "Leone DFS Lineup Build Show (Sat night)", show: "Leone DFS Lineup Build Show: Week", video: true },
   { id: "wake-rake", fmt: "c", name: "Wake and Rake (Sun 10 a.m. ET)", show: "Wake and Rake: Week", video: true },
   { id: "tourney-review", fmt: "c", name: "DFS Tournament Review (last week)", show: "DFS Tournament Review: Week", video: true, lastWeek: true },

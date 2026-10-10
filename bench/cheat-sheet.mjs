@@ -43,12 +43,17 @@ const other = players.filter(x => !POS.includes(x.pos));
 // late news: questionable / doubtful / out among the players the guide talks about, plus the guide's notes
 const inj = players.filter(x => x.r && x.r.inj && /question|doubt|out/i.test(x.r.inj.status)).map(x => ({ name: x.name, team: x.r.team, status: x.r.inj.status, note: x.r.inj.note }));
 
-// report digests: the shows first (that is where the late takes live), then the articles
-const SHOW_IDS = ["wake-rake", "update-log", "lineup-build", "million", "show", "proj-context", "man-machine", "tourney-review"];
-const digests = fs.existsSync(path.join(dir, "reads")) ? fs.readdirSync(path.join(dir, "reads")).filter(f => f.endsWith(".md")).map(f => {
+// report digests, DFS sources only (user 2026-10-10: no season-long content; Matchups, Strength, Snaps and Pace, OL/DL and the
+// Update Log feed facts into the guide but are not shown). Shows first, since that is where the late takes live.
+const DFS_IDS = ["wake-rake", "lineup-build", "million", "show", "proj-context", "top-plays", "gpp-leverage", "game-scores", "leone-rb", "leone-wrte", "tourney-review", "cash-review", "blick"];
+// team check: "Player (TEAM" in a digest must match the player's team on this slate; wrong ones are corrected and reported
+const fixes = [];
+const teamFix = s => s.replace(/([A-Z][\w.'’-]+(?: [A-Z][\w.'’-]+){1,3}) \(([A-Z]{2,3})\b/g, (m, name, tm) => { const r = rows.get(nm(name)); if (!r || !H.games.some(g => g.game.split("@").includes(tm)) || r.team === tm) return m; fixes.push(`${name}: ${tm} -> ${r.team}`); return `${name} (${r.team}`; });
+const digests = fs.existsSync(path.join(dir, "reads")) ? fs.readdirSync(path.join(dir, "reads")).filter(f => f.endsWith(".md") && DFS_IDS.includes(f.replace(/\.md$/, ""))).map(f => {
   const t = fs.readFileSync(path.join(dir, "reads", f), "utf8").split(/\r?\n/), id = f.replace(/\.md$/, "");
-  return { id, title: (t[0] || id).replace(/^#\s*/, ""), by: (t[1] || "").split("|")[0].trim(), bullets: t.filter(l => /^\s*-\s/.test(l)).map(l => l.replace(/^\s*-\s*/, "")) };
-}).sort((a, b) => (SHOW_IDS.indexOf(a.id) + 1 || 99) - (SHOW_IDS.indexOf(b.id) + 1 || 99)) : [];
+  return { id, title: (t[0] || id).replace(/^#\s*/, ""), by: (t[1] || "").split("|")[0].trim(), bullets: t.filter(l => /^\s*-\s/.test(l)).map(l => teamFix(l.replace(/^\s*-\s*/, ""))) };
+}).sort((a, b) => DFS_IDS.indexOf(a.id) - DFS_IDS.indexOf(b.id)) : [];
+const missing = Object.keys(G.stances || {}).filter(n => !rowOf(n));
 
 // $100+ classic checklist: the rulebook's kept rules for $100-299 and $300+, strongest first
 const rules = RB.rows.filter(r => r.fmt === "classic" && r.kept && /^\$(100|300)/.test(r.seg)).sort((a, b) => Math.abs(b.t) - Math.abs(a.t));
@@ -56,7 +61,7 @@ const checklist = [...new Map(rules.map(r => [r.rule, r])).values()].slice(0, 10
 
 const catalog = await (await fetch(`http://localhost:8787/api/etr-reads?dir=${slate}`)).json().then(r => r.catalog || []).catch(() => []);
 const nameOf = id => (catalog.find(c => c.id === id) || {}).name || id;
-const stacks = ((G.labStacks || {}).top || []).slice(0, 5), notReady = Object.entries(reads).filter(([, v]) => v.status !== "ok").map(([k, v]) => ({ id: k, name: nameOf(k), note: v.note }));
+const stacks = ((G.labStacks || {}).top || []).slice(0, 5), notReady = Object.entries(reads).filter(([k, v]) => v.status !== "ok" && (!catalog.length || catalog.some(c => c.id === k))).map(([k, v]) => ({ id: k, name: nameOf(k), note: v.note }));
 const src = H.sources || {}, stamp = (label, v) => v ? `<span><b>${label}</b> ${esc(v)}</span>` : "";
 const etrAt = src.etr && src.etr.checked, stkAt = src.stokastic && src.stokastic.projUpdated, blAt = src.blick && src.blick.checked;
 const fmtAt = s => s ? new Date(s.endsWith("Z") || /[+-]\d\d:\d\d$/.test(s) ? s : s + "Z").toLocaleString("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: "America/Chicago" }) : null;
@@ -144,7 +149,7 @@ ${games.map(g => { const c = g.call && CALL[g.call.call], more = g.th.map(t => s
   return `<div class="game ${c ? c[0] : ""}"><div class="ghead"><span class="mu">${esc(g.away)} @ ${esc(g.home)}</span><span class="ln"><b>${g.total}</b> total · ${esc(g.line)} · ${esc(g.away)} ${g.ttAway} / ${esc(g.home)} ${g.ttHome}</span>${c ? chip(c[0], c[1]) : ""}</div>${g.call ? `<p class="call">${esc(g.call.why)}</p>` : ""}${g.th.map(t => `<p><b>${esc(t.name)}.</b> ${esc(sentences(t.summary, 2))}</p>`).join("")}${more.length ? `<details class="more"><summary>More on this game</summary>${g.th.map(t => `<p>${esc(splitSentences(t.summary).slice(2).join(" "))}</p>`).join("")}</details>` : ""}</div>`; }).join("\n")}
 </section>
 <section id="players"><h2>Players <small>tap a name for why</small></h2>
-<p class="legend">${chip("core", "core")} ${chip("leverage", "leverage")} ${chip("value", "value")} ${chip("caution", "caution")} ${chip("fade", "fade")} are ETR's calls, as written up in the guide. ${chip("lab", "Lab like")} ${chip("labfade", "Lab fade")} is Slate Lab's own model, which can disagree. Proj and Own are Slate Lab's blend.</p>
+<p class="legend">${chip("core", "core")} ${chip("leverage", "leverage")} ${chip("value", "value")} ${chip("caution", "caution")} ${chip("fade", "fade")} are ETR's calls, as written up in the guide. ${chip("lab", "Lab like")} ${chip("labfade", "Lab fade")} is Slate Lab's own model, which can disagree. Calls come only from ETR's DFS pieces (core = their main GPP plays, at any ownership). Proj and Own are Slate Lab's blend.</p>
 <div class="hdr"><span>Player</span><span>Team</span><span>Salary</span><span>Proj</span><span>Own</span><span></span></div>
 ${byPos.map(([p, l]) => `<div class="pos"><h3>${p}</h3>${l.map(playerRow).join("")}</div>`).join("\n")}
 ${other.length ? `<div class="pos"><h3>Not on the DK slate</h3>${other.map(playerRow).join("")}</div>` : ""}
@@ -167,3 +172,5 @@ ${digests.map(d => `<details class="dg"${d.id === "wake-rake" ? " open" : ""}><s
 `;
 const out = path.join(dir, "cheat-sheet.html"); fs.writeFileSync(out, html);
 console.log(`wrote ${out}: ${games.length} games, ${players.length} players, ${stacks.length} stacks, ${digests.length} digests, ${checklist.length} rules${notReady.length ? `; not read yet: ${notReady.map(x => x.id).join(", ")}` : ""}`);
+if (fixes.length) console.log(`corrected teams in digests: ${fixes.join("; ")}`);
+if (missing.length) console.log(`stance players not on this DK slate: ${missing.join(", ")}`);
