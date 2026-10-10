@@ -20,8 +20,19 @@ const readJ = f => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catc
 // the user's free notes (older slates and showdown) plus the Blick slate thoughts he pastes in the Notes tab's report list
 const readT = (dir, f) => { try { return fs.readFileSync(path.join("data", dir, f), "utf8").trim(); } catch { return ""; } };
 const notesText = dir => { const n = readT(dir, "notes.md"), b = readT(dir, "blick-thoughts.md"); return [n, b && `BLICK SLATE THOUGHTS (pasted by the user):\n${b}`].filter(Boolean).join("\n\n"); };
+// what each report said (ETR articles, shows, Blick): the weekly read writes data/<slate>/reads/<id>.md per report it read.
+// A sub-slate without its own reads uses the slates its guide was derived from (the Main and showdown folders).
+// grabbed articles (server/grab.mjs) are the full text, not takeaways: they get more room
+const READ_CAP = 5000, FULL_CAP = 12000, READS_CAP = 60000;
+export function readsText(dir, guide) {
+  const dirs = [dir, ...((guide && guide.derived && guide.from) || [])], seen = new Set(), out = [];
+  for (const d of dirs) { const rd = path.join("data", d, "reads"); let fs_ = []; try { fs_ = fs.readdirSync(rd).filter(f => f.endsWith(".md")).sort((a, b) => (a === "blick.md") - (b === "blick.md") || a.localeCompare(b)); } catch { continue; }
+    for (const f of fs_) { if (seen.has(f)) continue; seen.add(f); const t = readT(path.join(d, "reads"), f); const cap = /^\(full text/m.test(t.slice(0, 300)) ? FULL_CAP : READ_CAP; if (t) out.push(t.length > cap ? t.slice(0, cap) + "\n- (cut for length)" : t); } }
+  let text = out.join("\n\n"); if (text.length > READS_CAP) text = text.slice(0, READS_CAP) + "\n(more reports cut for length)";
+  return { text, n: out.length };
+}
 const hash = s => crypto.createHash("sha1").update(s).digest("hex").slice(0, 12);
-export const brainStatus = dir => { const b = readJ(path.join("data", dir, "brain.json")); return { key: !!keyOf(), model: MODEL, reviews: b ? Object.keys(b.reviews || {}).length : 0, portfolio: b ? b.portfolio || null : null, at: b ? b.at : null }; };
+export const brainStatus = dir => { const b = readJ(path.join("data", dir, "brain.json")); return { key: !!keyOf(), model: MODEL, reviews: b ? Object.keys(b.reviews || {}).length : 0, portfolio: b ? b.portfolio || null : null, at: b ? b.at : null, pending: b && b.pending ? { lineups: Object.values(b.pending.ids).filter(s => !(b.reviews || {})[s]).length, portfolio: b.pending.favs.length > 0, at: b.pending.at, file: `data/${dir}/brain-request.md`, text: readT(dir, "brain-request.md") } : null }; };
 export const loadBrain = dir => readJ(path.join("data", dir, "brain.json")) || { reviews: {}, portfolio: null };
 
 // what the brain knows about the slate, built once per call
@@ -39,7 +50,8 @@ function slateContext(dir) {
   const data = dd ? `\n\nETR DATA TABLES (context, not yet validated on the user's results; weigh lightly):\n${dd.edges.map(e => `- ${e}`).join("\n")}${dd.dvp ? `\nDvP ${dd.dvp.note} (published ${dd.dvp.published}): ${Object.entries(dd.dvp.vs).map(([t, v]) => `${t} D QB ${v.QB} RB ${v.RB} WR ${v.WR} TE ${v.TE}`).join("; ")}` : ""}${xfp.length ? `\nXFP per game, gap = actual - expected (published ${dd.xfp.published}): ${xfp.slice(0, 12).map(([n, v]) => `${n} ${v.xfp}/${v.actual} (${v.gap > 0 ? "+" : ""}${v.gap})`).join("; ")}` : ""}${dd.proe ? `\nPROE % (published ${dd.proe.published}): ${Object.entries(dd.proe.teams).map(([t, v]) => `${t} ${v.proe}`).join(", ")}` : ""}${dd.contestSel ? `\nContest selection (Levitan): ${dd.contestSel.join(" | ")}` : ""}` : "";
   // the Lab likes (server/likes.mjs): unfitted, tracked by bench/likes-tracker-nfl.mjs
   const ls = loadStacks(dir), lk = loadLikes(dir), likes = (ls ? `\n\nLAB STACKS (from the simulator's field + sim and Blick's conditional ownership; unfitted, tracked):\n${stacksText(ls)}` : "") + (lk ? `\n\nLAB LIKES (the Lab's own unfitted picks by position from projection, value, leverage and ETR's tables; still being tracked, treat as a second opinion):\n${likesText(lk)}` : "");
-  const text = `SLATE: ${hub.slate.name || dir} (${sd ? "DraftKings Showdown" : "DraftKings Classic"})\n\nGAMES AND LINES (Pinnacle):\n${games || "n/a"}${play}${data}${likes}\n\nSLATE GUIDE (from ETR's breakdown / sim analysis and Blick's notes; theses = the ways the slate can play out, stances = per-player reads):\n${g}\n\nUSER NOTES TAB (Blick Discord and the user's own notes, verbatim):\n${notes.trim() || "(empty)"}\n\nPLAYER TABLE (Lab projection, the sites' projected ownership, Model own = our prediction of the field's real ownership from 317 real contests):\n${top}`;
+  const rd = readsText(dir, guide), reads = rd.n ? `\n\nWHAT EACH REPORT SAID (this week's ETR articles and shows and Blick's slate thoughts, one block per report; the guide above is the merged summary, these are the sources):\n${rd.text}` : "";
+  const text = `SLATE: ${hub.slate.name || dir} (${sd ? "DraftKings Showdown" : "DraftKings Classic"})\n\nGAMES AND LINES (Pinnacle):\n${games || "n/a"}${play}${data}${likes}\n\nSLATE GUIDE (from ETR's breakdown / sim analysis and Blick's notes; theses = the ways the slate can play out, stances = per-player reads):\n${g}${reads}\n\nUSER NOTES TAB (Blick Discord and the user's own notes, verbatim):\n${notes.trim() || "(empty)"}\n\nPLAYER TABLE (Lab projection, the sites' projected ownership, Model own = our prediction of the field's real ownership from 317 real contests):\n${top}`;
   return { hub, guide, sd, text, stamp: hash(text) };
 }
 const lineupText = e => `${e.players.map(p => `${p.slot} ${p.name} (${p.pos} ${p.team} $${p.sal}, proj ${p.lab ?? p.proj ?? "?"}, sites own ${(p.own ?? 0).toFixed(0)}%, model own ${(p.fown ?? p.own ?? 0).toFixed(0)}%)`).join("; ")}. Salary $${e.sal} ($${e.left} left). Stack: ${e.type}. Sim: Lab ROI ${e.sim.lab}% (${e.sim.sources.map(s => `${s} ${e.sim[s].roi}% #${e.sim[s].rank}`).join(", ")}), top-10% ${e.sim.t10}%, win ${e.sim.win}%, expected copies in the field ${e.sim.dupN}. Field ownership sum ${e.fieldOwn}%${e.fieldDelta != null ? `, field vs sites ${e.fieldDelta > 0 ? "+" : ""}${e.fieldDelta}` : ""}.${e.theses && e.theses.length ? ` Thesis tags: ${e.theses.join(", ")}.` : ""}${e.wins && e.wins.length ? ` Wins when (game scripts behind its top-1% sim finishes): ${e.wins.map(w => `${w.name} ${w.share}%`).join("; ")}.` : ""}`;
@@ -51,7 +63,7 @@ async function ask(key, system, user, maxTokens = 1800) {
   const m = text.match(/\[[\s\S]*\]|\{[\s\S]*\}/); if (!m) throw new Error("brain returned no JSON");
   return { data: JSON.parse(m[0]), usage: j.usage };
 }
-const SYSTEM = `You are the Slate Brain for a DraftKings NFL player who enters one to three lineups per contest and wants to play like the consistent winners: stack the QB, bring back the opponent, use the chalk the field underprices, avoid the duplicated near-optimal build, and bet a clear thesis about how the slate plays out. You are given everything known about the slate. Review lineups the way a sharp friend who read every article would: name the bet the lineup is making, say what the notes and the data support and what they argue against, and grade it. Be specific to this slate; never recite generic DFS advice. Treat the sim numbers as one input, not the verdict: a lineup can be +ROI in the sim and still be a bad bet if it is the field's obvious build or bets against the notes. Keep every take under 60 words. Answer only with JSON.`;
+const SYSTEM = `You are the Slate Brain for a DraftKings NFL player who enters one to three lineups per contest and wants to play like the consistent winners: stack the QB, bring back the opponent, use the chalk the field underprices, avoid the duplicated near-optimal build, and bet a clear thesis about how the slate plays out. You are given everything known about the slate. Review lineups the way a sharp friend who read every article would: name the bet the lineup is making, say what the notes and the data support and what they argue against, and grade it. Be specific to this slate; never recite generic DFS advice. Treat the sim numbers as one input, not the verdict: a lineup can be +ROI in the sim and still be a bad bet if it is the field's obvious build or bets against the notes. When a report's takeaways back or argue against a lineup, name the report in that point (for example "Million: ...", "Blick: ..."), so the user can tell whose read it is. Keep every take under 60 words. Answer only with JSON.`;
 
 // review: the lineups by signature (favorites + top of the sim). Returns { reviews: {sig: {...}}, done, cached, usage }
 export async function reviewLineups(dir, sigs, opts = {}) {
@@ -82,4 +94,67 @@ export async function reviewPortfolio(dir, sigs) {
   B.portfolio = Object.assign({ sigs, at: new Date().toISOString(), model: MODEL }, data);
   fs.writeFileSync(path.join("data", dir, "brain.json"), JSON.stringify(B));
   return { portfolio: B.portfolio, usage: { in: usage?.input_tokens || 0, out: usage?.output_tokens || 0 } };
+}
+
+// Manual mode (no API key needed): the hub writes the same review job as one request file,
+// data/<slate>/brain-request.md, and Claude answers it outside the hub (pasted into any Claude chat,
+// or Claude in the user's project reading the file and writing data/<slate>/brain-answer.json).
+// Lineups go out as short ids (L1, L2, ...); brain.json keeps the id -> signature map until answered.
+const GRADES = new Set(["A", "A-", "B+", "B", "B-", "C+", "C", "D", "F"]);
+export function manualRequest(dir, sigs, favs = []) {
+  const R = loadSimRun(dir); if (!R || !R.rows) throw new Error("run the Pre-Contest Simulator first");
+  const ctx = slateContext(dir), B = loadBrain(dir); if (B.stamp !== ctx.stamp) { B.reviews = {}; B.portfolio = null; B.stamp = ctx.stamp; }
+  const bySig = new Map(R.rows.map(e => [e.sig, e])), want = [...new Set(sigs)].map(s => bySig.get(s)).filter(Boolean), todo = want.filter(e => !B.reviews[e.sig]);
+  const fav = [...new Set(favs)].filter(s => bySig.has(s)), ids = {}, line = (e, k) => { ids["L" + (k + 1)] = e.sig; return `[L${k + 1}] ${lineupText(e)}`; };
+  if (!todo.length && !fav.length) throw new Error(want.length ? "every lineup already has a review; nothing to ask" : "no lineups to review");
+  const favIds = fav.map(s => { const k = todo.findIndex(e => e.sig === s); if (k >= 0) return "L" + (k + 1); todo.push(bySig.get(s)); return "L" + todo.length; });
+  const text = `# Slate Brain request: ${ctx.hub.slate.name || dir}
+Made by Slate Lab ${new Date().toISOString()} (slate folder data/${dir}). Answer with the JSON at the end and nothing else.
+
+## Your role
+${SYSTEM}
+
+## The slate
+${ctx.text}
+
+## Lineups to review (${todo.length})
+${todo.map(line).join("\n\n")}
+
+## What to return
+One JSON object:
+{"reviews": [{"id": "L1", "grade": "A"|"A-"|"B+"|"B"|"B-"|"C+"|"C"|"D"|"F", "thesis": "the bet in 3-8 words", "take": "under 60 words", "for": ["short point", ...], "against": ["short point", ...]}, ...]${fav.length ? `,
+ "portfolio": {"take": "under 100 words on what this set bets on and whether it is one thesis or several", "overlap": ["players or stacks shared by most of them"], "missing": ["theses or leverage from the notes with no exposure"], "swap": "one concrete change that would improve the set, under 40 words"}}
+The portfolio is the user's favorites, entered together: ${favIds.join(", ")}.` : "}"}
+Review every lineup above, one entry per id.
+`;
+  fs.writeFileSync(path.join("data", dir, "brain-request.md"), text);
+  B.pending = { ids, favs: fav, stamp: ctx.stamp, at: new Date().toISOString() };
+  fs.writeFileSync(path.join("data", dir, "brain.json"), JSON.stringify(B));
+  return { text, file: `data/${dir}/brain-request.md`, lineups: todo.length, portfolio: fav.length > 0 };
+}
+// the answer: the JSON Claude returned (code fences and any text around it are fine)
+export function manualAnswer(dir, raw, by = "Claude (manual)") {
+  const B = loadBrain(dir), P = B.pending; if (!P) throw new Error("no open request: press Ask Claude first");
+  const s = String(raw || "").replace(/```(?:json)?/g, ""), a = s.indexOf("{"), z = s.lastIndexOf("}");
+  let d; try { d = JSON.parse(s.slice(a, z + 1)); } catch { throw new Error("that answer isn't the JSON the request asked for"); }
+  const list = Array.isArray(d) ? d : d.reviews || [], at = new Date().toISOString(), bad = [];
+  let n = 0;
+  for (const r of list) { const sig = P.ids[r.id]; const g = String(r.grade || "").trim().toUpperCase();
+    if (!sig || !GRADES.has(g)) { bad.push(r.id || "?"); continue; }
+    B.reviews[sig] = { grade: g, thesis: r.thesis || "", take: r.take || "", for: r.for || [], against: r.against || [], at, model: by }; n++; }
+  if (!n && !d.portfolio) throw new Error("no lineup in that answer matched the request");
+  if (d.portfolio && P.favs.length) B.portfolio = Object.assign({ sigs: P.favs, at, model: by }, d.portfolio);
+  const left = Object.keys(P.ids).filter(id => !B.reviews[P.ids[id]]);
+  // answers made from an older slate guide still count; they're flagged so the user can re-ask
+  const stale = (() => { try { return slateContext(dir).stamp !== P.stamp; } catch { return false; } })();
+  B.stamp = P.stamp; B.at = at; if (!left.length) delete B.pending;
+  fs.writeFileSync(path.join("data", dir, "brain.json"), JSON.stringify(B));
+  return { reviewed: n, skipped: bad, missing: left.length, portfolio: !!(d.portfolio && P.favs.length), stale };
+}
+// Claude in the project writes data/<slate>/brain-answer.json; the hub picks it up when the Brain is next opened
+export function pickUpAnswer(dir) {
+  const f = path.join("data", dir, "brain-answer.json"); if (!fs.existsSync(f)) return null;
+  const B = loadBrain(dir); if (!B.pending) return null;
+  try { const r = manualAnswer(dir, fs.readFileSync(f, "utf8"), "Claude (project)"); fs.renameSync(f, f.replace(/\.json$/, `-${Date.now()}.json`)); return r; }
+  catch (e) { return { error: e.message }; }
 }

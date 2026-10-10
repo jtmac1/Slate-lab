@@ -13,6 +13,12 @@ Two kinds of posts to the hub (curl -s -X POST <url> -H "content-type: applicati
   progress:   http://localhost:8787/api/pull-status   {"status":"working","read":k,"total":{{TOTAL}},"message":"k/{{TOTAL}}: <what>"}
   per report: http://localhost:8787/api/etr-reads?dir={{DIR}}   {"id":"<id>","status":"ok"|"failed","title":"<exact title, plain ASCII apostrophes>","url":"<url>","note":"<why, if failed>"}
 After EACH report (read or failed), post its per-report result, then progress with k counted up by one.
+Takeaways file (the Slate Brain reads these word for word, so it can tie each lineup to the report that backs it): for EACH
+report read OK, except the data tables (dvp, xfp, proe), Write {{WINDIR}}\reads\<id>.md before posting its result:
+  line 1 "# <exact title>", line 2 "<author or show hosts> | <url>" ("#" for Blick), then 8-20 lines starting "- " with the
+  report's concrete takes on THIS slate: players and stacks they are on or off and why, ownership and leverage calls, game
+  scripts, captain or construction ideas, injury notes. Your own words, short quotes fine, keep their numbers. For Blick,
+  include what the screenshots say. Overwrite the file if it exists (this week's edition replaces last week's).
 Saving files: Read a file before overwriting it. Write only under data/{{DIR}}/. File tools must use this exact Windows
 path form with BACKSLASHES (forward-slash paths are denied by the permission rules):  {{WINDIR}}\slate-guide.json
 

@@ -56,6 +56,10 @@ const RULES = {
     ["salary left >= $100", f => f.left >= 100], ["salary left >= $300", f => f.left >= 300], ["salary left >= $600", f => f.left >= 600],
     ["own sum < 200%", f => f.own < 200], ["own sum 200-260%", f => f.own >= 200 && f.own < 260], ["own sum >= 260%", f => f.own >= 260],
     ["4+ players at 20%+ owned", f => f.chalk >= 4], ["0-2 players at 20%+ owned", f => f.chalk <= 2],
+    // slate-relative versions (2026-10-09): the fixed cutoffs can't be met on flat slates (10/11 Main: 7 players at 20%+,
+    // no pool lineup reached 200%), so test ownership against this contest's own field instead
+    ["own sum above the contest median", f => f.ownPct > 0.5], ["own sum in the contest's top 30%", f => f.ownPct >= 0.7], ["own sum in the contest's bottom 30%", f => f.ownPct <= 0.3],
+    ["chalk count above the contest median", f => f.chalk > f.chalkMed], ["chalk count below the contest median", f => f.chalk < f.chalkMed],
     ["not duplicated", f => !f.dup], ["Stokastic sim top decile", f => f.simPct <= 0.1], ["Stokastic sim top half", f => f.simPct <= 0.5], ["Stokastic sim bottom quarter", f => f.simPct >= 0.75],
     ["max 3 from one team", f => f.maxTeam <= 3], ["4+ from one team", f => f.maxTeam >= 4], ["5 or fewer teams", f => f.teams <= 5],
     ["ETR: RB in the flex (3 RBs)", f => f.rbN >= 3], ["ETR: WR in the flex (4 WRs)", f => f.wrN >= 4], ["ETR: TE in the flex (2 TEs)", f => f.teN >= 2],
@@ -99,6 +103,10 @@ for (const f of listPost("nfl")) {
   if (!sd && fs_.length) {
     // spend vs this contest's median lineup, and how common each lineup's player pairs are in this field
     const med = k => { const v = fs_.map(f => f[k]).sort((a, b) => a - b); return v[v.length >> 1]; };
+    // ownership vs this contest's own field: percentile of the lineup's own sum, and the field's median chalk count
+    const ownSorted = fs_.map(f => f.own).sort((a, b) => a - b), below = v => { let lo = 0, hi = ownSorted.length; while (lo < hi) { const m2 = (lo + hi) >> 1; if (ownSorted[m2] < v) lo = m2 + 1; else hi = m2; } return lo; };
+    const chalkMed = med("chalk"), fieldChalk = j.players.filter(p => p.pos !== "CPT" && (p.aown || 0) >= 0.2).length;
+    for (const f of fs_) { f.ownPct = below(f.own) / ownSorted.length; f.chalkMed = chalkMed; f.fieldChalk = fieldChalk; }
     const m = { rb: med("rbSpend"), te: med("teSpend"), wr: med("wrSpend"), qb: med("qbSal"), dst: med("dstSal") };
     const single = new Map(), pair = new Map(), key = (a, b) => a < b ? a + "|" + b : b + "|" + a;
     for (const l of L) { const ids = l.ids.filter(Boolean); for (let i = 0; i < ids.length; i++) { single.set(ids[i], (single.get(ids[i]) || 0) + 1); for (let k = i + 1; k < ids.length; k++) { const q = key(ids[i], ids[k]); pair.set(q, (pair.get(q) || 0) + 1); } } }
@@ -124,7 +132,8 @@ dates.sort(); const mid = dates[Math.floor(dates.length / 2)];
 const out = [`# NFL rulebook from the archive: ${nC} contests ($${MINFEE}+), ${dates[0]} to ${dates[dates.length - 1]}`, "", "ROI is the lineup's realized return; top-1% is the share of lineups finishing in the top 1% of their contest. t is Welch's t on ROI (follow vs not). KEPT = |t| >= 3, same sign in both halves of the window (split at " + mid + "), 300+ lineups each side. Lift = top-1% rate following / not following.", ""];
 for (const fmt of ["classic", "showdown"]) {
   const rows = data[fmt]; if (!rows.length) continue;
-  const SEG = { "small field (2,000 or fewer)": r => r.N <= 2000, "large field (5,000+)": r => r.N >= 5000, "short slate (8 games or fewer)": r => r.games <= 8, "long slate (9+ games)": r => r.games >= 9 };
+  const SEG = { "small field (2,000 or fewer)": r => r.N <= 2000, "large field (5,000+)": r => r.N >= 5000, "short slate (8 games or fewer)": r => r.games <= 8, "long slate (9+ games)": r => r.games >= 9,
+    "flat slate (7 or fewer players at 20%+)": r => r.fieldChalk <= 7, "concentrated slate (8+ players at 20%+)": r => r.fieldChalk >= 8 };
   for (const tier of ["all", "$20-99", "$100-299", "$300+", ...(fmt === "classic" ? Object.keys(SEG) : [])]) {
     const rs = tier === "all" ? rows : SEG[tier] ? rows.filter(SEG[tier]) : rows.filter(r => r.tier === tier); if (rs.length < 1000) continue;
     out.push(`## ${fmt} ${tier}: ${rs.length.toLocaleString()} lineups, ${rs.filter(r => r.mine).length} mine`, "", "| rule | follow n | ROI follow | ROI not | t | top-1% lift | half 1 t | half 2 t | field % | me % | verdict |", "|---|---|---|---|---|---|---|---|---|---|---|");

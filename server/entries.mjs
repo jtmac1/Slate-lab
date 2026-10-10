@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { FORMATS } from "../src/engine/formats.mjs";
+import { FLAT_CHALK } from "../src/engine/grade.mjs";
 import { parseEntries } from "../src/engine/audit.mjs";
 import { nrm } from "../src/engine/csv.mjs";
 import { hubData } from "./sources.mjs";
@@ -20,7 +21,28 @@ export const loadEntries = dir => readJ(file(dir)) || { dir, entries: [], import
 // slate as data/<slate>/slate-guide.json (see memory "slate-guide"); drives the "Slate" check group
 // NFL classic sub-slates (Early Only, Afternoon, Primetime, Sun-Mon...) without their own guide read the Main guide filtered to their games
 // ETR's data tables (DvP, XFP, PROE, contest selection) are attached on load as guide.data (server/etrdata.mjs)
-export const loadGuide = dir => withData(readJ(path.join("data", dir, "slate-guide.json")) || subGuide(dir), dir);
+export const loadGuide = dir => withData(withReads(readJ(path.join("data", dir, "slate-guide.json")) || subGuide(dir), dir), dir);
+// the user's own player reads (Notes tab, data/<slate>/my-reads.txt), one per line: "Name like: why", "Name fade why",
+// "+Name why" (like) or "-Name why" (fade). They go into guide.stances over ETR's, so the notes columns and the grade work
+// with no Claude read at all. Stances: like/core/value/leverage/dart/play count for, fade/avoid/caution against.
+const STANCE = "like|love|core|value|leverage|dart|play|fade|avoid|caution";
+export function parseReads(text) {
+  const out = {}, bad = [];
+  for (const raw of String(text || "").split(/\r?\n/)) {
+    const l = raw.trim(); if (!l || l.startsWith("#")) continue;
+    let m = l.match(/^([+-])\s*([^:,]+?)(?:\s*[:,\u2013-]\s+|\s*:\s*|$)(.*)$/);
+    if (m) { out[m[2].trim()] = { stance: m[1] === "+" ? "like" : "fade", why: m[3].trim(), source: "you" }; continue; }
+    m = l.match(new RegExp(`^(.*?)[\\s:,\u2013-]+(${STANCE})\\b[\\s:,\u2013-]*(.*)$`, "i"));
+    if (m && m[1].trim()) { const st = m[2].toLowerCase(); out[m[1].trim()] = { stance: st === "love" ? "like" : st, why: m[3].trim(), source: "you" }; }
+    else bad.push(l);
+  }
+  return { stances: out, bad };
+}
+export const loadMyReads = dir => { try { return fs.readFileSync(path.join("data", dir, "my-reads.txt"), "utf8"); } catch { return ""; } };
+function withReads(guide, dir) {
+  const { stances } = parseReads(loadMyReads(dir)); if (!Object.keys(stances).length) return guide;
+  return Object.assign({}, guide || {}, { stances: Object.assign({}, (guide && guide.stances) || {}, stances) });
+}
 const nm = s => nrm(String(s || ""));
 const isDst = p => /^(DST|D|DEF)$/i.test(p || "");
 const CATCH = /^(WR|TE|RB)$/;
@@ -43,7 +65,9 @@ export function playerFrom(r, slot, isCpt) {
 // shared context for a slate: format, rulebook, dup model, guide
 export function evalContext(dir, hub) {
   const sd = hub.slate.type === "SHOWDOWN", fkey = sd ? "nfl_sd" : "nfl_cl", rules = readJ(`rules/${fkey}.json`);
-  return { sd, fkey, f: FORMATS[fkey], rules, ruleBy: Object.fromEntries((rules?.rules || []).map(r => [r.id, r])), model: dupModel(), guide: loadGuide(dir) };
+  // how concentrated the slate is: players projected 20%+ owned (src/engine/grade.mjs FLAT_CHALK; flat slates turn the ownership checks off)
+  const chalkN = sd ? null : (hub.rows || []).filter(r => (r.labOwn ?? r.vown ?? r.own ?? 0) >= 20).length;
+  return { sd, fkey, chalkN, flat: chalkN != null && chalkN <= FLAT_CHALK, f: FORMATS[fkey], rules, ruleBy: Object.fromEntries((rules?.rules || []).map(r => [r.id, r])), model: dupModel(), guide: loadGuide(dir) };
 }
 // construction + every check for one lineup (players in slot order, captain first in showdown)
 export function evaluateLineup(players, fee, N, ctx) {
@@ -62,11 +86,13 @@ export function evaluateLineup(players, fee, N, ctx) {
     add("qb_stack1", !!qb && stackN >= 1, qb ? `${qb.name} + ${stackN}` : "no QB");
     add("qb_stack2", !!qb && stackN >= 2, qb ? `${qb.name} + ${stackN}` : "no QB");
     add("bring_back", bring, qb ? (bring ? `from ${qb.opp}` : `nothing from ${qb.opp}`) : "no QB");
-    add("chalk_low", chalk >= 3, `${chalk} at 20%+`);
-    add("chalk4", chalk >= 4, `${chalk} at 20%+`);
+    // flat slate: the archive shows no ownership edge either way (bench/rulebook-nfl.mjs flat-slate segment), so no verdict
+    const flatNote = ctx.flat ? ` (flat slate, ${ctx.chalkN} players projected 20%+: not checked)` : "";
+    add("chalk_low", ctx.flat ? null : chalk >= 3, `${chalk} at 20%+${flatNote}`);
+    add("chalk4", ctx.flat ? null : chalk >= 4, `${chalk} at 20%+${flatNote}`);
     add("salary_left", left < 600, `$${left.toLocaleString()} left`);
     add("no_rb_own_dst", !(dst && players.some(p => p.pos === "RB" && p.team === dst.team)), dst ? `DST ${dst.team}` : "no DST");
-    add("own_200", fown >= 200, `own sum ${fown.toFixed(0)}% (model)`);
+    add("own_200", ctx.flat ? null : fown >= 200, `own sum ${fown.toFixed(0)}% (model)${flatNote}`);
     add("dup_risk", dup.meanDup == null ? null : dup.meanDup < 1, dup.meanDup == null ? "contest size unknown (pull the lobby)" : `~${dup.meanDup} copies expected, ${(100 * dup.pDup).toFixed(0)}% chance of any (field ${dup.N.toLocaleString()})`);
   } else {
     const cpt = players[0];

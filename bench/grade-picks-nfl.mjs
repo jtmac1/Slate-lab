@@ -111,11 +111,14 @@ function picksFor(dir, meta, run) {
     const m = byGrade.slice().sort((a, b) => score(b) - score(a))[0];
     if (m && score(m) > 0) S.likes = [m];
   }
-  const B = readJ(path.join("data", dir, "brain.json"));
-  if (B && B.reviews) {
-    const fav = Object.entries(B.reviews).filter(([, v]) => v && /like|play|yes|strong/i.test(String(v.verdict || v.call || ""))).map(([k]) => k);
-    const m = pool.filter(e => fav.includes(e.sig) || fav.includes(sigOf(e)));
-    if (m.length) S.brain = m.slice(0, 5);
+  // the Brain's picks: its best letter grades (A, then A-), from Claude's reviews and from the Lab rules Brain (no Claude);
+  // reviews carry a letter grade, not a verdict, so the old verdict test never matched anything
+  const RANK = { "A": 0, "A-": 1 };
+  for (const [key, file] of [["brain", "brain.json"], ["rulesbrain", "brain-rules.json"]]) {
+    const B = readJ(path.join("data", dir, file)); if (!B || !B.reviews) continue;
+    const top = Object.entries(B.reviews).filter(([, v]) => v && RANK[v.grade] != null).sort((a, b) => RANK[a[1].grade] - RANK[b[1].grade]).map(([k]) => k);
+    const m = top.map(k => pool.find(e => e.sig === k || sigOf(e) === k)).filter(Boolean);
+    if (m.length) S[key] = m.slice(0, 5);
   }
   const lock = lockOf(meta), simAt = fs.statSync(path.join("data", dir, "simrun.json")).mtimeMs;
   const after = t => t && Date.parse(t) > lock;
@@ -200,5 +203,5 @@ for (const dir of dirs) {
 board.updated = new Date().toISOString(); board.totals = totals(board.slates);
 fs.writeFileSync(OUT, JSON.stringify(board, null, 1));
 console.log(`\nwrote ${OUT}: ${Object.keys(board.slates).length} slates; running totals (pre-lock only / all incl. backfills):`);
-for (const [k, t] of Object.entries(board.totals).filter(([k]) => /\| (grade1|grade20|lab1|stack|likes) *$/.test(k)).sort())
+for (const [k, t] of Object.entries(board.totals).filter(([k]) => /\| (grade1|grade20|lab1|stack|likes|brain|rulesbrain) *$/.test(k)).sort())
   console.log(`  ${k.padEnd(40)} n ${String(t.n).padStart(4)} dates ${t.dates} | ROI ${(100 * t.roi).toFixed(0)}% vs field ${(100 * t.fieldRoi).toFixed(0)}% | top-10% ${(100 * t.top10).toFixed(1)}% top-1% ${(100 * t.top1).toFixed(1)}%${t.noise ? " (noise)" : ""}`);
