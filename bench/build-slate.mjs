@@ -7,7 +7,7 @@ import path from "node:path";
 import { parseCSV } from "../src/engine/csv.mjs";
 import { buildPool } from "../src/engine/formats.mjs";
 import { genField } from "../src/engine/field.mjs";
-import { buildModel } from "../src/engine/model.mjs";
+import { buildModel, SIGMA_DEF, CSAME_CFB, COPP_CFB, MLBC, LOAD } from "../src/engine/model.mjs";
 import { simulate, playerROI } from "../src/engine/sim.mjs";
 import { fitPayouts, paidCount } from "../src/engine/payouts.mjs";
 import { featurize, selectScore, DEFAULT_RULE } from "../src/engine/select.mjs";
@@ -15,7 +15,13 @@ import { sigOf, salOf, projOf, ownSum, stackOf, stackTeams } from "../src/engine
 import { mulberry32 } from "../src/engine/rng.mjs";
 import { mlbStackOpt } from "./grade-all.mjs";
 
-const [dir, entriesArg = "1000", pctArg = "10", rakeArg = "15", pickArg = "20", seedArg = "1", itersArg = "5000"] = process.argv.slice(2);
+// Optional overrides (nothing changes without them; graded in bench/tune-cfb-sweep.mjs, verdicts in data/reports/cfb-highstakes.md):
+//   --projscale=0.92 | --projscale=QB:0.98,RB:0.93,WR:0.97   --projsal=lo:0.93,mid:0.98,hi:0.97 (salary <5K / 5-7K / 7K+)
+//   --sig=QB:0.33,RB:0.42,WR:0.41   --sigscale=0.86   --corr=1.25   --corrsame=   --corropp=   (CFB tables)
+//   --conc=1.25   --stacks=1:45,2:40,3:7,bring:47,twoQB:95   --dupefloor
+const FLAGS = process.argv.slice(2).filter(a => a.startsWith("--")), flagv = k => { const a = FLAGS.find(x => x.startsWith(`--${k}=`)); return a ? a.slice(k.length + 3) : null; };
+const kv = s => Object.fromEntries(String(s).split(",").filter(Boolean).map(x => { const [k, v] = x.split(":"); return [k, +v]; }));
+const [dir, entriesArg = "1000", pctArg = "10", rakeArg = "15", pickArg = "20", seedArg = "1", itersArg = "5000"] = process.argv.slice(2).filter(a => !a.startsWith("--"));
 const N = +entriesArg, PCT = +pctArg, RAKE = +rakeArg, PICK = +pickArg, SEED = +seedArg, ITERS = +itersArg;
 const file = fs.readdirSync(dir).find(f => /Data_Hub_Projections\.csv$/i.test(f)) || fs.readdirSync(dir).find(f => /\.csv$/i.test(f));
 const all = parseCSV(fs.readFileSync(path.join(dir, file), "utf8")), headers = all[0], rows = all.slice(1).filter(r => r.length > 1);
@@ -23,11 +29,18 @@ const all = parseCSV(fs.readFileSync(path.join(dir, file), "utf8")), headers = a
 const base = path.basename(dir), FKEY = /-cfb-/.test(base) ? "cfb_cl" : /-nfl-/.test(base) ? (/sd|showdown/.test(base) ? "nfl_sd" : "nfl_cl") : "mlb_cl";
 const pool = buildPool(headers, rows, FKEY), P = pool.players, f = pool.format;
 const dkId = {}; const idCol = headers.findIndex(h => /^dk id$/i.test(h)); if (idCol >= 0) rows.forEach((r, i) => { const p = P.find(q => q.name === r[headers.findIndex(h => /^player$/i.test(h))]); if (p) dkId[p.i] = r[idCol]; });
+if (flagv("projscale") || flagv("projsal")) {
+  const ps = flagv("projscale"), by = !ps ? null : ps.includes(":") ? kv(ps) : null, flat = ps && !ps.includes(":") ? +ps : 1, sal = flagv("projsal") ? kv(flagv("projsal")) : null;
+  for (const p of P) { const tier = p.sal < 5000 ? "lo" : p.sal < 7000 ? "mid" : "hi"; p.proj = p.proj * flat * (by ? by[p.pos] ?? 1 : 1) * (sal ? sal[tier] ?? 1 : 1); }
+}
 console.log(`${file}: ${P.length} players (${P.filter(p => p.proj > 0).length} projected), ${pool.teams.length} teams, ${pool.games.length} games; source "${pool.src}"`);
 
 // Contest Generator, Marquee archetype (conc 1.0, minSal 49000, boost 1.0, 3 rounds), measured stack mix
 const FOOTBALL_STACKS = { cfb_cl: { 1: 43, 2: 32, 3: 8, bring: 50 }, nfl_cl: { 1: 45, 2: 25, 3: 5, bring: 25 } };
 const opt = Object.assign({ conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3 }, f.sport === "mlb" ? mlbStackOpt() : { nflStacks: FOOTBALL_STACKS[FKEY] || FOOTBALL_STACKS.nfl_cl });
+if (flagv("conc")) opt.conc = +flagv("conc");
+if (flagv("stacks")) opt.nflStacks = kv(flagv("stacks"));
+if (FLAGS.includes("--dupefloor")) opt.dupeFloor = true;
 let t0 = Date.now();
 const g = genField(pool, N, opt, mulberry32(SEED));
 const field = g.field, sig = {}; for (const l of field) { const k = sigOf(l, f); sig[k] = (sig[k] || 0) + 1; }
@@ -36,7 +49,16 @@ console.log(`field: ${field.length} entries, ${Object.keys(sig).length} unique, 
 // payouts as the app's default table: rake and % to first, 22% paid
 const poolUnits = N * (1 - RAKE / 100), pay = fitPayouts(N, poolUnits, poolUnits * PCT / 100, 22);
 t0 = Date.now();
-const model = buildModel(pool, {});
+const mopt = {};
+if (flagv("sig") || flagv("sigscale")) { const s = Object.assign({}, SIGMA_DEF[f.sport] || SIGMA_DEF.nfl, flagv("sig") ? kv(flagv("sig")) : {}); if (flagv("sigscale")) for (const k in s) s[k] *= +flagv("sigscale"); mopt.sigmaDef = s; }
+{ const cAll = +(flagv("corr") || 1), cSame = cAll * +(flagv("corrsame") || 1), cOpp = cAll * +(flagv("corropp") || 1);
+  if (f.sport === "cfb" && (cSame !== 1 || cOpp !== 1)) {
+    const sc = (t, x) => Object.fromEntries(Object.entries(t).map(([k, v]) => [k, v * x]));
+    mopt.tables = { CSAME: sc(CSAME_CFB, cSame), COPP: sc(COPP_CFB, cOpp), MLBC };
+    mopt.load = { cfb: Object.fromEntries(Object.entries(LOAD.cfb).map(([k, [g, t, o]]) => [k, [g * Math.sqrt(cOpp), t * Math.sqrt(cSame), o * Math.sqrt(cOpp)]])) };
+  } }
+if (FLAGS.length) console.log(`overrides: ${FLAGS.join(" ")}`);
+const model = buildModel(pool, mopt);
 const res = simulate({ pool, model, field: [], lineups: field, payouts: pay, entries: N, fee: 1, iters: ITERS, maxIters: ITERS * 4, rng: mulberry32(SEED), fieldMode: true });
 console.log(`sim: ${res.iters} draws, ${paidCount(pay)} paid, ${PCT}% to first, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 
