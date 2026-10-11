@@ -50,21 +50,23 @@ const readJson = p => { try { return JSON.parse(fs.readFileSync(p, "utf8")); } c
 const healthOf = dir => ({ refresh: readJson(path.join("data", dir, "refresh.json")), vendors: readJson(path.join("data", dir, "vendors-pull.json")) });
 async function refresh(q) {
   const steps = [], step = async (name, fn) => { const t = Date.now(); try { const info = await fn(); steps.push({ name, ok: true, ms: Date.now() - t, info }); return info; } catch (e) { steps.push({ name, ok: false, ms: Date.now() - t, error: e.message }); return null; } };
-  let dir = q.dir || null;
-  if (q.slateId && q.date) { const r = await step("stokastic", () => pullStokastic(q.date, q.slateId, "NFL")); if (r) dir = r.dir; }
-  await step("pinnacle", () => pullPinnacle().then(r => ({ stamp: r.stamp, games: r.games, props: r.props, projected: r.projected })));
-  await step("ingest", () => { const r = ingestPass(); lastIngest = Object.assign(r, { at: new Date().toISOString() }); return { copied: r.done.map(d => `${d.src}: ${d.file} -> ${d.dest}`), notes: r.notes }; });
+  let dir = q.dir || null; const only = Array.isArray(q.only) && q.only.length ? q.only : null, want = k => !only || only.includes(k);
+  if (q.slateId && q.date && want("stokastic")) { const r = await step("stokastic", () => pullStokastic(q.date, q.slateId, "NFL")); if (r) dir = r.dir; }
+  if (want("pinnacle")) await step("pinnacle", () => pullPinnacle().then(r => ({ stamp: r.stamp, games: r.games, props: r.props, projected: r.projected })));
+  if (!only) await step("ingest", () => { const r = ingestPass(); lastIngest = Object.assign(r, { at: new Date().toISOString() }); return { copied: r.done.map(d => `${d.src}: ${d.file} -> ${d.dest}`), notes: r.notes }; });
   // the grabber bookmarklet's files (ETR articles, shows, data tables, Blick conditional): the no-Claude pull
-  await step("grabs", () => grabPass());
-  await step("injuries", pullInjuries);
-  await step("lobby", () => run(["bench/dk-contests.mjs", "NFL"], 60000).then(() => { const j = JSON.parse(fs.readFileSync("data/dk-lobby/nfl.json", "utf8")); return { contests: j.contests.length, fetched: j.fetched }; }));
+  if (!only) await step("grabs", () => grabPass());
+  if (want("injuries")) await step("injuries", pullInjuries);
+  if (!only) await step("lobby", () => run(["bench/dk-contests.mjs", "NFL"], 60000).then(() => { const j = JSON.parse(fs.readFileSync("data/dk-lobby/nfl.json", "utf8")); return { contests: j.contests.length, fetched: j.fetched }; }));
   if (!dir) { const dirs = slateDirs(); dir = dirs[0] || null; }
   const hub = dir ? await step("merge", () => { const h = hubData(dir); saveMerge(dir, h); return h; }) : null;
   // Lab likes (server/likes.mjs) refresh with the numbers when the slate has a guide or ETR data tables
   if (hub && /nfl/.test(dir) && (fs.existsSync(path.join("data", dir, "slate-guide.json")) || slateData(dir))) await step("likes", () => { const L = saveLikes(dir); return { picks: Object.values(L.picks).flat().length, fades: L.fades.length }; });
   // Lab stacks (server/stacks.mjs) need the slate's generated field + sim; skipped until the Simulator has run
   if (hub && /nfl/.test(dir) && fs.existsSync(path.join("data", dir, "simrun.json")) && fs.existsSync(path.join("data", dir, "field.json"))) await step("stacks", () => { const S = saveStacks(dir); return { top: (S.top || S.pairs || []).length, blick: !!S.blick }; });
-  if (dir) { fs.writeFileSync(path.join("data", dir, "refresh.json"), JSON.stringify({ at: new Date().toISOString(), steps: steps.map(s => ({ name: s.name, ok: s.ok, error: s.error })) })); if (hub) hub.health = healthOf(dir); }
+  // a one-source refresh replaces just its steps in the last full Refresh's record
+  if (dir) { const rf = path.join("data", dir, "refresh.json"), prev = only && readJson(rf), mine = steps.map(s => ({ name: s.name, ok: s.ok, error: s.error }));
+    fs.writeFileSync(rf, JSON.stringify(prev ? Object.assign(prev, { steps: prev.steps.filter(s => !mine.some(m => m.name === s.name)).concat(mine) }) : { at: new Date().toISOString(), steps: mine })); if (hub) hub.health = healthOf(dir); }
   return { steps, hub };
 }
 // "Pull ETR + Blick" (user-approved 2026-10-03): a one-shot headless Claude Code run (claude -p --chrome) with the job in
@@ -143,8 +145,8 @@ function startPull(r) {
      window.__C=['player,team,opponent,position,salary,projection,floor,ceiling,largeOwnership,smallOwnership'].concat(D.map(o=>[String(o.player).includes(',')?'"'+o.player+'"':o.player,o.team,o.opponent,o.position,o.salary,o.projection,'',o.ceiling||'',o.ownership,o.ownership].join(','))).join('\\n');
      'rows '+D.length+' chars '+window.__C.length
    Read window.__C in 950-character slices with browser_batch, join exactly, and Write data/${r.dir}/ETR-main-${meta.date}.csv .`;
-  const vars = { DIR: r.dir, TYPE: meta.type, DATE: meta.date, SLATEID: String(meta.slateId || ""), GAMES: meta.games.join(" "), ETR_STEPS: sd ? etrSd : sub ? etrSub : etrMain,
-    BLICK_SKIP: sub ? "SKIP THIS STEP ENTIRELY: Blick only publishes the main slate. In the final message write \"Blick: main slate only\" for Blick and use \"done\" if ETR worked." : "",
+  const vars = { DIR: r.dir, TYPE: meta.type, DATE: meta.date, SLATEID: String(meta.slateId || ""), GAMES: meta.games.join(" "), ETR_STEPS: r.sources && !r.sources.includes("etr") ? "SKIP THIS STEP ENTIRELY: only Blick was asked for. In the final message leave ETR out." : sd ? etrSd : sub ? etrSub : etrMain,
+    BLICK_SKIP: r.sources && !r.sources.includes("blick") ? "SKIP THIS STEP ENTIRELY (and its conditional-ownership part): only ETR was asked for. In the final message leave Blick out." : sub ? "SKIP THIS STEP ENTIRELY: Blick only publishes the main slate. In the final message write \"Blick: main slate only\" for Blick and use \"done\" if ETR worked." : "",
     // Blick Conditional Ownership page (step 3b): /nfl/conditional-ownership and /nfl/conditional-ownership-showdown
     BLICK_COND_SUFFIX: sd ? "-showdown" : "",
     BLICK_URL: sd ? "https://blickanalytics.com/nfl/showdown-ownership-gpp" : "https://blickanalytics.com/nfl/ownership-gpp", BLICK_NEXT: sd ? "%2Fnfl%2Fshowdown-ownership-gpp" : "%2Fnfl%2Fownership-gpp",

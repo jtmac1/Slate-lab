@@ -67,10 +67,18 @@ async function refresh(opts = {}) {
   try { S.pull = await api("/api/pull-request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dir: S.hub.dir, sources: ["etr", "blick"] }) }); setMsg("Refreshed. Now pulling ETR + Blick through Claude in your Chrome (a few minutes); the table updates again when it's done"); render(); watchPull(); }
   catch (e) { setMsg("Refreshed, but the ETR + Blick pull didn't start: " + e.message, true); }
 }
-async function refreshFree() {
-  if (S.busy) return; S.busy = true; S.steps = []; render(); setMsg("Refreshing: Stokastic, Pinnacle, Downloads, injuries…");
+// one source from its box on the strip (user, 2026-10-11): Stokastic, Pinnacle, ESPN run their free step; ETR or Blick is a
+// Claude pull of just that site
+const SRC_KEY = { stokastic: "stokastic", pinnacle: "pinnacle", espn: "injuries" }, SRC_NAME = { stokastic: "Stokastic", pinnacle: "Pinnacle", espn: "ESPN injuries", etr: "ETR", blick: "Blick" };
+async function refreshOne(src) {
+  if (S.busy || pulling() || !S.hub) return setMsg(S.busy || pulling() ? "Something is already refreshing; try again when it finishes" : "Pick a slate first", true);
+  if (src === "etr" || src === "blick") { try { S.pull = await api("/api/pull-request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dir: S.hub.dir, sources: [src] }) }); setMsg(`Pulling ${SRC_NAME[src]} only through Claude in your Chrome (a few minutes)`); render(); watchPull(); } catch (e) { setMsg(`${SRC_NAME[src]} pull didn't start: ${e.message}`, true); } return; }
+  return refreshFree([SRC_KEY[src]]);
+}
+async function refreshFree(only) {
+  if (S.busy) return; S.busy = true; S.steps = []; render(); setMsg(only ? `Refreshing ${only.join(", ")} only…` : "Refreshing: Stokastic, Pinnacle, Downloads, injuries…");
   try {
-    const r = await api("/api/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ date: S.date, slateId: S.slateId, dir: S.dir }) });
+    const r = await api("/api/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ date: S.date, slateId: S.slateId, dir: S.dir, only }) });
     S.steps = r.steps; const stk = r.steps.find(s => s.name === "stokastic");
     if (stk && stk.ok) S.dir = stk.info.dir;
     S.hub = r.hub; await loadDirs(); if (S.hub) S.dir = S.hub.dir;
@@ -93,12 +101,12 @@ const hm = iso => { if (!iso) return "—"; const d = iso instanceof Date ? iso 
 function health() {
   const H = S.hub; if (!H) return "";
   const s = H.sources, h = H.health || {}, R = h.refresh, V = h.vendors, fails = [];
-  if (!R) fails.push("no Refresh recorded for this slate yet"); else R.steps.filter(x => !x.ok).forEach(x => fails.push(`${x.name}: ${x.error || "failed"}`));
+  if (R) R.steps.filter(x => !x.ok).forEach(x => fails.push(`${x.name}: ${x.error || "failed"}`));
   if (V && V.status === "error") fails.push("ETR + Blick pull: " + (V.message || "failed"));
   if (!s.stokastic) fails.push("Stokastic not pulled"); if (!s.etr) fails.push("ETR not pulled"); if (!s.blick) fails.push("Blick not pulled"); else if (s.blick.stale) fails.push("Blick file has zero projections");
-  const running = S.busy || (S.pull && /pending|working/.test(S.pull.status) && S.pull.kind !== "weekly"), cls = running ? "run" : fails.length ? "bad" : "good";
+  const running = S.busy || (S.pull && /pending|working/.test(S.pull.status) && S.pull.kind !== "weekly"), cls = running ? "run" : fails.length ? "bad" : R ? "good" : "none";
   const t = [["ETR", s.etr && (vendorTime(s.etr.updated) || s.etr.mtime)], ["Stokastic", s.stokastic && s.stokastic.projUpdated], ["Blick", s.blick && (vendorTime(s.blick.updated) || s.blick.mtime)]];
-  const pop = `<div class="hpop"><b>${running ? "Refresh running" : fails.length ? "Something didn't go through" : "Everything went through"}</b>${fails.map(x => `<div class="hf">${esc(x)}</div>`).join("")}
+  const pop = `<div class="hpop"><b>${running ? "Refresh running" : fails.length ? "Something didn't go through" : R ? "Everything went through" : "No Refresh recorded for this slate yet: the next one sets this"}</b>${fails.map(x => `<div class="hf">${esc(x)}</div>`).join("")}
     ${R ? `<div class="hs">${R.steps.map(x => `<span class="${x.ok ? "ok" : "bad"}">${esc(x.name)}</span>`).join(" ")}</div>` : ""}
     <div class="hm">Last Refresh ${R ? esc(when(R.at)) : "—"}${V ? ` · ETR + Blick pull ${esc(V.status)} ${esc(when(V.at))}` : ""}</div></div>`;
   return `<div class="health ${cls}" tabindex="0"><i></i>${t.map(([k, v]) => `<span class="ht"><span class="k">${k}</span> ${esc(hm(v))}</span>`).join("")}<span class="ht chk"><span class="k">Checked</span> ${esc(hm(R && R.at))}</span>${pop}</div>`;
@@ -111,6 +119,7 @@ function render() {
 </nav>
     <div id="ctl" class="${S.view === "hub" ? "" : "nothub"}">${ctl()}</div><div class="prog"><i id="prog"${S.busy ? ' style="width:60%"' : ""}></i></div><div id="status" class="status">${S.err ? `<span class="err">${esc(S.msg)}</span>` : esc(S.msg)}</div>${S.view === "hub" ? steps() + srcStrip() : ""}<div id="tabs">${S.view === "hub" ? tabs() : ""}</div><div id="main"></div><div id="bot"></div>`;
   $$(".lnk[data-view]").forEach(b => b.addEventListener("click", () => { S.view = b.getAttribute("data-view"); persist(); render(); }));
+  $(".src[data-src]").forEach(b => { const go = () => refreshOne(b.getAttribute("data-src")); b.addEventListener("click", go); b.addEventListener("keydown", e => { if (e.key === "Enter") go(); }); });
   wireCtl(); renderMain();
 }
 function leaguePicker() {
@@ -170,11 +179,11 @@ function steps() { if (!S.steps.length) return ""; return `<div class="steps">${
 function stepInfo(s) { const i = s.info || {}; if (s.name === "stokastic") return `${i.projected} projected, ${i.changed ? "new numbers" : "unchanged"}`; if (s.name === "pinnacle") return `${i.games} games, ${i.props} props`; if (s.name === "ingest") return i.copied.length ? i.copied.join("; ") : "nothing new in Downloads"; if (s.name === "injuries") return `${i.notActive} flagged`; if (s.name === "merge") return `${i.rows.length} players`; return ""; }
 function srcStrip() {
   const H = S.hub; if (!H) return "";
-  const s = H.sources, box = (cls, name, line, sub) => `<div class="src ${cls}"><i></i><div><b>${name}</b> ${line}<small>${sub}</small></div></div>`;
+  const s = H.sources, box = (cls, name, line, sub) => `<div class="src ${cls}" data-src="${{ Stokastic: "stokastic", ETR: "etr", Blick: "blick", Pinnacle: "pinnacle", ESPN: "espn" }[name]}" role="button" tabindex="0" title="Click to refresh ${name} only"><i></i><div><b>${name}</b> ${line}<small>${sub}</small></div></div>`;
   return `<div class="srcs">
     ${s.stokastic ? box("ok", "Stokastic", `${s.stokastic.rows} players`, `proj ${when(s.stokastic.projUpdated)} · own ${when(s.stokastic.ownUpdated)} · checked ${ago(s.stokastic.pulledAt)}`) : box("bad", "Stokastic", "not pulled", "pick the slate and Refresh")}
-    ${s.etr ? box("ok", "ETR", `${s.etr.rows} players`, `${s.etr.updated ? `updated ${when(vendorTime(s.etr.updated))}` : "update time unknown"} · checked ${ago(s.etr.checked || s.etr.mtime)}`) : box("warn", "ETR", "not pulled", "press Pull ETR + Blick")}
-    ${s.blick ? box(s.blick.stale ? "warn" : "ok", "Blick", s.blick.stale ? "file has zero projections" : `${s.blick.rows} players`, `${s.blick.updated ? `updated ${when(vendorTime(s.blick.updated))}` : "update time unknown"} · checked ${ago(s.blick.checked || s.blick.mtime)}`) : box("warn", "Blick", "not pulled", "press Pull ETR + Blick")}
+    ${s.etr ? box("ok", "ETR", `${s.etr.rows} players`, `${s.etr.updated ? `updated ${when(vendorTime(s.etr.updated))}` : "update time unknown"} · checked ${ago(s.etr.checked || s.etr.mtime)}`) : box("warn", "ETR", "not pulled", "click to pull ETR")}
+    ${s.blick ? box(s.blick.stale ? "warn" : "ok", "Blick", s.blick.stale ? "file has zero projections" : `${s.blick.rows} players`, `${s.blick.updated ? `updated ${when(vendorTime(s.blick.updated))}` : "update time unknown"} · checked ${ago(s.blick.checked || s.blick.mtime)}`) : box("warn", "Blick", "not pulled", "click to pull Blick")}
     ${s.market ? box("ok", "Pinnacle", `${s.market.rows} players`, `lines ${when(s.market.pulledAt)} · checked ${ago(s.market.pulledAt)}`) : box("warn", "Pinnacle", "no lines for these games", "Refresh pulls the current week")}
     ${s.injuries ? box("ok", "ESPN", `${s.injuries.flagged} injuries`, `${s.injuries.latest ? `latest report ${when(s.injuries.latest)}` : "no reports"} · checked ${ago(s.injuries.at)}`) : box("warn", "ESPN", "injuries not pulled", "Refresh pulls ESPN")}
   </div>`;

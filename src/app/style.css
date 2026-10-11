@@ -37,6 +37,7 @@ h1,h2,h3{margin:0;font-weight:700}
 .health>i{width:9px;height:9px;border-radius:50%;flex:none}
 .health.good{border-color:rgba(var(--greenrgb),.45)}.health.good>i{background:var(--green);box-shadow:0 0 8px rgba(var(--greenrgb),.8)}
 .health.bad{border-color:var(--red)}.health.bad>i{background:var(--red);box-shadow:0 0 8px var(--red)}
+.health.none>i{background:var(--dim)}
 .health.run>i{background:var(--yellow);box-shadow:0 0 8px var(--yellow)}
 .health .k{color:var(--muted)}.health .chk{padding-left:10px;border-left:1px solid var(--line2)}
 .health .hpop{display:none;position:absolute;right:0;top:calc(100% + 6px);z-index:50;min-width:280px;max-width:420px;white-space:normal;background:var(--bar2);border:1px solid var(--line2);border-radius:6px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.5)}
