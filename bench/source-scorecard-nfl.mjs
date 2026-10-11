@@ -64,7 +64,7 @@ const ranks = a => { const idx = a.map((v, i) => [v, i]).sort((p, q) => p[0] - q
 const spearman = (x, y) => pearson(ranks(x), ranks(y));
 const f2 = x => isNaN(x) || x == null ? "-" : x.toFixed(2), f1 = x => isNaN(x) || x == null ? "-" : x.toFixed(1);
 
-const slates = [], pooled = {}, byPos = {};
+const slates = [], pooled = {}, byPos = {}, byPosFair = {};
 for (const g of Object.values(groups).sort((a, b) => a.date.localeCompare(b.date))) {
   const actF = g.files.find(f => /actuals\.csv$/.test(f)), hubF = g.files.find(f => /_Data_Hub_Projections\.csv$/i.test(f));
   if (!actF || !hubF) { slates.push({ date: g.date, code: g.code, note: !actF ? "no actuals.csv (run bench/actuals-nfl.mjs)" : "no Data Hub file" }); continue; }
@@ -83,13 +83,17 @@ for (const g of Object.values(groups).sort((a, b) => a.date.localeCompare(b.date
   const common = uni.filter(k => names.every(s => src[s].has(k)));
   const K = teams.size >= 8 ? 12 : 6, topAct = new Set(common.slice().sort((a, b) => act.get(b).proj - act.get(a).proj).slice(0, K));
   const row = { date: g.date, code: g.code, games: teams.size / 2, universe: uni.length, n: common.length, sources: {}, files: { etr: etrF ? path.basename(etrF) : null, blick: blickF ? path.basename(blickF) : null, market: mk ? mk.stamp : null }, dropped: Object.keys(src).filter(s => !names.includes(s)) };
+  // like-for-like: only slates where all four sources projected the same players feed the Lab weights (user, 2026-10-10:
+  // pooled over every slate, Market looked best at QB/TE/DST off its 6 recent slates while Stokastic and ETR carried 15)
+  const allFour = ["stokastic", "etr", "blick", "market"].every(s => names.includes(s));
   const score = (name, projOf) => {
     const x = common.map(projOf), y = common.map(k => act.get(k).proj);
     const top = new Set(common.slice().sort((a, b) => projOf(b) - projOf(a)).slice(0, K));
     const r = { n: x.length, r: pearson(x, y), rho: spearman(x, y), mae: x.reduce((s, v, i) => s + Math.abs(v - y[i]), 0) / x.length, bias: y.reduce((s, v, i) => s + v - x[i], 0) / x.length, hits: [...top].filter(k => topAct.has(k)).length, K };
     row.sources[name] = r;
     const p = pooled[name] = pooled[name] || { x: [], y: [], rho: [], hits: 0, K: 0, slates: 0 }; p.x.push(...x); p.y.push(...y); p.rho.push([r.rho, x.length]); p.hits += r.hits; p.K += K; p.slates++;
-    common.forEach((k, i) => { const pos = isDst(hub.get(k).pos) ? "DST" : hub.get(k).pos.split("/")[0]; const b = byPos[pos] = byPos[pos] || {}; const q = b[name] = b[name] || { x: [], y: [] }; q.x.push(x[i]); q.y.push(y[i]); });
+    common.forEach((k, i) => { const pos = isDst(hub.get(k).pos) ? "DST" : hub.get(k).pos.split("/")[0];
+      for (const B of allFour ? [byPos, byPosFair] : [byPos]) { const b = B[pos] = B[pos] || {}; const q = b[name] = b[name] || { x: [], y: [] }; q.x.push(x[i]); q.y.push(y[i]); } });
   };
   for (const s of names) score(s, k => src[s].get(k).proj);
   if (names.length > 1) score("consensus", k => names.reduce((a, s) => a + src[s].get(k).proj, 0) / names.length);
@@ -101,6 +105,9 @@ md.push("## Pooled", "", "| source | n | r | rho | MAE | bias | top hits |", "|-
 for (const [name, p] of Object.entries(pooled)) { const w = p.rho.reduce((s, [, n]) => s + n, 0); md.push(line(`${name} (${p.slates} slates)`, { n: p.x.length, r: pearson(p.x, p.y), rho: p.rho.reduce((s, [r, n]) => s + (isNaN(r) ? 0 : r * n), 0) / w, mae: p.x.reduce((s, v, i) => s + Math.abs(v - p.y[i]), 0) / p.x.length, bias: p.y.reduce((s, v, i) => s + v - p.x[i], 0) / p.x.length, hits: p.hits, K: p.K })); }
 md.push("", "## By position (pooled r / MAE)", "", "| pos | " + Object.keys(pooled).join(" | ") + " |", "|---|" + Object.keys(pooled).map(() => "---|").join(""));
 for (const [pos, b] of Object.entries(byPos).sort()) md.push(`| ${pos} (${Object.values(b)[0].x.length}) | ` + Object.keys(pooled).map(s => b[s] ? `${f2(pearson(b[s].x, b[s].y))} / ${f1(b[s].x.reduce((t, v, i) => t + Math.abs(v - b[s].y[i]), 0) / b[s].x.length)}` : "-").join(" | ") + " |");
+const nFair = slates.filter(s => !s.note && ["stokastic", "etr", "blick", "market"].every(k => s.sources[k])).length;
+md.push("", `## By position, like-for-like (r / MAE): only the ${nFair} slates where all four sources projected the same players; these set the Lab weights`, "", "| pos | " + Object.keys(pooled).join(" | ") + " |", "|---|" + Object.keys(pooled).map(() => "---|").join(""));
+for (const [pos, b] of Object.entries(byPosFair).sort()) md.push(`| ${pos} (${Object.values(b)[0].x.length}) | ` + Object.keys(pooled).map(s => b[s] ? `${f2(pearson(b[s].x, b[s].y))} / ${f1(b[s].x.reduce((t, v, i) => t + Math.abs(v - b[s].y[i]), 0) / b[s].x.length)}` : "-").join(" | ") + " |");
 md.push("", "## Per slate", "");
 for (const s of slates) {
   if (s.note) { md.push(`### ${s.date} ${s.code}: ${s.note}`, ""); continue; }
@@ -110,8 +117,12 @@ for (const s of slates) {
 }
 fs.mkdirSync("data/reports", { recursive: true });
 fs.writeFileSync("data/reports/source-scorecard-nfl.md", md.join("\n") + "\n");
-// byPos feeds the Lab blend (server/sources.mjs): weights per position are 1/MAE^2 of each source
-const byPosOut = {}; for (const [pos, b] of Object.entries(byPos)) { byPosOut[pos] = {}; for (const [s, q] of Object.entries(b)) byPosOut[pos][s] = { n: q.x.length, r: +pearson(q.x, q.y).toFixed(3), mae: +(q.x.reduce((t, v, i) => t + Math.abs(v - q.y[i]), 0) / q.x.length).toFixed(3) }; }
-fs.writeFileSync("data/reports/source-scorecard-nfl.json", JSON.stringify({ built: new Date().toISOString(), slates, byPos: byPosOut }, null, 1));
+// byPos feeds the Lab blend (server/sources.mjs): weights per position are 1/MAE^2 of each source. It is the like-for-like
+// table (slates with all four sources); a position with fewer than 15 such players falls back to the pooled numbers.
+// byPosPooled keeps the every-slate numbers for reference.
+const out = B => { const o = {}; for (const [pos, b] of Object.entries(B)) { o[pos] = {}; for (const [s, q] of Object.entries(b)) o[pos][s] = { n: q.x.length, r: +pearson(q.x, q.y).toFixed(3), mae: +(q.x.reduce((t, v, i) => t + Math.abs(v - q.y[i]), 0) / q.x.length).toFixed(3) }; } return o; };
+const pooledOut = out(byPos), fairOut = out(byPosFair), byPosOut = {};
+for (const pos of Object.keys(pooledOut)) byPosOut[pos] = fairOut[pos] && Math.min(...Object.values(fairOut[pos]).map(v => v.n)) >= 15 ? fairOut[pos] : pooledOut[pos];
+fs.writeFileSync("data/reports/source-scorecard-nfl.json", JSON.stringify({ built: new Date().toISOString(), weightsFrom: `like-for-like: ${nFair} slates with all four sources`, slates, byPos: byPosOut, byPosPooled: pooledOut }, null, 1));
 console.log(md.slice(0, md.indexOf("## Per slate")).join("\n"));
 console.log(`\n${slates.filter(s => !s.note).length} slates scored, ${slates.filter(s => s.note).length} skipped -> data/reports/source-scorecard-nfl.md`);

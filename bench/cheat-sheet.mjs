@@ -61,6 +61,21 @@ const checklist = [...new Map(rules.map(r => [r.rule, r])).values()].slice(0, 10
 
 const catalog = await (await fetch(`http://localhost:8787/api/etr-reads?dir=${slate}`)).json().then(r => r.catalog || []).catch(() => []);
 const nameOf = id => (catalog.find(c => c.id === id) || {}).name || id;
+// signals (user-asked 2026-10-10): where the sources disagree, top 5 each way, real plays only (Model 8+, salary $3,000+)
+// questionable/doubtful/out players have no full prop lines yet, so their market number and range are injury noise: they
+// go to their own group, and market signals need a real market projection
+const hurt = r => r.inj && /question|doubt|out/i.test(r.inj.status);
+const all8 = H.rows.filter(r => (r.lab ?? 0) >= 8 && (r.sal ?? 0) >= 3000), playable = all8.filter(r => !hurt(r));
+const topBy = (key, dir, n = 5) => playable.filter(r => r[key] != null && (dir > 0 ? r[key] > 0 : r[key] < 0) && (key !== "mktGap" || (r.mkt && r.mkt.proj >= 3))).sort((a, b) => dir * (b[key] - a[key])).slice(0, n);
+const signals = [
+  { title: "Market likes more than the sites", why: "Mkt−Vend: betting-line projection above the DFS vendors' average", rows: topBy("mktGap", 1), val: r => `+${r.mktGap.toFixed(1)} pts` },
+  { title: "Market likes less than the sites", why: "Mkt−Vend: betting lines below the vendors", rows: topBy("mktGap", -1), val: r => `${r.mktGap.toFixed(1)} pts` },
+  { title: "Field likely heavier than projected", why: "vs sites: our ownership model above the sites' average", rows: topBy("ownDelta", 1), val: r => `+${r.ownDelta.toFixed(1)}% own` },
+  { title: "Field likely lighter than projected", why: "vs sites: our ownership model below the sites' average, possible hidden leverage", rows: topBy("ownDelta", -1), val: r => `${r.ownDelta.toFixed(1)}% own` },
+  { title: "Sources split most", why: "Range: highest minus lowest source projection", rows: topBy("spread", 1), val: r => `${r.spread.toFixed(1)} pt range` },
+  { title: "Best spots", why: "the market likes him more AND the field should underplay him (Mkt−Vend above 0, vs sites below 0)", rows: playable.filter(r => r.mktGap > 0 && r.ownDelta < 0 && r.mkt && r.mkt.proj >= 3).sort((a, b) => (b.mktGap - b.ownDelta) - (a.mktGap - a.ownDelta)).slice(0, 5), val: r => `+${r.mktGap.toFixed(1)} pts, ${r.ownDelta.toFixed(1)}% own` },
+  { title: "Waiting on injury news", why: "questionable or worse: their market number and source split will move once the status is known", rows: all8.filter(hurt).sort((a, b) => (b.spread ?? 0) - (a.spread ?? 0)).slice(0, 6), val: r => `${r.inj.status}${r.spread != null ? `, ${r.spread.toFixed(1)} pt range` : ""}` },
+];
 const stacks = ((G.labStacks || {}).top || []).slice(0, 5), notReady = Object.entries(reads).filter(([k, v]) => v.status !== "ok" && (!catalog.length || catalog.some(c => c.id === k))).map(([k, v]) => ({ id: k, name: nameOf(k), note: v.note }));
 const src = H.sources || {}, stamp = (label, v) => v ? `<span><b>${label}</b> ${esc(v)}</span>` : "";
 const etrAt = src.etr && src.etr.checked, stkAt = src.stokastic && src.stokastic.projUpdated, blAt = src.blick && src.blick.checked;
@@ -117,6 +132,10 @@ details.more summary{cursor:pointer;font-size:12px;color:var(--neon);width:max-c
 .num{text-align:right;font-variant-numeric:tabular-nums;font-size:13px}
 .q{display:inline-block;font-size:10px;font-weight:700;color:#0b0f14;background:var(--yellow);border-radius:3px;padding:0 4px;margin-left:4px;vertical-align:1px}
 .pl p{margin:0 8px 8px 11px;font-size:13px;color:var(--ink2)} .pl p.by{font-size:11.5px;color:var(--muted)}
+.sig{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
+.sgrp{border:1px solid var(--line2);border-radius:8px;padding:9px 12px;background:var(--bg2);display:flex;flex-direction:column;gap:4px}
+.sgrp h3{margin:0;color:var(--ink);font-size:15px} .sgrp ol{margin:2px 0 0;padding-left:20px;display:flex;flex-direction:column;gap:3px}
+.sgrp li{font-size:13px;color:var(--ink2)} .sgrp li b{color:var(--neon);font-weight:600;font-variant-numeric:tabular-nums} .sgrp .sn{color:var(--ink);font-weight:500}
 .stk{border:1px solid var(--line2);border-radius:8px;padding:9px 12px;display:flex;flex-direction:column;gap:3px;background:var(--bg2)}
 .stk .top{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline}
 .stk b{font-family:var(--cond);font-size:17px;letter-spacing:.03em}
@@ -141,7 +160,7 @@ footer{font-size:12px;color:var(--muted)}
   <h1>Week ${esc(week)} Main · ${esc(new Date(G.date + "T12:00:00Z").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" }))} · ${H.games.length} games</h1>
   <div class="stamps">${stamp("Lock", kickoff(H.games.map(g => g.start).sort()[0]))}${stamp("ETR", fmtAt(etrAt))}${stamp("Stokastic", fmtAt(stkAt))}${stamp("Blick", fmtAt(blAt))}${stamp("Built", fmtAt(new Date().toISOString()))}</div>
 </header>
-<nav aria-label="Sections"><a href="#games">Games</a><a href="#players">Players</a><a href="#stacks">Stacks</a><a href="#news">Late news</a><a href="#shows">Shows</a><a href="#rules">$100+ rules</a></nav>
+<nav aria-label="Sections"><a href="#games">Games</a><a href="#players">Players</a><a href="#signals">Signals</a><a href="#stacks">Stacks</a><a href="#news">Late news</a><a href="#shows">Shows</a><a href="#rules">$100+ rules</a></nav>
 ${notReady.length ? `<div class="warn">Not read yet: ${notReady.map(x => esc(x.name)).join(", ")}. This sheet updates after they are.</div>` : ""}
 <section id="games"><h2>Games <small>highest total first · lines from Pinnacle</small></h2>
 ${slateWide.map(t => `<div class="game wide"><p><b>${esc(t.name)}.</b> ${esc(t.summary)}</p></div>`).join("\n")}
@@ -153,6 +172,9 @@ ${games.map(g => { const c = g.call && CALL[g.call.call], more = g.th.map(t => s
 <div class="hdr"><span>Player</span><span>Team</span><span>Salary</span><span>Proj</span><span>Own</span><span></span></div>
 ${byPos.map(([p, l]) => `<div class="pos"><h3>${p}</h3>${l.map(playerRow).join("")}</div>`).join("\n")}
 ${other.length ? `<div class="pos"><h3>Not on the DK slate</h3>${other.map(playerRow).join("")}</div>` : ""}
+</section>
+<section id="signals"><h2>Signals <small>where the sources disagree · Model 8+ pts, $3K+</small></h2>
+<div class="sig">${signals.map(s => `<div class="sgrp"><h3>${esc(s.title)}</h3><p class="note">${esc(s.why)}</p>${s.rows.length ? `<ol>${s.rows.map(r => `<li><span class="sn">${esc(r.name)}</span> <span class="tm">${esc(r.pos)} ${esc(r.team)} $${((r.sal || 0) / 1000).toFixed(1)}K</span> <b>${esc(s.val(r))}</b> <span class="tm">Model ${(r.lab ?? 0).toFixed(1)} · own ${(r.labOwn ?? 0).toFixed(0)}%</span></li>`).join("")}</ol>` : `<p class="note">None this week.</p>`}</div>`).join("")}</div>
 </section>
 <section id="stacks"><h2>Lab stacks <small>field share vs Blick's projection</small></h2>
 ${stacks.map(s => `<div class="stk"><div class="top"><b>${esc(s.qb)}</b><span>+ ${esc((s.catchers || []).join(", "))}${s.bringBack ? ` · bring back ${esc(s.bringBack.name)}` : ""}</span></div><div class="meta">${esc(s.team)} vs ${esc(s.opp)} · field ${s.freq != null ? (+s.freq).toFixed(1) + "%" : "—"} · Blick ${s.blick != null ? (+s.blick).toFixed(1) + "%" : "—"} · top-1% rate ${s.t1x != null ? (+s.t1x).toFixed(2) + "x" : "—"}</div></div>`).join("\n") || '<p class="by">No Lab stacks yet: run the sim on the Simulator first.</p>'}
