@@ -119,7 +119,7 @@ function render() {
 </nav>
     <div id="ctl" class="${S.view === "hub" ? "" : "nothub"}">${ctl()}</div><div class="prog"><i id="prog"${S.busy ? ' style="width:60%"' : ""}></i></div><div id="status" class="status">${S.err ? `<span class="err">${esc(S.msg)}</span>` : esc(S.msg)}</div>${S.view === "hub" ? steps() + srcStrip() : ""}<div id="tabs">${S.view === "hub" ? tabs() : ""}</div><div id="main"></div><div id="bot"></div>`;
   $$(".lnk[data-view]").forEach(b => b.addEventListener("click", () => { S.view = b.getAttribute("data-view"); persist(); render(); }));
-  $(".src[data-src]").forEach(b => { const go = () => refreshOne(b.getAttribute("data-src")); b.addEventListener("click", go); b.addEventListener("keydown", e => { if (e.key === "Enter") go(); }); });
+  $$(".src[data-src]").forEach(b => { const go = () => refreshOne(b.getAttribute("data-src")); b.addEventListener("click", go); b.addEventListener("keydown", e => { if (e.key === "Enter") go(); }); });
   wireCtl(); renderMain();
 }
 function leaguePicker() {
