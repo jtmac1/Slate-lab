@@ -68,6 +68,12 @@ path form with BACKSLASHES (forward-slash paths are denied by the permission rul
    PDFs on https://establishtherun.com/etr-podcast-summaries/ ("<name>: Week N" links). If this week's is there, open it and
    read it with get_page_text instead; otherwise post the show failed with the reason.
 
+3b. YouTube shows outside ETR (listed as YouTube show "<title>" with a channel URL). Open the channel URL, wait 4 seconds, and list
+   the videos: [...document.querySelectorAll("a#video-title-link, a#video-title")].map(a=>a.title+" -> "+a.href).join("
+")
+   Open the one whose title contains the listed title (same week number). Then read its transcript exactly as in step 3, with
+   the same "not up yet" rule. These are DFS strategy shows (leverage, ownership, game picks): take leverage/fade/core calls
+   as stances and slate-level ideas as theses, with source = the show name.
 4. Blick slate thoughts (id blick, only if listed): no browser. Read data/{{DIR}}/blick-thoughts.md and every image in
    data/{{DIR}}/blick/ with the Read tool. These are Blick's own takes (Discord/notes) that the user pasted or screenshotted.
    If there is nothing there, post it failed ("nothing uploaded"). Title it "Blick slate thoughts".

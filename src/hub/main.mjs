@@ -87,10 +87,27 @@ async function upload(file) {
   render();
 }
 
+// data check, top right (user, 2026-10-11): vendor update times as on the Data Hub strip plus the last Refresh; green when the
+// last Refresh and the last ETR + Blick pull both went through, red with what failed on hover
+const hm = iso => { if (!iso) return "—"; const d = iso instanceof Date ? iso : new Date(iso); if (isNaN(d)) return "—"; const day = x => x.toLocaleDateString("en-US", { timeZone: CT }); return (day(d) === day(new Date()) ? "" : d.toLocaleDateString("en-US", { timeZone: CT, weekday: "short" }) + " ") + d.toLocaleTimeString("en-US", { timeZone: CT, hour: "numeric", minute: "2-digit" }); };
+function health() {
+  const H = S.hub; if (!H) return "";
+  const s = H.sources, h = H.health || {}, R = h.refresh, V = h.vendors, fails = [];
+  if (!R) fails.push("no Refresh recorded for this slate yet"); else R.steps.filter(x => !x.ok).forEach(x => fails.push(`${x.name}: ${x.error || "failed"}`));
+  if (V && V.status === "error") fails.push("ETR + Blick pull: " + (V.message || "failed"));
+  if (!s.stokastic) fails.push("Stokastic not pulled"); if (!s.etr) fails.push("ETR not pulled"); if (!s.blick) fails.push("Blick not pulled"); else if (s.blick.stale) fails.push("Blick file has zero projections");
+  const running = S.busy || (S.pull && /pending|working/.test(S.pull.status) && S.pull.kind !== "weekly"), cls = running ? "run" : fails.length ? "bad" : "good";
+  const t = [["ETR", s.etr && (vendorTime(s.etr.updated) || s.etr.mtime)], ["Stokastic", s.stokastic && s.stokastic.projUpdated], ["Blick", s.blick && (vendorTime(s.blick.updated) || s.blick.mtime)]];
+  const pop = `<div class="hpop"><b>${running ? "Refresh running" : fails.length ? "Something didn't go through" : "Everything went through"}</b>${fails.map(x => `<div class="hf">${esc(x)}</div>`).join("")}
+    ${R ? `<div class="hs">${R.steps.map(x => `<span class="${x.ok ? "ok" : "bad"}">${esc(x.name)}</span>`).join(" ")}</div>` : ""}
+    <div class="hm">Last Refresh ${R ? esc(when(R.at)) : "—"}${V ? ` · ETR + Blick pull ${esc(V.status)} ${esc(when(V.at))}` : ""}</div></div>`;
+  return `<div class="health ${cls}" tabindex="0"><i></i>${t.map(([k, v]) => `<span class="ht"><span class="k">${k}</span> ${esc(hm(v))}</span>`).join("")}<span class="ht chk"><span class="k">Checked</span> ${esc(hm(R && R.at))}</span>${pop}</div>`;
+}
+
 /* ---------------- render ---------------- */
 function render() {
   const app = $("#app"), H = S.hub;
-  app.innerHTML = `<nav class="nav"><div class="brand"><i></i>SLATE LAB</div><div class="links">${VIEWS.map(([k, l, s, live]) => live ? `<button class="lnk" data-view="${k}" aria-selected="${S.view === k}"><span class="long">${l}</span><span class="short">${s}</span></button>` : `<a class="lnk" href="index.html" title="Not rebuilt yet; opens the current app"><span class="long">${l}</span><span class="short">${s}</span></a>`).join("")}</div><div class="grow"></div>
+  app.innerHTML = `<nav class="nav"><div class="brand"><i></i>SLATE LAB</div><div class="links">${VIEWS.map(([k, l, s, live]) => live ? `<button class="lnk" data-view="${k}" aria-selected="${S.view === k}"><span class="long">${l}</span><span class="short">${s}</span></button>` : `<a class="lnk" href="index.html" title="Not rebuilt yet; opens the current app"><span class="long">${l}</span><span class="short">${s}</span></a>`).join("")}</div><div class="grow"></div><div id="health">${health()}</div>
 </nav>
     <div id="ctl" class="${S.view === "hub" ? "" : "nothub"}">${ctl()}</div><div class="prog"><i id="prog"${S.busy ? ' style="width:60%"' : ""}></i></div><div id="status" class="status">${S.err ? `<span class="err">${esc(S.msg)}</span>` : esc(S.msg)}</div>${S.view === "hub" ? steps() + srcStrip() : ""}<div id="tabs">${S.view === "hub" ? tabs() : ""}</div><div id="main"></div><div id="bot"></div>`;
   $$(".lnk[data-view]").forEach(b => b.addEventListener("click", () => { S.view = b.getAttribute("data-view"); persist(); render(); }));
@@ -143,7 +160,7 @@ function watchPull() {
       const wk = r.kind === "weekly", mins = wk ? 45 : 15;
       if (wk && S.hub && /done|error/.test(r.status)) await loadReads(true);
       if (r.status === "done") { clearInterval(pullTimer); pullTimer = null; setMsg((wk ? "" : "ETR + Blick pulled: ") + (r.message || "done")); await loadHub(); render(); return; }
-      if (r.status === "error") { clearInterval(pullTimer); pullTimer = null; setMsg((wk ? "Weekly ETR read stopped: " : "Pull failed: ") + (r.message || "unknown"), true); render(); return; }
+      if (r.status === "error") { clearInterval(pullTimer); pullTimer = null; setMsg((wk ? "Weekly ETR read stopped: " : "Pull failed: ") + (r.message || "unknown"), true); await loadHub(); render(); return; }
       if (/pending|working/.test(r.status) && Date.now() - t0 > (mins + 1) * 60000) { clearInterval(pullTimer); pullTimer = null; await api("/api/pull-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "error", message: `the Claude run didn't finish in ${mins} minutes` }) }); S.pull.status = "error"; setMsg(`The run didn't finish in ${mins} minutes. Check that Chrome is open with the Claude extension connected.`, true); render(); return; }
       if (r.status + (r.message || "") !== was) { if (S.tab === "notes" && $("#weekBox")) { await loadReads(true); paintWeek(); const rb = $("#refresh"); if (rb) rb.disabled = pulling(); } else render(); }
     } catch { /* server restarting: keep waiting */ }

@@ -60,6 +60,9 @@ const ARCH_SD = { low: { conc: { FLEX: 0.95, CPT: 0.9 }, minSal: 47500, boost: 1
 // QB+1 43-49%, QB+2 40-43%, QB+3 4-6%, unstacked 8-9%; 60-62% of stacked lineups bring back an
 // opponent. High-stakes fields stack deeper (QB+2 48%, QB+3 11%, unstacked 4%, bring-back 67%).
 const NFL_DEF = { 1: 45, 2: 41, 3: 5, bring: 62 };
+// archetype by contest (user, 2026-10-11: no separate archetype once a contest is picked), the tiers ARCH / ARCH_SD were fit on
+// in bench/fit-arch-nfl.mjs and bench/fit-arch-sd.mjs
+export const tierOf = (fee, n) => fee >= 100 && n <= 1000 ? "high" : (fee < 20 || n > 10000) ? "low" : "marquee";
 const NFL_STACKS = { low: { 1: 46, 2: 40, 3: 4, bring: 60 }, marquee: NFL_DEF, high: { 1: 37, 2: 48, 3: 10, bring: 67 } };
 const readJ = f => fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : null, nm = s => nrm(String(s || ""));
 export const loadField = dir => readJ(path.join("data", dir, "field.json"));
@@ -174,9 +177,9 @@ export function buildField(dir, cfg = {}) {
   // sized to the contest: when a DK contest is picked the pool is that contest's entry count (capped at MAX_POOL), so the
   // simulator's duplicate counts and finishing ranks mean what they will mean in the real room
   const LBc0 = cfg.cid ? lobby().get(String(cfg.cid)) : null, LBc = LBc0 && LBc0.fee > 0 && LBc0.field > 0 && LBc0.field < 1e6 ? LBc0 : null, contest = LBc ? { cid: String(LBc.id), name: LBc.name, fee: LBc.fee, field: LBc.field, prizePool: LBc.prizePool || null, top: prizesFromName(LBc.name).top } : null;
-  const n = Math.max(50, Math.min(MAX_POOL, contest && cfg.sizeToContest !== false ? contest.field : (+cfg.n || 1000))), archKey = (sd ? ARCH_SD : ARCH)[cfg.arch] ? cfg.arch : "marquee", arch = (sd ? ARCH_SD : ARCH)[archKey], stacks = Object.assign({}, NFL_STACKS[archKey] || NFL_DEF, cfg.stacks || {});
+  const n = Math.max(50, Math.min(MAX_POOL, contest && cfg.sizeToContest !== false ? contest.field : (+cfg.n || 1000))), archKey = contest ? tierOf(contest.fee, contest.field) : (sd ? ARCH_SD : ARCH)[cfg.arch] ? cfg.arch : "marquee", arch = (sd ? ARCH_SD : ARCH)[archKey], stacks = Object.assign({}, NFL_STACKS[archKey] || NFL_DEF, cfg.stacks || {});
   cfg = Object.assign({}, cfg, { contest });
-  const tier = ownTier(sd, contest), base = { n, contest, arch: cfg.arch || "marquee", ownSrc: cfg.ownSrc || "auto", ownTier: (cfg.ownSrc || "auto") === "auto" || cfg.ownSrc === "all" ? tier.tier : null, projSrc: cfg.projSrc || "lab", stacks, boosts: cfg.boosts || {}, teamsRemoved: cfg.teamsRemoved || [], teamBoost: cfg.teamBoost || {} };
+  const tier = ownTier(sd, contest), base = { n, contest, arch: archKey, stacksSet: !!cfg.stacks, ownSrc: cfg.ownSrc || "auto", ownTier: (cfg.ownSrc || "auto") === "auto" || cfg.ownSrc === "all" ? tier.tier : null, projSrc: cfg.projSrc || "lab", stacks, boosts: cfg.boosts || {}, teamsRemoved: cfg.teamsRemoved || [], teamBoost: cfg.teamBoost || {} };
   let out;
   if (cfg.ownSrc === "all") {
     const by = {}, union = [], seen = new Map();
