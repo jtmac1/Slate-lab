@@ -99,8 +99,7 @@ export function ownModel(fmt = "classic") {
       const mult = Math.min(hi, Math.max(lo, Math.exp(x.reduce((s, v, i) => s + v * beta[i], 0))));
       r.labOwn = +Math.max(0, (r.vown + 1) * mult - 1).toFixed(2); r.ownDelta = +(r.labOwn - r.vown).toFixed(1);
     }
-    if (ctx.chalkCurve !== false) classicChalk(R.filter(r => POS.includes(posOf(r))));
-    // ctx.only(r) false: the row keeps its own number (the model and the curve were fit on Stokastic's ownership; on ETR
+    if (ctx.chalkCurve !== false) classicChalk(R.filter(r => POS.includes(posOf(r))));    // ctx.only(r) false: the row keeps its own number (the model and the curve were fit on Stokastic's ownership; on ETR
     // and Blick numbers they over-shoot chalk, see CLASSIC_CHALK). Slate features above still see every row.
     if (ctx.only) for (const r of rows) if (!ctx.only(r)) { r.labOwn = r.vown; r.ownDelta = r.vown != null ? 0 : null; }
     return rows;

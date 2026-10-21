@@ -32,6 +32,7 @@ if (ENTRIES && fs.existsSync(ENTRIES)) {
   console.log(`${ENTRIES} not found; falling back to the largest contests`);
 }
 
+throw new Error("DraftKings requests disabled (account locked 10/17): nothing in Slate Lab contacts DraftKings");
 const j = await (await fetch(`https://www.draftkings.com/lobby/getcontests?sport=${SPORT}`)).json();
 const groups = (j.DraftGroups || []).map(g => ({
   id: g.DraftGroupId, start: g.StartDateEst, tag: g.DraftGroupTag, games: g.GameCount ?? null,

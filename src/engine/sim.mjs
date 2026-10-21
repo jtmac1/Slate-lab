@@ -14,8 +14,18 @@ import { paidCount } from "./payouts.mjs";
 // reported numbers: ROI toward the contest's rake level (x' = m + s(x - m), payout multiples), probabilities as
 // base * (p/base)^b. Order inside a run never changes. Values held out-of-sample in both directions (fit 2025 ->
 // 2026 and back); classic top-10% and cash were already calibrated (b ~1, changing them hurt) so they stay.
+// NBA classic (bench/fit-sim-calibration-nba.mjs, 2026-10-21, refit on the NBA_SPREAD default): 338 contests of 2025-26 (183K
+// entries, 149 dates) simmed in their real contests, two seeds, fitted on half the dates and checked on the other both ways.
+// ROI is overconfident only on slates of 5+ games: shrink 0.74 / 0.66 by seed there (each half 0.51-0.84), and held out it beat
+// raw on 5+ game slates in 8 of 8 seed x split directions; on 2-4 game slates (shrink ~1.0) every shrink did worse than raw in
+// most directions, so roiMinGames leaves them raw. win b 0.24 / 0.14 (held-out log loss -2% in 3 of 4), top-10% b 0.82 / 0.84
+// and cash 0.92 / 0.90 (held-out log loss better in 4 of 4, small). top-1% stays raw (b 0.42-0.90 between halves, held-out
+// worse in 2 of 4). nba_sd is raw. Fields of bigN+ (bench/fit-sim-calibration-nba-big.mjs, 242 contests 1,000-15,000, any fee) use big:
+// ROI shrink 0.69 on every slate size (2-4 game big fields shrink too, 0.73 / 0.68 seeds; beat current in 6 of 8 held-out directions;
+// no field-size trend held), win b 0.03 (sim win odds near-uninformative there; held-out log loss better than 0.19 in 8 of 8). top-1% stays raw (b 0.72, 6 of 8).
 // raw numbers stay on each row as r.raw; a.calibrate === false turns it off (the benches measure raw).
 export const CALIB = {
+  nba_cl: { roi: 0.7, roiMinGames: 5, win: 0.19, t10: 0.83, cash: 0.91, bigN: 1000, big: { roi: 0.69, win: 0.03 } },
   nfl_cl: { roi: 0.36, win: 0.05, t1: 0.36 },
   nfl_sd: { roi: 0.57, win: 0.05, t1: 0.42, t10: 0.6, cash: 0.8 }
 };
@@ -104,9 +114,9 @@ export function simulate(a) {
     const m = pay.reduce((s, x) => s + x, 0) / (entries * fee), base = { win: 1 / entries, t1: top1 / entries, t10: top10 / entries, cash: paidN / entries };
     for (const r of rows) {
       r.raw = { roi: r.roi, win: r.win, t1: r.t1, t10: r.t10, cash: r.cash };
-      const x = m + cal.roi * (r.ev / fee - m);
-      r.ev = x * fee; r.roi = (x - 1) * 100; if (r.se != null) r.se *= cal.roi;
-      for (const k of ["win", "t1", "t10", "cash"]) { const b = cal[k]; if (b == null || b === 1 || !(base[k] > 0)) continue; r[k] = Math.min(1, base[k] * Math.pow(Math.max(1e-9, r[k] / 100) / base[k], b)) * 100; }
+      const big = cal.bigN && entries >= cal.bigN ? cal.big : null, s = big && big.roi != null ? big.roi : cal.roiMinGames && (pool.games || []).length < cal.roiMinGames ? 1 : cal.roi, x = m + s * (r.ev / fee - m);
+      r.ev = x * fee; r.roi = (x - 1) * 100; if (r.se != null) r.se *= s;
+      for (const k of ["win", "t1", "t10", "cash"]) { const b = big && big[k] != null ? big[k] : cal[k]; if (b == null || b === 1 || !(base[k] > 0)) continue; r[k] = Math.min(1, base[k] * Math.pow(Math.max(1e-9, r[k] / 100) / base[k], b)) * 100; }
     }
   }
   const tot = rows.reduce((s, r) => s + r.ev, 0);

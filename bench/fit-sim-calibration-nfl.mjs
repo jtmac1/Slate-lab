@@ -19,7 +19,7 @@ const rowsOf = (season, fmt) => { const out = []; for (const rs of byC.values())
 
 function fitS(rows) { let sxy = 0, sxx = 0; for (const { r, m } of rows) { const x = 1 + r.roi / 100 - m, y = 1 + r.actROI / 100 - m; sxy += x * y; sxx += x * x; } return sxy / sxx; }
 function bootS(rows, reps = 300) { const byD = {}; for (const q of rows) (byD[q.r.date] = byD[q.r.date] || { sxy: 0, sxx: 0 }); for (const { r, m } of rows) { const d = byD[r.date], x = 1 + r.roi / 100 - m, y = 1 + r.actROI / 100 - m; d.sxy += x * y; d.sxx += x * x; }
-  const ds = Object.values(byD), out = []; let seed = 5; const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const ds = Object.values(byD), out = []; let seed = 5; const rnd = () => (seed = ((Math.imul(seed, 1103515245) + 12345) >>> 0) % 2147483648) / 2147483648;
   for (let b = 0; b < reps; b++) { let a = 0, c = 0; for (let i = 0; i < ds.length; i++) { const d = ds[Math.floor(rnd() * ds.length)]; a += d.sxy; c += d.sxx; } out.push(a / c); } out.sort((x, y) => x - y); return [out[Math.floor(reps * 0.05)], out[Math.floor(reps * 0.95)]]; }
 // log-likelihood of the outcomes under p' = base (p/base)^b, clipped
 function ll(rows, ev, b) { const [pk, ak] = EV[ev]; let s = 0; for (const { r } of rows) { const base = baseOf(r, ev); if (!(base > 0)) continue; const p = Math.min(0.999, Math.max(1e-6, base * Math.pow(Math.max(1e-6, r[pk] / 100) / base, b))); s += r[ak] ? Math.log(p) : Math.log(1 - p); } return s; }

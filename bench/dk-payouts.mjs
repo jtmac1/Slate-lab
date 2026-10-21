@@ -11,6 +11,7 @@ const LIM = flag("n") || 12;
 
 // one payout per finishing position, in units of the entry fee
 export async function dkPayouts(contestId, fee) {
+  throw new Error("DraftKings requests disabled (account locked 10/17): nothing in Slate Lab contacts DraftKings");
   const r = await fetch(`https://api.draftkings.com/contests/v1/contests/${contestId}?format=json`,
     { headers: { accept: "application/json" } });
   if (!r.ok) return null;

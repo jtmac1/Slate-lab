@@ -72,6 +72,11 @@ const DUPE = { cfb: [0.124, 0.156, 0.273] };
 // (298 contests, rms residual 0.05; bench/sd-dupes-real.mjs, bench/fit-dupes-sd.mjs --fit): 0.28 at 300 entries, 0.43 at 1,300, 0.54 at 4,000, 0.68 at 16,000.
 export const SD_DUPE = { a: -0.298, b: 0.1011, max: 0.85 };
 export const sdDupeShare = n => Math.max(0, Math.min(SD_DUPE.max, SD_DUPE.a + SD_DUPE.b * Math.log(Math.max(2, n))));
+// NBA classic field (bench/fit-field-nba.mjs, 352 real 2025-26 fields, 2026-10-21): real entries spend $49,864 on average and
+// 96% leave under $500, where a $49,000 floor builds $49,549 with 40% under $49,500; a $49,700 floor matches salary and leaves
+// exposure, ownership sum and rank grading unchanged. conc 1.5 matches real chalk (0.98x vs 0.81x) but costs the sim lineup
+// rank correlation (-0.037, se 0.004) with no money gain, so conc stays 1.0; skill mixtures and forced copies graded worse or flat.
+export const NBA_CL_FIELD = { conc: 1.0, minSal: 49700 };
 export const nflDupeFloor = games => games >= 10 ? 0.019 : games >= 5 ? 0.032 : 0;
 export function dupeTarget(n, sport, floorOnly) {
   const d = DUPE[sport]; if (d) return n < 300 ? d[0] : n < 1500 ? d[1] : d[2];

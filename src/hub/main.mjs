@@ -13,11 +13,11 @@ const LS = "slatelab:hub";
 const saved = (() => { try { return JSON.parse(localStorage.getItem(LS) || "{}"); } catch { return {}; } })();
 const persist = () => { try { localStorage.setItem(LS, JSON.stringify({ date: S.date, type: S.type, slateId: S.slateId, dir: S.dir, tab: S.tab, view: S.view })); } catch {} };
 const nextSlateDate = () => { const d = new Date(), dow = d.getDay(); if (dow >= 2 && dow <= 6) d.setDate(d.getDate() + (7 - dow)); return d.toLocaleString("sv-SE").slice(0, 10); };
-const S = { view: ["hub", "entries", "review", "sim", "gen"].includes(saved.view) ? saved.view : "hub", date: saved.date || nextSlateDate(), type: saved.type === "SHOWDOWN" ? "SHOWDOWN" : "CLASSIC", slateId: saved.slateId || null, dir: saved.dir || null, slates: [], dirs: [], hub: null, tab: saved.tab || "players", q: "", pos: "ALL", sort: { k: "lab", d: -1 }, busy: false, steps: [], msg: "", err: false, showAll: false, slatesErr: "", changes: null, notes: null };
+const S = { view: ["hub", "contests", "entries", "review", "sim", "gen"].includes(saved.view) ? saved.view : "hub", date: saved.date || nextSlateDate(), type: saved.type === "SHOWDOWN" ? "SHOWDOWN" : "CLASSIC", slateId: saved.slateId || null, dir: saved.dir || null, slates: [], dirs: [], hub: null, tab: saved.tab || "players", q: "", pos: "ALL", sort: { k: "lab", d: -1 }, busy: false, steps: [], msg: "", err: false, showAll: false, slatesErr: "", changes: null, notes: null };
 initEntries(S); initSim(S); initGen(S);
 // every tab is rebuilt; "Old app" keeps the previous build reachable
-// no Contests tab: a record by contest family measures the old process, not the new one (user, 2026-10-02)
-const VIEWS = [["hub", "Data Hub", "Data Hub", true], ["gen", "Contest Generator", "Generator", true], ["sim", "Pre-Contest Simulator", "Simulator", true], ["entries", "Entries", "Entries", true], ["review", "Review", "Review", true], ["old", "Old app", "Old app"]];
+// Contests is the contest picker (2026-10-14), not the old record-by-family view he dropped on 2026-10-02
+const VIEWS = [["hub", "Data Hub", "Data Hub", true], ["gen", "Contest Generator", "Generator", true], ["sim", "Pre-Contest Simulator", "Simulator", true], ["contests", "Contests", "Contests", true], ["entries", "Entries", "Entries", true], ["review", "Review", "Review", true], ["old", "Old app", "Old app"]];
 const api = async (p, opts) => { const r = await fetch(p, opts); const j = await r.json().catch(() => ({ error: r.statusText })); if (!r.ok) throw new Error(j.error || r.statusText); return j; };
 const f1 = v => v == null || isNaN(v) ? "—" : (+v).toFixed(1);
 const f0 = v => v == null || isNaN(v) ? "—" : (+v).toFixed(0);
@@ -176,7 +176,7 @@ function watchPull() {
   }, 3000);
 }
 function steps() { if (!S.steps.length) return ""; return `<div class="steps">${S.steps.map(s => `<span class="${s.ok ? "ok" : "bad"}">${s.ok ? "✓" : "✗"} ${esc(s.name)} ${s.ok ? esc(stepInfo(s)) : esc(s.error)} <span class="mini">${(s.ms / 1000).toFixed(1)}s</span></span>`).join("")}</div>`; }
-function stepInfo(s) { const i = s.info || {}; if (s.name === "stokastic") return `${i.projected} projected, ${i.changed ? "new numbers" : "unchanged"}`; if (s.name === "pinnacle") return `${i.games} games, ${i.props} props`; if (s.name === "ingest") return i.copied.length ? i.copied.join("; ") : "nothing new in Downloads"; if (s.name === "injuries") return `${i.notActive} flagged`; if (s.name === "merge") return `${i.rows.length} players`; return ""; }
+function stepInfo(s) { const i = s.info || {}; if (s.name === "stokastic") return `${i.projected} projected, ${i.changed ? "new numbers" : "unchanged"}`; if (s.name === "pinnacle") return `${i.games} games, ${i.props} props`; if (s.name === "ingest") return i.copied.length ? i.copied.join("; ") : "nothing new in Downloads"; if (s.name === "injuries") return `${i.notActive} flagged`; if (s.name === "free") return `${i.games} game${i.games === 1 ? "" : "s"}: weather${i.daily ? " + routes + coverage" : ", routes/coverage from today's pull"}`; if (s.name === "merge") return `${i.rows.length} players`; return ""; }
 function srcStrip() {
   const H = S.hub; if (!H) return "";
   const s = H.sources, box = (cls, name, line, sub) => `<div class="src ${cls}" data-src="${{ Stokastic: "stokastic", ETR: "etr", Blick: "blick", Pinnacle: "pinnacle", ESPN: "espn" }[name]}" role="button" tabindex="0" title="Click to refresh ${name} only"><i></i><div><b>${name}</b> ${line}<small>${sub}</small></div></div>`;

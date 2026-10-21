@@ -11,10 +11,10 @@ import { nrm, parseCSV } from "../src/engine/csv.mjs";
 import { buildPool, FORMATS } from "../src/engine/formats.mjs";
 import { listPost, readPost } from "./post-store.mjs";
 import { recoverContest } from "../src/engine/recover.mjs";
-import { buildModel, CSAME, COPP, MLBC, SIGMA_DEF, SIGMA_MAX } from "../src/engine/model.mjs";
+import { buildModel, CSAME, COPP, MLBC, NBAC, SIGMA_DEF, SIGMA_MAX } from "../src/engine/model.mjs";
 import { simulate, playerROI } from "../src/engine/sim.mjs";
 import { fitPayouts, paidCount } from "../src/engine/payouts.mjs";
-import { fieldProfile, genField } from "../src/engine/field.mjs";
+import { fieldProfile, genField, NBA_CL_FIELD } from "../src/engine/field.mjs";
 import { stackOf, stackTeams, sigOf, salOf, ownSum, assignSlots } from "../src/engine/lineups.mjs";
 import { mulberry32 } from "../src/engine/rng.mjs";
 import { featurize, gradeRules, spearman, RULES } from "../src/engine/select.mjs";
@@ -80,7 +80,7 @@ export function listContests() {
   if (fs.existsSync("data/post")) for (const sport of fs.readdirSync("data/post").sort()) {
     for (const file of listPost(sport)) {
       const j = readPost(file), c = j.contest; if (j.lineupsSkipped || !j.lineups.length) continue;
-      const fkey = sport === "mlb" ? "mlb_cl" : sport === "cfb" ? "cfb_cl" : /showdown/i.test(c.type) ? "nfl_sd" : "nfl_cl";
+      const sd = /showdown/i.test(c.type), fkey = sport === "mlb" ? "mlb_cl" : sport === "cfb" ? "cfb_cl" : sport === "nba" ? (sd ? "nba_sd" : "nba_cl") : sd ? "nfl_sd" : "nfl_cl";
       out.push({ dir: `post/${sport}/${path.basename(file).replace(/\.json(\.gz)?$/, "")}`, sport, fkey, date: c.date, json: file, name: c.name, fee: c.fee, entries: c.entries, key: c.key, tier: feeTier(c.fee), size: fieldSize(c.entries), cap: c.maxEntries != null ? c.maxEntries : capFromName(c.name) });
     }
   }
@@ -91,10 +91,10 @@ export function listContests() {
 // by DK player id. Pool ownership is the PROJECTED ownership (what the app has at lock);
 // actual ownership is kept as actOwn.
 export function loadPulled(file) {
-  const j = readPost(file), c = j.contest, f = FORMATS[c.sport === "MLB" ? "mlb_cl" : c.sport === "CFB" ? "cfb_cl" : /showdown/i.test(c.type) ? "nfl_sd" : "nfl_cl"];
+  const j = readPost(file), c = j.contest, f = FORMATS[c.sport === "MLB" ? "mlb_cl" : c.sport === "CFB" ? "cfb_cl" : c.sport === "NBA" ? (/showdown/i.test(c.type) ? "nba_sd" : "nba_cl") : /showdown/i.test(c.type) ? "nfl_sd" : "nfl_cl"];
   const P = [], byId = {}, sd = !!f.mult;
   // showdown: the API lists a CPT row and a FLEX row per player (positions "CPT"/"FLEX"); real positions from the NFL reference
-  const ref = sd ? refLookup("data/nfl-ref", c.date, false) : null;
+  const ref = sd && f.sport === "nfl" ? refLookup("data/nfl-ref", c.date, false) : null;
   for (const q of j.players) {
     const slot = String(q.pos || "").toUpperCase();
     // the CPT row carries the 1.5x salary and projection; the FLEX row is the base
@@ -179,7 +179,7 @@ export function gradeContest(c, opts = {}) {
   if (opts.genField) {
     // the app's situation: real entries scored against a GENERATED field (not against each other),
     // in batches like a multi-entry user, so the field generator is part of what gets graded
-    const f = pool.format, opt = Object.assign({ conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3 }, f.sport === "mlb" ? mlbStackOpt() : { nflStacks: NFL_DEF }, fieldProfile(c.fee, f.key, entries.length), opts.gen || {});
+    const f = pool.format, opt = Object.assign({ conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3 }, f.sport === "mlb" ? mlbStackOpt() : { nflStacks: NFL_DEF }, f.key === "nba_cl" ? NBA_CL_FIELD : {}, fieldProfile(c.fee, f.key, entries.length), opts.gen || {});
     // oracleOwn: build the field on ACTUAL ownership instead of projected - an upper bound on what a perfect ownership projection would buy
     const gpool = opts.gen && opts.gen.oracleOwn ? Object.assign({}, pool, { players: P.map(q => Object.assign({}, q, { own: q.actOwn != null ? q.actOwn : q.own, fown: q.actOwn != null ? q.actOwn : q.fown })) }) : pool;
     const gen = genField(gpool, N, opt, mulberry32(SEED)).field, B = opts.batch || 50, rows = [];
@@ -198,7 +198,7 @@ export function gradeContest(c, opts = {}) {
     "Sim ROI, skip max-projection lineup": f => f.rProj >= 0.999 ? -1e9 : f.roi };
   if (opts.genField) Object.assign(extra, { "Sim ROI, no expected copies": f => f.dupN > 0 ? -1e9 + f.rROI : f.roi, "Gated top half, no expected copies": f => (f.rProj >= 0.5 && f.dupN === 0) ? f.roi : -1e9 + f.rProj, "Sim ROI minus 15pp per expected copy": f => f.roi - 15 * f.dupN, "Gated top half minus 15pp per copy": f => f.rProj >= 0.5 ? f.roi - 15 * f.dupN : -1e9 + f.rProj });
   const grades = gradeRules(feats, paid, extra);
-  const entryRows = opts.rows ? (() => { const chalk = new Set(P.map((q, i) => i).filter(i => !P[i].isP).sort((a, b) => P[b].own - P[a].own).slice(0, 10)); return feats.map((f, i) => { const e = entries[i], r = res.rows[i], st = stackTeams(e.lu, P, pool.format), pits = e.lu.map(id => P[id]).filter(q => q.isP); return { c: c.dir, date: c.date, fee: c.fee, N, paid, user: e.user, rROI: f.rROI, rProj: f.rProj, rCash: f.rCash, rT10: f.rT10, rLowOwn: f.rLowOwn, roi: r.roi, cash: r.cash, t10: r.t10, win: r.win, own: e.own, primary: st.length ? st[0][1] : 0, secondary: st.length > 1 ? st[1][1] : 0, teams: st.filter(x => x[1] >= 1).length, chalkN: e.lu.filter(id => chalk.has(id)).length, pitMax: pits.length ? Math.max(...pits.map(q => q.own || 0)) : 0, pitMin: pits.length ? Math.min(...pits.map(q => q.own || 0)) : 0, salLeft: (pool.format.cap || 50000) - e.sal, stkROI: e.stkROI, actROI: e.actROI, finishPct: (e.finish - 1) / Math.max(1, N - 1), top10: e.finish <= Math.max(1, Math.round(N * 0.1)) ? 1 : 0, cashed: e.finish <= paid ? 1 : 0, t1: r.t1, fkey: c.fkey, finish: e.finish, top1: e.finish <= Math.max(1, Math.round(N * 0.01)) ? 1 : 0, won: e.finish === 1 ? 1 : 0 }; }); })() : null;
+  const entryRows = opts.rows ? (() => { const chalk = new Set(P.map((q, i) => i).filter(i => !P[i].isP).sort((a, b) => P[b].own - P[a].own).slice(0, 10)); return feats.map((f, i) => { const e = entries[i], r = res.rows[i], st = stackTeams(e.lu, P, pool.format), pits = e.lu.map(id => P[id]).filter(q => q.isP); return { c: c.dir, date: c.date, fee: c.fee, N, paid, user: e.user, rROI: f.rROI, rProj: f.rProj, rCash: f.rCash, rT10: f.rT10, rLowOwn: f.rLowOwn, roi: r.roi, cash: r.cash, t10: r.t10, win: r.win, own: e.own, primary: st.length ? st[0][1] : 0, secondary: st.length > 1 ? st[1][1] : 0, teams: st.filter(x => x[1] >= 1).length, chalkN: e.lu.filter(id => chalk.has(id)).length, pitMax: pits.length ? Math.max(...pits.map(q => q.own || 0)) : 0, pitMin: pits.length ? Math.min(...pits.map(q => q.own || 0)) : 0, salLeft: (pool.format.cap || 50000) - e.sal, stkROI: e.stkROI, actROI: e.actROI, finishPct: (e.finish - 1) / Math.max(1, N - 1), top10: e.finish <= Math.max(1, Math.round(N * 0.1)) ? 1 : 0, cashed: e.finish <= paid ? 1 : 0, t1: r.t1, fkey: c.fkey, games: pool.games.length, finish: e.finish, top1: e.finish <= Math.max(1, Math.round(N * 0.01)) ? 1 : 0, won: e.finish === 1 ? 1 : 0 }; }); })() : null;
   // set-level candidate: the gated ranking, but no two picks share a primary stack team (portfolio spread)
   {
     const k10 = Math.max(3, Math.round(N * 0.1)), scoreG = feats.map(f => f.rProj >= 0.5 ? f.roi : -1e9 + f.rProj), order = feats.map((f, i) => i).sort((a, b) => scoreG[b] - scoreG[a]);
@@ -250,7 +250,7 @@ export function fieldCheck(c, opts = {}) {
     if (kept.length >= rc.entries.length * 0.8) { pool = pp; entries = kept; }
   }
   const P = pool.players, f = pool.format, N = entries.length, real = entries.map(e => e.lu);
-  const opt = Object.assign({ conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3 }, f.sport === "mlb" ? mlbStackOpt() : { nflStacks: NFL_DEF }, fieldProfile(c.fee, f.key, entries.length), opts.gen || {});
+  const opt = Object.assign({ conc: 1.0, minSal: 49000, boost: 1.0, rounds: 3 }, f.sport === "mlb" ? mlbStackOpt() : { nflStacks: NFL_DEF }, f.key === "nba_cl" ? NBA_CL_FIELD : {}, fieldProfile(c.fee, f.key, entries.length), opts.gen || {});
   const t0 = Date.now(), gen = genField(pool, N, opt, mulberry32(SEED)).field, ms = Date.now() - t0;
   const dist = lus => { const d = {}; for (const l of lus) { const k = stackOf(l, P, f); d[k] = (d[k] || 0) + 1 / lus.length; } return d; };
   const dr = dist(real), dg = dist(gen), keys = [...new Set(Object.keys(dr).concat(Object.keys(dg)))];
@@ -279,7 +279,7 @@ export function printSummary(rows) {
   const names = rows.length ? Object.keys(rows[0].grades) : Object.keys(RULES).concat(["Stokastic ROI"]);
   printByAttr(rows, "tier", "entry fee", ["<$50", "$50-199", "$200-599", "$600+"]);
   printByAttr(rows, "size", "field size", ["<300", "300-1.5K", "1.5K-10K", "10K+"]);
-  for (const fkey of ["mlb_cl", "nfl_cl", "nfl_sd"]) {
+  for (const fkey of ["mlb_cl", "nfl_cl", "nfl_sd", "nba_cl", "nba_sd"]) {
     const rs = rows.filter(r => r.fkey === fkey); if (!rs.length) continue;
     console.log(`\n=== ${fkey}: ${rs.length} contests ===`);
     console.log("contest".padEnd(40) + "N     paid  StkROI  MyROI  Proj   Agree | cash Stk/Me/rand  | top10% Stk / Me / field | playerROI Stk/Me");
@@ -320,8 +320,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const SIGREF = flag("sigref");   // sigma scaled by (proj/ref)^tilt, graded against a flat sigma
   const CHOLMAX = flag("cholmax");   // force the factor model (0) or the pairwise matrix (large), as the app would use them
   const CTFILE = (args.find(a => a.startsWith("--ctable=")) || "").slice(9), CT = CTFILE ? JSON.parse(fs.readFileSync(CTFILE, "utf8")) : null;
-  // --bust: zero-inflated draw (model.mjs BUST), or --bust=<file> with a {hit, pit} table from bench/fit-bust-mlb.mjs
-  const BUSTARG = args.find(a => a === "--bust" || a.startsWith("--bust=")), BUSTF = !BUSTARG ? null : BUSTARG === "--bust" ? true : (b => ({ hit: b.hit, pit: b.pit }))(JSON.parse(fs.readFileSync(BUSTARG.slice(7), "utf8")));
+  // --bust: zero-inflated draw (model.mjs BUST), or --bust=<file> with a {hit, pit} table from bench/fit-bust-mlb.mjs, or a per-position
+  // table ({ table: { RB: {a, b, ref, max}, ... } }, bench/fit-dist-nfl.mjs)
+  const BUSTARG = args.find(a => a === "--bust" || a.startsWith("--bust=")), BUSTF = !BUSTARG ? null : BUSTARG === "--bust" ? true : (b => b.hit || b.pit ? { hit: b.hit, pit: b.pit } : b.table || b)(JSON.parse(fs.readFileSync(BUSTARG.slice(7), "utf8")));
   const nflSigma = Object.assign({}, SIGMA_DEF.nfl), cfbSigma = Object.assign({}, SIGMA_DEF.cfb);
   // --sigscale=1.2 (both formats) or --sigscale=cl:1.2,sd:1.1: multiply the NFL sigma tables (bench/sim-calibration-nfl.mjs sweeps it)
   const SIGSCALERAW = (args.find(a => a.startsWith("--sigscale=")) || "").slice(11), SIGSC = !SIGSCALERAW ? null : SIGSCALERAW.includes(":") ? Object.fromEntries(SIGSCALERAW.split(",").map(kv => { const [k, v] = kv.split(":"); return [k, +v]; })) : { cl: +SIGSCALERAW, sd: +SIGSCALERAW };
@@ -331,15 +332,19 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const scaleT = t => CORR != null ? Object.fromEntries(Object.entries(t).map(([k, v]) => [k, v * CORR])) : t;
   const sigmaDef = Object.assign({}, SIGMA_DEF.mlb); if (HSIG != null) for (const k of ["C", "1B", "2B", "3B", "SS", "OF"]) sigmaDef[k] = HSIG; if (PSIG != null) for (const k of ["P", "SP", "RP"]) sigmaDef[k] = PSIG;
   const isNFL = /nfl|cfb/.test(FILTER);   // football: --nflsig positions apply to CFB too (its base table is SIGMA_DEF.cfb)
-  const MODEL = (SIGSC || LOADT || PROJTILT != null || SIGTILT != null || CHOLMAX != null || HS != null || HSIG != null || PSIG != null || SMAX != null || NFLSIG || CORR != null || CT || BUSTF) ? { tables: { CSAME: Object.assign({}, scaleT(CSAME), (CT || {}).CSAME || {}), COPP: Object.assign({}, scaleT(COPP), (CT || {}).COPP || {}), MLBC: Object.assign({}, MLBC, (CT || {}).MLBC || {}, HS != null ? { hitSame: HS } : {}) }, sigmaBy: { mlb: sigmaDef, nfl: nflSigma, nfl_sd: sdSigma, cfb: cfbSigma }, sigmaMax: SMAX != null ? SMAX : SIGMA_MAX, cholMax: CHOLMAX != null ? CHOLMAX : undefined, load: LOADT || undefined, sigmaTilt: SIGTILT != null ? SIGTILT : undefined, sigmaTiltRef: SIGREF != null ? SIGREF : undefined, projTilt: PROJTILT != null ? PROJTILT : undefined, bust: BUSTF || undefined } : null;
+  const MODEL = (SIGSC || LOADT || PROJTILT != null || SIGTILT != null || CHOLMAX != null || HS != null || HSIG != null || PSIG != null || SMAX != null || NFLSIG || CORR != null || CT || BUSTF) ? { tables: { CSAME: Object.assign({}, scaleT(CSAME), (CT || {}).CSAME || {}), COPP: Object.assign({}, scaleT(COPP), (CT || {}).COPP || {}), MLBC: Object.assign({}, MLBC, (CT || {}).MLBC || {}, HS != null ? { hitSame: HS } : {}), NBAC: scaleT(NBAC) }, sigmaBy: { mlb: sigmaDef, nfl: nflSigma, nfl_sd: sdSigma, cfb: cfbSigma }, sigmaMax: SMAX != null ? SMAX : SIGMA_MAX, cholMax: CHOLMAX != null ? CHOLMAX : undefined, load: LOADT || undefined, sigmaTilt: SIGTILT != null ? SIGTILT : undefined, sigmaTiltRef: SIGREF != null ? SIGREF : undefined, projTilt: PROJTILT != null ? PROJTILT : undefined, bust: BUSTF || undefined } : null;
   // --genfield [--batch=50] [--dupecap] [--minfee=200]: grade the generator too (real entries vs a generated field)
   // --vendor: grade on the recovered Stokastic pre-lock file (vendor Std Dev path) when bench/stk-vendor-files.mjs found one
   const NOSD = args.includes("--nosd");   // with --vendor: same file, but default sigmas instead of its Std Dev
   const VENDOR = args.includes("--vendor"), vendorMap = VENDOR ? Object.fromEntries(fs.readdirSync("data/vendor").flatMap(k => { const m = path.join("data/vendor", k, "map.json"); return fs.existsSync(m) ? Object.entries(JSON.parse(fs.readFileSync(m, "utf8"))) : []; })) : {};
   const ROWS = (args.find(a => a.startsWith("--rows=")) || "").slice(7); if (ROWS) fs.writeFileSync(ROWS, "");
-  const GENFIELD = args.includes("--genfield"), BATCH = flag("batch") || 50, MINFEE = flag("minfee") || 0, MAXFEE = flag("maxfee") || 1e9, MAXN = flag("maxentries") || 1e9, ORACLE = args.includes("--oracleown"), SHARD = (args.find(a => a.startsWith("--shard=")) || "").slice(8).split("/").map(Number);
+  const GENFIELD = args.includes("--genfield"), BATCH = flag("batch") || 50, MINFEE = flag("minfee") || 0, MAXFEE = flag("maxfee") || 1e9, MAXN = flag("maxentries") || 1e9, MINN = flag("minentries") || 0, ORACLE = args.includes("--oracleown"), SHARD = (args.find(a => a.startsWith("--shard=")) || "").slice(8).split("/").map(Number);
+  // --mopt=<json file>: extra buildModel options merged over the rest (e.g. NBA spread/game-factor candidates, bench/fit-spread-nba.mjs)
+  const MOPTF = (args.find(a => a.startsWith("--mopt=")) || "").slice(7), MOPT = MOPTF ? JSON.parse(fs.readFileSync(MOPTF, "utf8")) : null;
+  if (MOPT) console.log("model options: " + JSON.stringify(MOPT));
   if (MODEL) console.log(`model overrides:${CT ? ` fitted correlations from ${CTFILE} (${Object.keys(CT.CSAME || {}).length} same-team, ${Object.keys(CT.COPP || {}).length} opposing)` : ""} MLB hitSame ${MODEL.tables.MLBC.hitSame} hitter ${sigmaDef.OF} pitcher ${sigmaDef.P} | NFL ${JSON.stringify(nflSigma)} | CFB ${JSON.stringify(cfbSigma)} | corr x${CORR != null ? CORR : 1} sigmaMax ${MODEL.sigmaMax}${SIGTILT != null ? ` | sigma tilt ${JSON.stringify(SIGTILT)} around ${SIGREF || 11.5}` : ``}${PROJTILT != null ? ` | proj tilt ${PROJTILT}` : ``}`);
-  const contests = listContests().filter(c => (!FILTER || c.dir.includes(FILTER) || c.fkey.includes(FILTER)) && (!MINFEE || (c.fee || 0) >= MINFEE) && ((c.fee || 0) <= MAXFEE) && ((c.entries || 0) <= MAXN));
+  const FKEY = (args.find(a => a.startsWith("--fkey=")) || "").slice(7);   // --fkey=nfl_cl: one format, with FILTER as a date/dir prefix
+  const contests = listContests().filter(c => (!FKEY || c.fkey === FKEY) && (!FILTER || c.dir.includes(FILTER) || c.fkey.includes(FILTER)) && (!MINFEE || (c.fee || 0) >= MINFEE) && ((c.fee || 0) <= MAXFEE) && ((c.entries || 0) <= MAXN) && ((c.entries || 0) >= MINN));
   // --shard=k/n: take every n-th contest starting at k (0-based) so several processes can split a run; merge with bench/merge-json.mjs
   const shardList = SHARD.length === 2 && SHARD[1] > 1 ? contests.filter((c, i) => i % SHARD[1] === SHARD[0]) : contests;
   if (shardList !== contests) console.log(`shard ${SHARD[0]}/${SHARD[1]}: ${shardList.length} of ${contests.length} contests`);
@@ -357,7 +362,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const rows = [];
   for (const c of shardList) {
     if (VENDOR && !vendorMap[c.key]) continue;   // only contests with a vendor file, so A/B runs pair up
-    const r = gradeContest(c, Object.assign({ iters: ITERS }, VENDOR ? { proj: vendorMap[c.key].file } : {}, MODEL ? { model: MODEL } : {}, NOSD ? { model: Object.assign({}, MODEL || {}, { ignoreFileSigma: true }) } : {}, args.includes("--dkpay") ? { dkPay: true } : args.includes("--fitpay") ? { fitPay: true } : args.includes("--fitpay-name") ? { fitPay: "name" } : {}, GENFIELD ? { genField: true, batch: BATCH, gen: Object.assign({}, DUPECAP ? { dupeCap: true } : {}, CONC != null ? { conc: CONC } : {}, DUPEFLOOR != null ? { dupeFloor: dupeFloorOpt } : {}, SECSTACK ? { secStack: true } : {}, BEST ? { best: BEST } : {}, SKILL ? { skill: SKILL } : {}, SHARPFRAC != null ? { sharpFrac: SHARPFRAC } : {}, MINSAL ? { minSal: MINSAL } : {}, ORACLE ? { oracleOwn: true } : {}) } : {}, ROWS ? { rows: true } : {})); rows.push(r);
+    const r = gradeContest(c, Object.assign({ iters: ITERS }, VENDOR ? { proj: vendorMap[c.key].file } : {}, MODEL || MOPT ? { model: Object.assign({}, MODEL || {}, MOPT || {}) } : {}, NOSD ? { model: Object.assign({}, MODEL || {}, { ignoreFileSigma: true }) } : {}, args.includes("--dkpay") ? { dkPay: true } : args.includes("--fitpay") ? { fitPay: true } : args.includes("--fitpay-name") ? { fitPay: "name" } : {}, GENFIELD ? { genField: true, batch: BATCH, gen: Object.assign({}, DUPECAP ? { dupeCap: true } : {}, CONC != null ? { conc: CONC } : {}, DUPEFLOOR != null ? { dupeFloor: dupeFloorOpt } : {}, SECSTACK ? { secStack: true } : {}, BEST ? { best: BEST } : {}, SKILL ? { skill: SKILL } : {}, SHARPFRAC != null ? { sharpFrac: SHARPFRAC } : {}, MINSAL ? { minSal: MINSAL } : {}, ORACLE ? { oracleOwn: true } : {}) } : {}, ROWS ? { rows: true } : {})); rows.push(r);
     if (ROWS && r.entryRows) { fs.appendFileSync(ROWS, r.entryRows.map(x => JSON.stringify(x)).join("\n") + "\n"); delete r.entryRows; }
     console.log(`\n=== ${c.dir} [${c.fkey}] ===`);
     console.log(`  ${r.N} entries of ${r.rows} rows, ${r.paid} paid, field ROI ${r.fieldROI.toFixed(0)}%; ${r.players} players, ${r.teams} teams, ${r.games} games; unmatched ${r.unmatched.length}${r.unmatched.length ? " (" + r.unmatched.slice(0, 5).join(", ") + ")" : ""}; projection residual ${r.resid.toFixed(2)} FP/lineup; sim ${r.ms} ms`);
@@ -366,5 +371,5 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   }
   printSummary(rows);
   // --json=<file>: keep per-contest grades so selection rules can be analysed without re-simming
-  if (JSON_OUT) fs.writeFileSync(JSON_OUT, JSON.stringify(rows.map(r => ({ dir: r.dir, fkey: r.fkey, date: r.date, fee: r.fee, tier: r.tier, size: r.size, src: r.src, resid: r.resid, N: r.N, paid: r.paid, fieldROI: r.fieldROI, sStk: r.sStk, sMine: r.sMine, roiStk: r.roiStk, roiMine: r.roiMine, pStk: r.pStk, pMine: r.pMine, agree: r.agree, cashStk: r.cashStk, cashMine: r.cashMine, grades: r.grades }))));
+  if (JSON_OUT) fs.writeFileSync(JSON_OUT, JSON.stringify(rows.map(r => ({ dir: r.dir, fkey: r.fkey, date: r.date, games: r.games, fee: r.fee, tier: r.tier, size: r.size, src: r.src, resid: r.resid, N: r.N, paid: r.paid, fieldROI: r.fieldROI, sStk: r.sStk, sMine: r.sMine, roiStk: r.roiStk, roiMine: r.roiMine, pStk: r.pStk, pMine: r.pMine, agree: r.agree, cashStk: r.cashStk, cashMine: r.cashMine, grades: r.grades }))));
 }

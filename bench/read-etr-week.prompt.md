@@ -21,6 +21,11 @@ report read OK, except the data tables (dvp, xfp, proe), Write {{WINDIR}}\reads\
   Show transcripts mishear names ("Kurt Cousins", "Drake May", "Trey Harris"): spell every player as in
   data/{{DIR}}/ETR-main-{{DATE}}.csv, and when you give a team, use that file's team for him (players change teams; never
   go from memory). For context sources (see step 5) write facts only, in DFS terms, no season-long rankings or start/sit.
+  ALL-GAMES FILE, for the week-wide articles only (ids matchups, ol-dl, snaps-pace, rundown, strength, leone-wrte, leone-rb):
+  ALSO Write {{WINDIR}}\reads\<id>-allgames.md with the same two header lines, then one section per game the article
+  covers, EVERY game of the week, not just this slate (Thursday, Sunday night and Monday night games included), each headed
+  exactly "## AWAY@HOME" with team abbreviations (e.g. "## BUF@LAR"), then 2-8 "- " lines of that game's DFS takes. Showdown
+  reads later in the week reuse these sections instead of re-reading the article, so don't skip games off this slate.
 Saving files: Read a file before overwriting it. Write only under data/{{DIR}}/. File tools must use this exact Windows
 path form with BACKSLASHES (forward-slash paths are denied by the permission rules):  {{WINDIR}}\slate-guide.json
 

@@ -13,6 +13,7 @@ import { simulate, playerROI } from "../src/engine/sim.mjs";
 import { scriptCollector, lineupScripts } from "../src/engine/portfolio.mjs";
 import { fitPayouts, paidCount } from "../src/engine/payouts.mjs";
 import { buildLineups } from "../src/engine/build.mjs";
+import { optimizeLineups } from "../src/engine/optimizer.mjs";
 import { mulberry32 } from "../src/engine/rng.mjs";
 import { sigOf, salOf, ownSum, stackTeams } from "../src/engine/lineups.mjs";
 import { loadPool, keyOf, ownOf, cptOf, projOf, prizesFromName } from "./foursim.mjs";
@@ -284,6 +285,16 @@ export function runSim(dir, cfg = {}) {
     if (r.err) throw new Error(r.err); if (!r.lineups.length) throw new Error("the builder produced no lineups");
     lus = r.lineups; source = `built (${lus.length})`;
   }
+  // optimizer (src/engine/optimizer.mjs, user 2026-10-15): its candidates are simmed in the same run as the pool, so they are
+  // ranked against what the generator built; cfg.optimizer = settings ({} for the defaults), QB tilt from data/reports/qb-matchups-nfl.json
+  const optMeta = new Map();
+  if (cfg.optimizer && !sd) {
+    const gp = fieldPool(L, { ownSrc: F.cfg.ownSrc === "all" ? "auto" : F.cfg.ownSrc, projSrc: "lab", contest: F.cfg.contest }), qm = readJ("data/reports/qb-matchups-nfl.json");
+    const r = optimizeLineups(gp, Object.assign({}, cfg.optimizer, { qbMatchups: qm && qm.current ? qm.current.defs : {} }), mulberry32(41 + (+cfg.seed || 0)));
+    if (r.err && !r.lineups.length) throw new Error(r.err);
+    const have = new Set(lus.map(lu => sigOf(lu, f))); r.lineups.forEach((lu, k) => { const sg = sigOf(lu, f); optMeta.set(sg, r.meta[k]); if (!have.has(sg)) { lus.push(lu); have.add(sg); } });
+    source += ` + optimizer (${r.lineups.length})`;
+  }
   // payouts: the picked contest's prize pool and first place (from the lobby and its name), scaled to the pool when the
   // pool is smaller than the contest; with no contest, a pool-sized contest at 15% rake, percent to first, 20% paid
   const LB = lobby(), cid = cfg.cid || (F.cfg.contest && F.cfg.contest.cid) || null, c0 = cid ? LB.get(String(cid)) : null, c = c0 && c0.fee > 0 && c0.field > 0 && c0.field < 1e6 ? c0 : null, fee = c ? c.fee : (+cfg.fee || 20);
@@ -333,6 +344,7 @@ export function runSim(dir, cfg = {}) {
     e.notes = matchNotes(pl, ctx.guide, sd); e.theses = e.notes.theses;
     const ck = e.checks.find(x => x.id === "sim_top_half"); if (ck) { ck.pass = null; ck.detail = "pre-contest sim: " + srcs.map(s => `${s} ${by[s].roi}%`).join(", "); }
     if (wins) e.wins = wins[k];
+    const om = optMeta.get(sigOf(lu, f)); if (om) e.opt = om;
     verdictOf(e); return e;
   });
   for (const s of srcs) { const order = rows.map((e, i) => i).sort((a, b) => rows[b].sim[s].roi - rows[a].sim[s].roi); order.forEach((i, r) => { rows[i].sim[s].rank = r + 1; }); }

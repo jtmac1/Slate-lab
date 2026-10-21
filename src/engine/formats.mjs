@@ -18,7 +18,15 @@ export const FORMATS = {
     flexPos: ["RB", "WR"], sflexPos: ["QB", "RB", "WR"], minGames: 2 },
   mlb_cl: { key: "mlb_cl", label: "MLB Classic", sport: "mlb",
     slots: ["P", "P", "C", "1B", "2B", "3B", "SS", "OF", "OF", "OF"], cap: 50000,
-    maxHitPerTeam: 5, minGames: 2 }
+    maxHitPerTeam: 5, minGames: 2 },
+  // DraftKings NBA classic: G takes PG/SG, F takes SF/PF, UTIL anyone; players list every position they
+  // qualify at ("PG/SG"), so eligibility is any listed position. Showdown is captain mode like NFL.
+  nba_cl: { key: "nba_cl", label: "NBA Classic", sport: "nba",
+    slots: ["PG", "SG", "SF", "PF", "C", "G", "F", "UTIL"], cap: 50000,
+    groupPos: { G: ["PG", "SG"], F: ["SF", "PF"] }, minGames: 2 },
+  nba_sd: { key: "nba_sd", label: "NBA Showdown", sport: "nba",
+    slots: ["CPT", "UTIL", "UTIL", "UTIL", "UTIL", "UTIL"], cap: 50000,
+    mult: [1.5, 1, 1, 1, 1, 1], bothTeams: true, anySlot: true }
 };
 
 export const FIELDS = [
@@ -135,5 +143,7 @@ export function eligible(p, slot, f) {
   if (slot === "FLEX" && f.flexPos) return f.flexPos.includes(p.pos);
   if (slot === "SFLEX" && f.sflexPos) return f.sflexPos.includes(p.pos);
   if (slot === "P") return p.isP;
+  if (slot === "UTIL") return true;
+  if (f.groupPos && f.groupPos[slot]) return p.posList.some(x => f.groupPos[slot].includes(x));
   return p.posList.includes(slot);
 }
