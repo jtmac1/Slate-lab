@@ -48,14 +48,14 @@ function reliability(rs, ev) {
 // bootstrap the predicted/realised ratio by date
 function bootSlope(rs, ev, reps = 200) {
   const [pk, ak] = EV[ev], byD = {}; for (const r of rs) (byD[r.date] = byD[r.date] || []).push(r);
-  const ds = Object.values(byD), out = []; let seed = 11; const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const ds = Object.values(byD), out = []; let seed = 11; const rnd = () => (seed = ((Math.imul(seed, 1103515245) + 12345) >>> 0) % 2147483648) / 2147483648;
   for (let b = 0; b < reps; b++) { const pick = []; for (let i = 0; i < ds.length; i++) pick.push(...ds[Math.floor(rnd() * ds.length)]); out.push(calSlope(pick, pk, ak)); }
   out.sort((x, y) => x - y); return { lo: out[Math.floor(reps * 0.05)], hi: out[Math.floor(reps * 0.95)] };
 }
 function bootRatio(rs, ev, reps = 400) {
   const [pk, ak] = EV[ev], byD = {};
   for (const r of rs) { const d = byD[r.date] || (byD[r.date] = { p: 0, a: 0 }); d.p += r[pk] / 100; d.a += r[ak]; }
-  const ds = Object.values(byD), out = []; let seed = 7; const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const ds = Object.values(byD), out = []; let seed = 7; const rnd = () => (seed = ((Math.imul(seed, 1103515245) + 12345) >>> 0) % 2147483648) / 2147483648;
   for (let b = 0; b < reps; b++) { let p = 0, a = 0; for (let i = 0; i < ds.length; i++) { const d = ds[Math.floor(rnd() * ds.length)]; p += d.p; a += d.a; } out.push(a / p); }
   out.sort((x, y) => x - y); return { dates: ds.length, lo: out[Math.floor(reps * 0.05)], hi: out[Math.floor(reps * 0.95)] };
 }

@@ -13,6 +13,7 @@ import { simulate, playerROI } from "../src/engine/sim.mjs";
 import { scriptCollector, lineupScripts } from "../src/engine/portfolio.mjs";
 import { fitPayouts, paidCount } from "../src/engine/payouts.mjs";
 import { buildLineups } from "../src/engine/build.mjs";
+import { optimizeLineups } from "../src/engine/optimizer.mjs";
 import { mulberry32 } from "../src/engine/rng.mjs";
 import { sigOf, salOf, ownSum, stackTeams } from "../src/engine/lineups.mjs";
 import { loadPool, keyOf, ownOf, cptOf, projOf, prizesFromName } from "./foursim.mjs";
@@ -60,6 +61,9 @@ const ARCH_SD = { low: { conc: { FLEX: 0.95, CPT: 0.9 }, minSal: 47500, boost: 1
 // QB+1 43-49%, QB+2 40-43%, QB+3 4-6%, unstacked 8-9%; 60-62% of stacked lineups bring back an
 // opponent. High-stakes fields stack deeper (QB+2 48%, QB+3 11%, unstacked 4%, bring-back 67%).
 const NFL_DEF = { 1: 45, 2: 41, 3: 5, bring: 62 };
+// archetype by contest (user, 2026-10-11: no separate archetype once a contest is picked), the tiers ARCH / ARCH_SD were fit on
+// in bench/fit-arch-nfl.mjs and bench/fit-arch-sd.mjs
+export const tierOf = (fee, n) => fee >= 100 && n <= 1000 ? "high" : (fee < 20 || n > 10000) ? "low" : "marquee";
 const NFL_STACKS = { low: { 1: 46, 2: 40, 3: 4, bring: 60 }, marquee: NFL_DEF, high: { 1: 37, 2: 48, 3: 10, bring: 67 } };
 const readJ = f => fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : null, nm = s => nrm(String(s || ""));
 export const loadField = dir => readJ(path.join("data", dir, "field.json"));
@@ -174,9 +178,9 @@ export function buildField(dir, cfg = {}) {
   // sized to the contest: when a DK contest is picked the pool is that contest's entry count (capped at MAX_POOL), so the
   // simulator's duplicate counts and finishing ranks mean what they will mean in the real room
   const LBc0 = cfg.cid ? lobby().get(String(cfg.cid)) : null, LBc = LBc0 && LBc0.fee > 0 && LBc0.field > 0 && LBc0.field < 1e6 ? LBc0 : null, contest = LBc ? { cid: String(LBc.id), name: LBc.name, fee: LBc.fee, field: LBc.field, prizePool: LBc.prizePool || null, top: prizesFromName(LBc.name).top } : null;
-  const n = Math.max(50, Math.min(MAX_POOL, contest && cfg.sizeToContest !== false ? contest.field : (+cfg.n || 1000))), archKey = (sd ? ARCH_SD : ARCH)[cfg.arch] ? cfg.arch : "marquee", arch = (sd ? ARCH_SD : ARCH)[archKey], stacks = Object.assign({}, NFL_STACKS[archKey] || NFL_DEF, cfg.stacks || {});
+  const n = Math.max(50, Math.min(MAX_POOL, contest && cfg.sizeToContest !== false ? contest.field : (+cfg.n || 1000))), archKey = contest ? tierOf(contest.fee, contest.field) : (sd ? ARCH_SD : ARCH)[cfg.arch] ? cfg.arch : "marquee", arch = (sd ? ARCH_SD : ARCH)[archKey], stacks = Object.assign({}, NFL_STACKS[archKey] || NFL_DEF, cfg.stacks || {});
   cfg = Object.assign({}, cfg, { contest });
-  const tier = ownTier(sd, contest), base = { n, contest, arch: cfg.arch || "marquee", ownSrc: cfg.ownSrc || "auto", ownTier: (cfg.ownSrc || "auto") === "auto" || cfg.ownSrc === "all" ? tier.tier : null, projSrc: cfg.projSrc || "lab", stacks, boosts: cfg.boosts || {}, teamsRemoved: cfg.teamsRemoved || [], teamBoost: cfg.teamBoost || {} };
+  const tier = ownTier(sd, contest), base = { n, contest, arch: archKey, stacksSet: !!cfg.stacks, ownSrc: cfg.ownSrc || "auto", ownTier: (cfg.ownSrc || "auto") === "auto" || cfg.ownSrc === "all" ? tier.tier : null, projSrc: cfg.projSrc || "lab", stacks, boosts: cfg.boosts || {}, teamsRemoved: cfg.teamsRemoved || [], teamBoost: cfg.teamBoost || {} };
   let out;
   if (cfg.ownSrc === "all") {
     const by = {}, union = [], seen = new Map();
@@ -237,8 +241,9 @@ export function matchNotes(players, guide, sd) {
       const pieces = players.filter(p => !isD(p) && (tn.has(nm(p.name)) || teams.includes(String(p.team).toUpperCase()))).length;
       const qbStack = qb && teams.includes(String(qb.team).toUpperCase()) && players.some(p => p !== qb && !isD(p) && p.team === qb.team);
       if (qbStack || pieces >= 3) out.theses.push(t.id || t.name); } }
-  // stances: per-player reads with the reason (guide.stances{name:{stance,why,source}}); core/value/leverage count for, fade/avoid against
-  for (const p of players) { const k = I.stance.get(nm(p.name)); if (!k) continue; const s = guide.stances[k], st = String(s.stance || "").toLowerCase(); if (/fade|avoid|against/.test(st)) out.against.push({ kind: "Fade", names: [p.name], note: s.why }); else if (/caution/.test(st)) out.against.push({ kind: "Caution", names: [p.name], note: s.why }); else if (/core|value|leverage|dart|like|play/.test(st)) out.for.push({ kind: st[0].toUpperCase() + st.slice(1), names: [p.name], note: s.why }); }
+  // stances: per-player reads with the reason (guide.stances{name:{stance,why,source}}); core/value/leverage count for, fade/avoid against.
+  // "core" = ETR's main GPP plays at any ownership (user 2026-10-10); a core play under 10% owned is scored as leverage
+  for (const p of players) { const k = I.stance.get(nm(p.name)); if (!k) continue; const s = guide.stances[k], st = String(s.stance || "").toLowerCase(); if (/fade|avoid|against/.test(st)) out.against.push({ kind: "Fade", names: [p.name], note: s.why }); else if (/caution/.test(st)) out.against.push({ kind: "Caution", names: [p.name], note: s.why }); else if (st === "core" && p.own != null && p.own < 10) out.for.push({ kind: "Leverage", names: [p.name], note: `Core at ${(+p.own).toFixed(0)}% owned: ${s.why}` }); else if (/core|value|leverage|dart|like|play/.test(st)) out.for.push({ kind: st[0].toUpperCase() + st.slice(1), names: [p.name], note: s.why }); }
   const tp = guide.topPlays || {}, cats = [["overall", "Core"], ["core", "Core"], ["value", "Value"], ["leverage", "Leverage"], ["dart", "Dart"]], seen = new Set(out.for.concat(out.against).flatMap(x => x.names.map(nm)));
   for (const [k, label] of cats) { const h = has(tp[k]).filter(x => !seen.has(nm(x))); if (h.length) out.for.push({ kind: label, names: h }); }
   for (const k of ["fade", "avoid"]) { const h = has(tp[k]).filter(x => !seen.has(nm(x))); if (h.length) out.against.push({ kind: "Fade", names: h }); }
@@ -279,6 +284,16 @@ export function runSim(dir, cfg = {}) {
     const r = buildLineups(gp, { n: Math.max(1, Math.min(300, +b.n || 20)), obj: b.obj || "blend", rand: Math.max(0, +(b.rand ?? 18)) / 100, maxExp: Math.max(5, +b.maxExp || 60), minSal: +b.minSal || 0, minUniq: Math.max(0, +(b.minUniq ?? 1)), stackSize: 0, force: ids(b.force), exclude: ids(b.exclude) }, mulberry32(+b.seed || 1));
     if (r.err) throw new Error(r.err); if (!r.lineups.length) throw new Error("the builder produced no lineups");
     lus = r.lineups; source = `built (${lus.length})`;
+  }
+  // optimizer (src/engine/optimizer.mjs, user 2026-10-15): its candidates are simmed in the same run as the pool, so they are
+  // ranked against what the generator built; cfg.optimizer = settings ({} for the defaults), QB tilt from data/reports/qb-matchups-nfl.json
+  const optMeta = new Map();
+  if (cfg.optimizer && !sd) {
+    const gp = fieldPool(L, { ownSrc: F.cfg.ownSrc === "all" ? "auto" : F.cfg.ownSrc, projSrc: "lab", contest: F.cfg.contest }), qm = readJ("data/reports/qb-matchups-nfl.json");
+    const r = optimizeLineups(gp, Object.assign({}, cfg.optimizer, { qbMatchups: qm && qm.current ? qm.current.defs : {} }), mulberry32(41 + (+cfg.seed || 0)));
+    if (r.err && !r.lineups.length) throw new Error(r.err);
+    const have = new Set(lus.map(lu => sigOf(lu, f))); r.lineups.forEach((lu, k) => { const sg = sigOf(lu, f); optMeta.set(sg, r.meta[k]); if (!have.has(sg)) { lus.push(lu); have.add(sg); } });
+    source += ` + optimizer (${r.lineups.length})`;
   }
   // payouts: the picked contest's prize pool and first place (from the lobby and its name), scaled to the pool when the
   // pool is smaller than the contest; with no contest, a pool-sized contest at 15% rake, percent to first, 20% paid
@@ -329,6 +344,7 @@ export function runSim(dir, cfg = {}) {
     e.notes = matchNotes(pl, ctx.guide, sd); e.theses = e.notes.theses;
     const ck = e.checks.find(x => x.id === "sim_top_half"); if (ck) { ck.pass = null; ck.detail = "pre-contest sim: " + srcs.map(s => `${s} ${by[s].roi}%`).join(", "); }
     if (wins) e.wins = wins[k];
+    const om = optMeta.get(sigOf(lu, f)); if (om) e.opt = om;
     verdictOf(e); return e;
   });
   for (const s of srcs) { const order = rows.map((e, i) => i).sort((a, b) => rows[b].sim[s].roi - rows[a].sim[s].roi); order.forEach((i, r) => { rows[i].sim[s].rank = r + 1; }); }

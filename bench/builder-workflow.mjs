@@ -108,7 +108,7 @@ pairC("the sim top pick", out.cash1); pairC("a built lineup", out.cashAll);
 // median and the win rate, which do not depend on the tail behaving.
 const boot = (arr, reps = 4000) => {
   const d = arr.map((v, i) => v - out.field[i]), n = d.length, ms = [];
-  let seed = 12345; const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  let seed = 12345; const rnd = () => { seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
   for (let r = 0; r < reps; r++) { let t = 0; for (let i = 0; i < n; i++) t += d[(rnd() * n) | 0]; ms.push(t / n); }
   ms.sort((x, y) => x - y);
   const med = dd => { const x = dd.slice().sort((u, v) => u - v); return x[Math.floor(x.length / 2)]; };

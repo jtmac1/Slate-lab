@@ -8,7 +8,7 @@ const ABBR = { WSH: "WAS", JAC: "JAX", LA: "LAR" }, ab = t => { const a = String
 const n = s => +String(s ?? "").split("/")[0].split("-")[0] || 0;
 const NAME_RE = /[A-Z][\w.'-]+(?: [A-Z][\w.'-]+)+/g;
 
-// date: the slate date (local). Returns { games: [{away, home, state, detail, started, final}], byKey: {nrm(name)|TEAM: pts, DST|TEAM: pts}, at }
+// date: the slate date (local). Returns { games: [{away, home, state, detail, started, final, elapsed}], byKey: {nrm(name)|TEAM: pts, DST|TEAM: pts}, at }
 export async function liveActuals(date, teams) {
   const dates = [date, new Date(new Date(date + "T12:00:00").getTime() + 864e5).toISOString().slice(0, 10)];
   const games = [], byKey = {};
@@ -19,7 +19,10 @@ export async function liveActuals(date, teams) {
       if (teams && !tm.some(t => teams.has(t))) continue;
       const st = comp.status.type, started = st.state !== "pre", final = /FINAL/i.test(st.name) || st.state === "post";
       const home = comp.competitors.find(c => c.homeAway === "home"), away = comp.competitors.find(c => c.homeAway === "away");
-      const g = { id: e.id, away: ab(away.team.abbreviation), home: ab(home.team.abbreviation), state: st.state, detail: st.shortDetail, started, final, start: e.date, score: { [ab(away.team.abbreviation)]: +away.score, [ab(home.team.abbreviation)]: +home.score } };
+      // share of the game played (0 before kickoff, 1 when final): 15-minute quarters from ESPN's period and clock; overtime counts as near-done
+      const [cm, cs] = String(comp.status.displayClock || "15:00").split(":").map(Number), per = comp.status.period || 0;
+      const elapsed = final ? 1 : !started ? 0 : per > 4 ? 0.98 : Math.min(0.98, Math.max(0, ((per - 1) * 15 + 15 - (cm || 0) - (cs || 0) / 60) / 60));
+      const g = { id: e.id, away: ab(away.team.abbreviation), home: ab(home.team.abbreviation), state: st.state, detail: st.shortDetail, started, final, elapsed: +elapsed.toFixed(3), start: e.date, score: { [ab(away.team.abbreviation)]: +away.score, [ab(home.team.abbreviation)]: +home.score } };
       games.push(g);
       if (!started) continue;
       const sum = await getJ(`${API}/summary?event=${e.id}`), dst = {}; for (const t of sum.boxscore.players || []) dst[ab(t.team.abbreviation)] = { sacks: 0, int: 0, fr: 0, td: 0, saf: 0, blk: 0, retTd: 0 };

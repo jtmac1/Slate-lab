@@ -48,7 +48,7 @@ function stat(list) {
   const byDate = new Map(); for (const r of list) { const d = byDate.get(r.date) || { f: 0, w: 0 }; d.f += r.fee; d.w += r.won; byDate.set(r.date, d); }
   const D = [...byDate.values()]; let lo = null, hi = null;
   if (D.length >= 5 && fee > 0) {
-    let seed = 7; const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648, bs = [];
+    let seed = 7; const rnd = () => (seed = ((Math.imul(seed, 1103515245) + 12345) >>> 0) % 2147483648) / 2147483648, bs = [];
     for (let b = 0; b < 600; b++) { let f = 0, w = 0; for (let i = 0; i < D.length; i++) { const x = D[Math.floor(rnd() * D.length)]; f += x.f; w += x.w; } if (f > 0) bs.push(w / f - 1); }
     bs.sort((a, b) => a - b); lo = bs[Math.floor(0.05 * bs.length)]; hi = bs[Math.floor(0.95 * bs.length)];
   }

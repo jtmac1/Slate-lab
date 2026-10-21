@@ -19,15 +19,19 @@ export async function lateSwap(dir) {
   const teams = new Set(hub.rows.map(r => r.team).filter(Boolean));
   const live = await liveActuals(hub.slate.date, teams);
   const started = new Set(), finals = new Set(); for (const g of live.games) if (g.started) { started.add(g.away); started.add(g.home); if (g.final) { finals.add(g.away); finals.add(g.home); } }
-  // lock every player on a started team at live points (0 if the box score has no line for him)
-  const locked = {}; for (const r of hub.rows) if (started.has(r.team)) locked[keyOf(r.name, r.pos, r.team)] = live.byKey[liveKey(r.name, r.pos, r.team)] ?? 0;
+  // started players: a finished game locks at its live points (0 if the box score has no line for him); a game in progress is
+  // { pts, remain } so the sim adds the projection still to come (server/foursim.mjs). Locking a 1st-quarter score as final
+  // buried every early-game lineup (found 2026-10-10 on the CFB version)
+  const remainOf = {}; for (const g of live.games) if (g.started) for (const t of [g.away, g.home]) remainOf[t] = 1 - (g.elapsed ?? (g.final ? 1 : 0.5));
+  const locked = {}; for (const r of hub.rows) if (started.has(r.team)) { const pts = live.byKey[liveKey(r.name, r.pos, r.team)] ?? 0, rem = finals.has(r.team) ? 0 : remainOf[r.team] ?? 0.5; locked[keyOf(r.name, r.pos, r.team)] = rem > 0 ? { pts, remain: rem } : pts; }
   const simmed = started.size ? fourSourceSim(dir, { locked, noSave: true }) : null;
   const projOf = r => r.lab ?? r.cons ?? r.stk?.proj ?? 0;
   const open = hub.rows.filter(r => !started.has(r.team) && (r.sal || 0) > 0 && projOf(r) > 0);
   const out = good.map(e => {
     const se = simmed ? simmed.entries.find(x => x.entryId === e.entryId && x.sig === e.sig) : null;
     const players = e.players.map((p, j) => { const lk = started.has(p.team), pts = lk ? (live.byKey[liveKey(p.name, p.pos, p.team)] ?? 0) * (p.isCpt ? 1.5 : 1) : null; const row = hub.rows.find(r => keyOf(r.name, r.pos, r.team) === keyOf(p.name, p.pos, p.team)); return Object.assign({}, p, { locked: lk, final: finals.has(p.team), pts: pts == null ? null : +pts.toFixed(1), proj: row ? +((p.isCpt ? 1.5 : 1) * projOf(row)).toFixed(1) : p.proj, slotIdx: j }); });
-    const lockedPts = players.reduce((s, p) => s + (p.pts || 0), 0), openProj = players.filter(p => !p.locked).reduce((s, p) => s + (p.proj || 0), 0);
+    // still to come: every unstarted player's projection plus the unplayed share of each in-progress player's
+    const lockedPts = players.reduce((s, p) => s + (p.pts || 0), 0), openProj = players.reduce((s, p) => s + (!p.locked ? (p.proj || 0) : p.final ? 0 : (p.proj || 0) * (remainOf[p.team] ?? 0)), 0);
     // swap candidates per open slot: same slot eligibility, fits the cap with the salary left, not already in the lineup
     const inLu = new Set(players.map(p => keyOf(p.name, p.pos, p.team)));
     const swaps = players.filter(p => !p.locked).map(p => {

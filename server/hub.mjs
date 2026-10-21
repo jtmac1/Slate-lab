@@ -45,22 +45,28 @@ const run = (args, timeout = 300000) => new Promise((resolve, reject) => execFil
 let refreshing = null, simming = false, nightlyRunning = false, lastIngest = { done: [], notes: [], at: null }, lastNightly = null;
 
 const grabPass = (files = []) => ingestGrabs({ reports: ETR_REPORTS, team: TEAM, files, weekOf: nflWeek });
+// refresh health (user, 2026-10-11: green/red check top right): the last Refresh's steps and the last ETR + Blick pull, per slate
+const readJson = p => { try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return null; } };
+const healthOf = dir => ({ refresh: readJson(path.join("data", dir, "refresh.json")), vendors: readJson(path.join("data", dir, "vendors-pull.json")) });
 async function refresh(q) {
   const steps = [], step = async (name, fn) => { const t = Date.now(); try { const info = await fn(); steps.push({ name, ok: true, ms: Date.now() - t, info }); return info; } catch (e) { steps.push({ name, ok: false, ms: Date.now() - t, error: e.message }); return null; } };
-  let dir = q.dir || null;
-  if (q.slateId && q.date) { const r = await step("stokastic", () => pullStokastic(q.date, q.slateId, "NFL")); if (r) dir = r.dir; }
-  await step("pinnacle", () => pullPinnacle().then(r => ({ stamp: r.stamp, games: r.games, props: r.props, projected: r.projected })));
-  await step("ingest", () => { const r = ingestPass(); lastIngest = Object.assign(r, { at: new Date().toISOString() }); return { copied: r.done.map(d => `${d.src}: ${d.file} -> ${d.dest}`), notes: r.notes }; });
+  let dir = q.dir || null; const only = Array.isArray(q.only) && q.only.length ? q.only : null, want = k => !only || only.includes(k);
+  if (q.slateId && q.date && want("stokastic")) { const r = await step("stokastic", () => pullStokastic(q.date, q.slateId, "NFL")); if (r) dir = r.dir; }
+  if (want("pinnacle")) await step("pinnacle", () => pullPinnacle().then(r => ({ stamp: r.stamp, games: r.games, props: r.props, projected: r.projected })));
+  if (!only) await step("ingest", () => { const r = ingestPass(); lastIngest = Object.assign(r, { at: new Date().toISOString() }); return { copied: r.done.map(d => `${d.src}: ${d.file} -> ${d.dest}`), notes: r.notes }; });
   // the grabber bookmarklet's files (ETR articles, shows, data tables, Blick conditional): the no-Claude pull
-  await step("grabs", () => grabPass());
-  await step("injuries", pullInjuries);
-  await step("lobby", () => run(["bench/dk-contests.mjs", "NFL"], 60000).then(() => { const j = JSON.parse(fs.readFileSync("data/dk-lobby/nfl.json", "utf8")); return { contests: j.contests.length, fetched: j.fetched }; }));
+  if (!only) await step("grabs", () => grabPass());
+  if (want("injuries")) await step("injuries", pullInjuries);
+  if (!only) await step("lobby", () => run(["bench/dk-contests.mjs", "NFL"], 60000).then(() => { const j = JSON.parse(fs.readFileSync("data/dk-lobby/nfl.json", "utf8")); return { contests: j.contests.length, fetched: j.fetched }; }));
   if (!dir) { const dirs = slateDirs(); dir = dirs[0] || null; }
   const hub = dir ? await step("merge", () => { const h = hubData(dir); saveMerge(dir, h); return h; }) : null;
   // Lab likes (server/likes.mjs) refresh with the numbers when the slate has a guide or ETR data tables
   if (hub && /nfl/.test(dir) && (fs.existsSync(path.join("data", dir, "slate-guide.json")) || slateData(dir))) await step("likes", () => { const L = saveLikes(dir); return { picks: Object.values(L.picks).flat().length, fades: L.fades.length }; });
   // Lab stacks (server/stacks.mjs) need the slate's generated field + sim; skipped until the Simulator has run
   if (hub && /nfl/.test(dir) && fs.existsSync(path.join("data", dir, "simrun.json")) && fs.existsSync(path.join("data", dir, "field.json"))) await step("stacks", () => { const S = saveStacks(dir); return { top: (S.top || S.pairs || []).length, blick: !!S.blick }; });
+  // a one-source refresh replaces just its steps in the last full Refresh's record
+  if (dir) { const rf = path.join("data", dir, "refresh.json"), prev = only && readJson(rf), mine = steps.map(s => ({ name: s.name, ok: s.ok, error: s.error }));
+    fs.writeFileSync(rf, JSON.stringify(prev ? Object.assign(prev, { steps: prev.steps.filter(s => !mine.some(m => m.name === s.name)).concat(mine) }) : { at: new Date().toISOString(), steps: mine })); if (hub) hub.health = healthOf(dir); }
   return { steps, hub };
 }
 // "Pull ETR + Blick" (user-approved 2026-10-03): a one-shot headless Claude Code run (claude -p --chrome) with the job in
@@ -75,8 +81,20 @@ const ETR_REPORTS = [
   { id: "sd-breakdown", fmt: "s", name: "Showdown Breakdown (this game)", sd: "breakdown" },
   { id: "sd-sim", fmt: "s", name: "DraftKings Showdown Sim Analysis", sd: "sim" },
   { id: "sd-show", fmt: "s", name: "Prime-time live show (this game)", sd: "show", video: true },
-  { id: "million", fmt: "c", name: "Establish The Million", menu: "Establish The Million: Week", video: true },
-  { id: "show", fmt: "c", name: "Establish The Show", menu: "Establish The Show: Week", video: true },
+  // weekly shows (show = the start of its link text on ETR's show-links page, /in-season-weekly-show-schedule/; each links an
+  // ETR page with the YouTube video embedded, unlisted, so a channel search misses it. Added 2026-10-09 at the user's ask:
+  // Projections Context, Leone's Lineup Build, Wake and Rake (Sunday 10 a.m. ET; the cheat sheet follows it) and the DFS
+  // Tournament Review of last week's slate. Not the Last-Minute Livestream; Macro vs. Micro is FanDuel-only; Man vs. Machine
+  // was dropped 10/10 as season-long rankings (user: no season-long content; Matchups and the like are facts only)
+  { id: "million", fmt: "c", name: "Establish The Million", show: "Establish The Million: Week", video: true },
+  { id: "show", fmt: "c", name: "Establish The Show", show: "Establish The Show: Week", video: true },
+  { id: "proj-context", fmt: "c", name: "Projections Context Show", show: "Projections Context Show: Week", video: true },
+  { id: "lineup-build", fmt: "c", name: "Leone DFS Lineup Build Show (Sat night)", show: "Leone DFS Lineup Build Show: Week", video: true },
+  { id: "wake-rake", fmt: "c", name: "Wake and Rake (Sun 10 a.m. ET)", show: "Wake and Rake: Week", video: true },
+  { id: "tourney-review", fmt: "c", name: "DFS Tournament Review (last week)", show: "DFS Tournament Review: Week", video: true, lastWeek: true },
+  // Ship It Nation on YouTube (user, 2026-10-10): Blick + Tambo on leverage, live Saturday night; found on the channel by title
+  { id: "leverage-lane", fmt: "c", name: "Leverage Lane (Blick + Tambo, Sat night)", yt: "Leverage Lane", ytChannel: "https://www.youtube.com/channel/UCspBK9dpUuEOCHvMDD13hgw/streams" },
+  { id: "update-log", fmt: "cs", name: "Silva's Update Log", menu: "Silva's Update Log: Week" },
   { id: "top-plays", fmt: "c", name: "DFS Top Plays", menu: "DFS Top Plays" },
   { id: "gpp-leverage", fmt: "c", name: "GPP Leverage", menu: "GPP Leverage" },
   { id: "matchups", fmt: "cs", name: "Silva's Matchups", menu: "Evan Silva's Matchups" },
@@ -104,7 +122,9 @@ const TEAM = { ARI: "Cardinals", ATL: "Falcons", BAL: "Ravens", BUF: "Bills", CA
 // which reports have been read into this slate's guide: data/<slate>/etr-reads.json {id: {status: "ok"|"failed", at, title, url, note}}
 const readsFile = dir => path.join("data", dir, "etr-reads.json");
 const loadReads = dir => { try { return JSON.parse(fs.readFileSync(readsFile(dir), "utf8")); } catch { return {}; } };
-function pullStatus(patch) { const sf = "data/requests/status.json"; const cur = fs.existsSync(sf) ? JSON.parse(fs.readFileSync(sf, "utf8")) : {}; fs.writeFileSync(sf, JSON.stringify(Object.assign(cur, patch, { updated: new Date().toISOString() }))); return cur; }
+function pullStatus(patch) { const sf = "data/requests/status.json"; const cur = fs.existsSync(sf) ? JSON.parse(fs.readFileSync(sf, "utf8")) : {}; fs.writeFileSync(sf, JSON.stringify(Object.assign(cur, patch, { updated: new Date().toISOString() })));
+  if (cur.kind === "vendors" && /done|error/.test(cur.status) && cur.dir && safeDir(cur.dir)) fs.writeFileSync(path.join("data", cur.dir, "vendors-pull.json"), JSON.stringify({ status: cur.status, message: cur.message, at: cur.updated }));
+  return cur; }
 function startPull(r) {
   const meta = slateMeta(r.dir), sd = meta.type === "SHOWDOWN", wk = (() => { const m = fs.readdirSync(path.join("data", r.dir)).join(" ").match(/(\d{4})wk(0[1-9]|[1-9]\d)/); return m ? m[1] + "wk" + m[2] : `${meta.date.slice(0, 4)}wk${String(nflWeek(meta.date)).padStart(2, "0")}`; })();   // no week-named file yet: the NFL week from the date (was wk00)
   const etrMain = `Open https://establishtherun.com/draftkings-fanduel-yahoo-projections/ and wait 4 seconds. The DraftKings table is the FIRST AG Grid on the page; read every row from React in one step (no scrolling):
@@ -125,8 +145,8 @@ function startPull(r) {
      window.__C=['player,team,opponent,position,salary,projection,floor,ceiling,largeOwnership,smallOwnership'].concat(D.map(o=>[String(o.player).includes(',')?'"'+o.player+'"':o.player,o.team,o.opponent,o.position,o.salary,o.projection,'',o.ceiling||'',o.ownership,o.ownership].join(','))).join('\\n');
      'rows '+D.length+' chars '+window.__C.length
    Read window.__C in 950-character slices with browser_batch, join exactly, and Write data/${r.dir}/ETR-main-${meta.date}.csv .`;
-  const vars = { DIR: r.dir, TYPE: meta.type, DATE: meta.date, SLATEID: String(meta.slateId || ""), GAMES: meta.games.join(" "), ETR_STEPS: sd ? etrSd : sub ? etrSub : etrMain,
-    BLICK_SKIP: sub ? "SKIP THIS STEP ENTIRELY: Blick only publishes the main slate. In the final message write \"Blick: main slate only\" for Blick and use \"done\" if ETR worked." : "",
+  const vars = { DIR: r.dir, TYPE: meta.type, DATE: meta.date, SLATEID: String(meta.slateId || ""), GAMES: meta.games.join(" "), ETR_STEPS: r.sources && !r.sources.includes("etr") ? "SKIP THIS STEP ENTIRELY: only Blick was asked for. In the final message leave ETR out." : sd ? etrSd : sub ? etrSub : etrMain,
+    BLICK_SKIP: r.sources && !r.sources.includes("blick") ? "SKIP THIS STEP ENTIRELY (and its conditional-ownership part): only ETR was asked for. In the final message leave Blick out." : sub ? "SKIP THIS STEP ENTIRELY: Blick only publishes the main slate. In the final message write \"Blick: main slate only\" for Blick and use \"done\" if ETR worked." : "",
     // Blick Conditional Ownership page (step 3b): /nfl/conditional-ownership and /nfl/conditional-ownership-showdown
     BLICK_COND_SUFFIX: sd ? "-showdown" : "",
     BLICK_URL: sd ? "https://blickanalytics.com/nfl/showdown-ownership-gpp" : "https://blickanalytics.com/nfl/ownership-gpp", BLICK_NEXT: sd ? "%2Fnfl%2Fshowdown-ownership-gpp" : "%2Fnfl%2Fownership-gpp",
@@ -137,7 +157,7 @@ function startPull(r) {
   if (weekly) vars.WINDIR = path.win32.join(path.resolve(ROOT), "data", r.dir);
   if (weekly && sd) { const [aw, hm] = String(meta.games[0] || "").split("@"); const night = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][new Date(meta.date + "T12:00:00Z").getUTCDay()]; Object.assign(vars, { AWAY: aw, HOME: hm, AWAYNAME: TEAM[aw] || aw, HOMENAME: TEAM[hm] || hm, NIGHT: night }); }
   if (weekly) { const pick = reportsFor(r.dir).filter(x => !r.only || r.only.includes(x.id)); vars.TOTAL = String(pick.length);
-    vars.REPORTS = pick.map(x => `   - id "${x.id}": ${x.upload ? "the user's upload: data/" + r.dir + "/blick-thoughts.md and images in data/" + r.dir + "/blick/" : x.data ? `ETR data table at https://establishtherun.com${x.page} (step 2b; kind "${x.data}")` : x.evergreen ? `ETR article at https://establishtherun.com${x.page} (step 2c; evergreen, read it whatever its date)` : x.sd === "breakdown" ? `ETR article "Showdown Breakdown: ${vars.AWAYNAME} at ${vars.HOMENAME}"` : x.sd === "sim" ? "ETR page \"DraftKings Showdown Sim Analysis\" (check it is for this game)" : x.sd === "show" ? `ETR "${vars.NIGHT} Night Football Live Show: ${vars.AWAYNAME} at ${vars.HOMENAME}" (YouTube video)` : x.video ? `YouTube video "${x.menu} ${vars.WEEK}"` : `ETR NFL menu link starting "${x.menu}"${sd ? " (use only what it says about this game's two teams)" : ""}`}`).join("\n"); }
+    vars.REPORTS = pick.map(x => `   - id "${x.id}": ${x.upload ? "the user's upload: data/" + r.dir + "/blick-thoughts.md and images in data/" + r.dir + "/blick/" : x.data ? `ETR data table at https://establishtherun.com${x.page} (step 2b; kind "${x.data}")` : x.evergreen ? `ETR article at https://establishtherun.com${x.page} (step 2c; evergreen, read it whatever its date)` : x.sd === "breakdown" ? `ETR article "Showdown Breakdown: ${vars.AWAYNAME} at ${vars.HOMENAME}"` : x.sd === "sim" ? "ETR page \"DraftKings Showdown Sim Analysis\" (check it is for this game)" : x.sd === "show" ? `ETR "${vars.NIGHT} Night Football Live Show: ${vars.AWAYNAME} at ${vars.HOMENAME}" (YouTube video)` : x.show ? `ETR show "${x.show} ${x.lastWeek ? +vars.WEEK - 1 : vars.WEEK}" (step 3: its page from the show-links page${x.lastWeek ? "; LAST week's edition on purpose: a review of the previous slate, so its lessons go to notes, not this slate's stances" : ""})` : x.yt ? `YouTube show "NFL Week ${vars.WEEK} - ${x.yt}" (step 3b: find it on ${x.ytChannel})` : x.video ? `YouTube video "${x.menu} ${vars.WEEK}"` : `ETR NFL menu link starting "${x.menu}"${sd ? " (use only what it says about this game's two teams)" : ""}`}`).join("\n"); }
   const prompt = fs.readFileSync(weekly ? (sd ? "bench/read-etr-showdown.prompt.md" : "bench/read-etr-week.prompt.md") : "bench/pull-vendors.prompt.md", "utf8").replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? m);
   const args = ["-p", "--chrome", "--model", PULL_MODEL, "--output-format", "json", "--allowedTools", "mcp__claude-in-chrome", "Edit(data/**)", "Write(data/**)", "Read", "Bash(curl:*)", "--", prompt];
   pullStatus({ status: "working", message: "Claude started" });
@@ -168,7 +188,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (p === "/api/slates") return json(res, 200, await stkSlates("NFL", u.searchParams.get("date")));
     if (p === "/api/dirs") return json(res, 200, slateDirs().map(slateMeta));
-    if (p === "/api/hub") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); return json(res, 200, hubData(d)); }
+    if (p === "/api/hub") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); return json(res, 200, Object.assign(hubData(d), { health: healthOf(d) })); }
     if (p === "/api/ingest") return json(res, 200, lastIngest);
     if (p === "/api/status") return json(res, 200, { lastNightly, nightlyRunning, refreshing: !!refreshing, simming, now: new Date().toISOString() });
     if (p === "/api/refresh" && req.method === "POST") { const q = JSON.parse((await body(req)).toString("utf8") || "{}"); if (refreshing) return json(res, 409, { error: "refresh already running" }); refreshing = refresh(q); try { return json(res, 200, await refreshing); } finally { refreshing = null; } }
@@ -180,7 +200,10 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/likes") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); try { return json(res, 200, req.method === "POST" || !loadLikes(d) ? saveLikes(d) : loadLikes(d)); } catch (e) { return json(res, 500, { error: e.message }); } }
     if (p === "/api/guide") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); return json(res, 200, loadGuide(d) || {}); }
     if (p === "/api/sim" && req.method === "POST") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); if (simming) return json(res, 409, { error: "sim already running" }); simming = true; try { return json(res, 200, fourSourceSim(d)); } finally { simming = false; } }
-    if (p === "/api/field") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); if (req.method === "POST") { if (simming) return json(res, 409, { error: "sim already running" }); simming = true; try { return json(res, 200, buildField(d, JSON.parse((await body(req)).toString("utf8") || "{}"))); } finally { simming = false; } } return json(res, 200, stripField(loadField(d))); }
+    if (p === "/api/field") { if (!safeDir(d)) return json(res, 400, { error: "dir" });
+      // Clear Contest Generator (user, 2026-10-11): drop the saved field and the sim run made from it, to start a new contest
+      if (req.method === "DELETE") { if (simming) return json(res, 409, { error: "sim already running" }); for (const x of ["field.json", "simrun.json"]) fs.rmSync(path.join("data", d, x), { force: true }); return json(res, 200, { ok: true }); }
+      if (req.method === "POST") { if (simming) return json(res, 409, { error: "sim already running" }); simming = true; try { return json(res, 200, buildField(d, JSON.parse((await body(req)).toString("utf8") || "{}"))); } finally { simming = false; } } return json(res, 200, stripField(loadField(d))); }
     if (p === "/api/simrun") { if (!safeDir(d)) return json(res, 400, { error: "dir" }); if (req.method === "POST") { if (simming) return json(res, 409, { error: "sim already running" }); simming = true; try { return json(res, 200, runSim(d, JSON.parse((await body(req)).toString("utf8") || "{}"))); } finally { simming = false; } } return json(res, 200, loadSimRun(d) || { rows: [] }); }
     // "Pull ETR + Blick": the site files a request (data/requests/requests.log, one JSON line each); an open Claude session
     // watching that file pulls the CSVs through the user's logged-in Chrome, ingests them, refreshes, and reports progress back

@@ -67,7 +67,12 @@ export function simLineups(L, lus, opts = {}) {
   const fieldN = Math.min(N, opts.fieldN || FIELD_N), scale = fieldN / N, pay = fitPayouts(fieldN, prize * scale, Math.max(first * scale, prize * scale * 0.05), 20);
   const locked = opts.locked || null, per = {};
   for (const s of srcs) {
-    const players = P.map(p => { const k = keyOf(p.name, p.pos, p.team), r = hubBy.get(k); const os = fieldOwnSrc(s, L.sd), own = ownOf(r, os, vendors) ?? p.own, cown = cptOf(r, os, vendors) ?? Math.max(0.1, own / 6); const q = Object.assign({}, p, { proj: Math.max(0, projOf(r, s, p.proj) ?? 0), own, cown, fown: own }); if (locked && locked[k] != null) { q.proj = locked[k]; q.sd = 0.01; q.ceil = null; } return q; });
+    const players = P.map(p => { const k = keyOf(p.name, p.pos, p.team), r = hubBy.get(k); const os = fieldOwnSrc(s, L.sd), own = ownOf(r, os, vendors) ?? p.own, cown = cptOf(r, os, vendors) ?? Math.max(0.1, own / 6); const q = Object.assign({}, p, { proj: Math.max(0, projOf(r, s, p.proj) ?? 0), own, cown, fown: own }); if (locked && locked[k] != null) { const L0 = locked[k];
+      // a number = finished, locked at its points; { pts, remain } = in progress: points so far plus the projection still to come,
+      // spread on the rest only (full-game spread x sqrt of the share left; 2026-10-10 fix, a 1st-quarter score used to lock as final)
+      if (typeof L0 === "number") { q.proj = L0; q.sd = 0.01; q.ceil = null; }
+      else { const rest = q.proj * L0.remain, full = q.sd > 0 ? q.sd : q.proj * 0.5; q.proj = L0.pts + rest; q.sd = Math.max(0.01, full * Math.sqrt(L0.remain)); q.ceil = null; } }
+    return q; });
     const ps = Object.assign({}, pool, { players }), model = buildModel(ps, {});
     // fitted presets (see server/contestsim.mjs): showdown leaves salary, classic stacks QB+2 far more than the old default
     const opt = Object.assign(fkey === "nfl_sd" ? { conc: 1.0, minSal: 44000, boost: 1.0, rounds: 3 } : { conc: 1.25, minSal: 48000, boost: 1.0, rounds: 3, nflStacks: { 1: 45, 2: 41, 3: 5, bring: 62 }, skill: [[0.15, 60], [0.35, 5]], dupeFloor: "auto" }, fieldProfile(fee, fkey, N) || {});

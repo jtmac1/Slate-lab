@@ -4,12 +4,14 @@
 // into styles with k-means on standardized construction features. Each cluster is a template:
 // its mean construction, where it plays, how it did, and who is in it. The field and jtmac1999 are
 // reported on the same features for comparison.
-//   node bench/sharps-style-nfl.mjs [from] [to] [--min=50] [--k=4]   -> data/reports/sharps-style-nfl.json
+//   node bench/sharps-style-nfl.mjs [from] [to] [--min=50] [--k=4] [--roster=file] [--out=file]   -> data/reports/sharps-style-nfl.json
+// --roster: another username list, e.g. data/dfsdb/sharps-nfl-dfsdb.json (multi-year DFSDB winners)
 import fs from "node:fs";
 import { nrm } from "../src/engine/csv.mjs";
 import { listPost, readPost } from "./post-store.mjs";
-const FROM = process.argv[2] || "2025-09-01", TO = process.argv[3] || "2099-12-31", MIN = +((process.argv.find(a => a.startsWith("--min=")) || "--min=50").slice(6)), K = +((process.argv.find(a => a.startsWith("--k=")) || "--k=4").slice(4)), YOU = "jtmac1999";
-const roster = new Set(JSON.parse(fs.readFileSync("data/reports/sharps-nfl.json", "utf8")).map(u => String(u).toLowerCase()));
+const POSA = process.argv.slice(2).filter(a => !a.startsWith("--")), FROM = POSA[0] || "2025-09-01", TO = POSA[1] || "2099-12-31", MIN = +((process.argv.find(a => a.startsWith("--min=")) || "--min=50").slice(6)), K = +((process.argv.find(a => a.startsWith("--k=")) || "--k=4").slice(4)), YOU = "jtmac1999";
+const ROSTER = (process.argv.find(a => a.startsWith("--roster=")) || "--roster=data/reports/sharps-nfl.json").slice(9), OUTF = (process.argv.find(a => a.startsWith("--out=")) || "--out=data/reports/sharps-style-nfl.json").slice(6);
+const roster = new Set(JSON.parse(fs.readFileSync(ROSTER, "utf8")).map(u => String(u).toLowerCase()));
 const REF = new Map(); try { for (const p of JSON.parse(fs.readFileSync("data/nfl-ref/players-2026.json", "utf8"))) REF.set(nrm(p.name), p.pos); } catch {}
 const posOf = p => p.pos && p.pos !== "CPT" && p.pos !== "FLEX" ? p.pos : (REF.get(nrm(p.name)) || (/\s/.test(p.name) ? "?" : "DST"));
 const tierOf = fee => fee < 100 ? "lo" : fee < 300 ? "mid" : "hi", sizeOf = n => n < 300 ? "<300" : n < 1500 ? "300-1.5K" : n < 10000 ? "1.5K-10K" : "10K+";
@@ -61,7 +63,7 @@ for (const fmt of ["classic", "showdown"]) {
   out.formats[fmt] = { sharps: sharps.length, field, you, clusters };
 }
 fs.mkdirSync("data/reports", { recursive: true });
-fs.writeFileSync("data/reports/sharps-style-nfl.json", JSON.stringify(out, null, 1));
+fs.writeFileSync(OUTF, JSON.stringify(out, null, 1));
 const pc = v => v == null ? "-" : (100 * v).toFixed(0) + "%", f1 = v => v == null ? "-" : (+v).toFixed(1), f0 = v => v == null ? "-" : (+v).toFixed(0);
 for (const fmt of ["classic", "showdown"]) {
   const F = out.formats[fmt], keys = fmt === "classic" ? CL_F : SD_F;
@@ -71,4 +73,4 @@ for (const fmt of ["classic", "showdown"]) {
   line("field", F.field); if (F.you) line("you", F.you);
   for (const c of F.clusters) { line(`cluster ${c.cluster} (${c.users})`, c); console.log("   " + c.members.join("; ")); }
 }
-console.log(`\n-> data/reports/sharps-style-nfl.json`);
+console.log(`\n-> ${OUTF}`);

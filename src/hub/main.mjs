@@ -11,13 +11,13 @@ import { renderGen, initGen } from "./gen.mjs";
 
 const LS = "slatelab:hub";
 const saved = (() => { try { return JSON.parse(localStorage.getItem(LS) || "{}"); } catch { return {}; } })();
-const persist = () => { try { localStorage.setItem(LS, JSON.stringify({ date: S.date, slateId: S.slateId, dir: S.dir, tab: S.tab, view: S.view })); } catch {} };
+const persist = () => { try { localStorage.setItem(LS, JSON.stringify({ date: S.date, type: S.type, slateId: S.slateId, dir: S.dir, tab: S.tab, view: S.view })); } catch {} };
 const nextSlateDate = () => { const d = new Date(), dow = d.getDay(); if (dow >= 2 && dow <= 6) d.setDate(d.getDate() + (7 - dow)); return d.toLocaleString("sv-SE").slice(0, 10); };
-const S = { view: ["hub", "entries", "review", "sim", "gen"].includes(saved.view) ? saved.view : "hub", date: saved.date || nextSlateDate(), slateId: saved.slateId || null, dir: saved.dir || null, slates: [], dirs: [], hub: null, tab: saved.tab || "players", q: "", pos: "ALL", sort: { k: "cons", d: -1 }, busy: false, steps: [], msg: "", err: false, showAll: false, slatesErr: "", changes: null, notes: null };
+const S = { view: ["hub", "contests", "entries", "review", "sim", "gen"].includes(saved.view) ? saved.view : "hub", date: saved.date || nextSlateDate(), type: saved.type === "SHOWDOWN" ? "SHOWDOWN" : "CLASSIC", slateId: saved.slateId || null, dir: saved.dir || null, slates: [], dirs: [], hub: null, tab: saved.tab || "players", q: "", pos: "ALL", sort: { k: "lab", d: -1 }, busy: false, steps: [], msg: "", err: false, showAll: false, slatesErr: "", changes: null, notes: null };
 initEntries(S); initSim(S); initGen(S);
 // every tab is rebuilt; "Old app" keeps the previous build reachable
-// no Contests tab: a record by contest family measures the old process, not the new one (user, 2026-10-02)
-const VIEWS = [["hub", "Data Hub", "Data Hub", true], ["gen", "Contest Generator", "Generator", true], ["sim", "Pre-Contest Simulator", "Simulator", true], ["entries", "Entries", "Entries", true], ["review", "Review", "Review", true], ["old", "Old app", "Old app"]];
+// Contests is the contest picker (2026-10-14), not the old record-by-family view he dropped on 2026-10-02
+const VIEWS = [["hub", "Data Hub", "Data Hub", true], ["gen", "Contest Generator", "Generator", true], ["sim", "Pre-Contest Simulator", "Simulator", true], ["contests", "Contests", "Contests", true], ["entries", "Entries", "Entries", true], ["review", "Review", "Review", true], ["old", "Old app", "Old app"]];
 const api = async (p, opts) => { const r = await fetch(p, opts); const j = await r.json().catch(() => ({ error: r.statusText })); if (!r.ok) throw new Error(j.error || r.statusText); return j; };
 const f1 = v => v == null || isNaN(v) ? "—" : (+v).toFixed(1);
 const f0 = v => v == null || isNaN(v) ? "—" : (+v).toFixed(0);
@@ -49,18 +49,36 @@ const mv = v => v == null || v === 0 ? "" : `<span class="mv ${v > 0 ? "up" : "d
 const setMsg = (m, err) => { S.msg = m; S.err = !!err; const el = $("#status"); if (el) el.innerHTML = err ? `<span class="err">${esc(m)}</span>` : esc(m); };
 
 /* ---------------- data ---------------- */
+const ofType = x => (x.type || "CLASSIC") === S.type;
 async function loadDirs() { S.dirs = await api("/api/dirs"); if (!S.dir || !S.dirs.some(d => d.dir === S.dir)) S.dir = S.dirs[0] ? S.dirs[0].dir : null; }
 async function loadHub() { if (!S.dir) { S.hub = null; return; } S.hub = await api(`/api/hub?dir=${encodeURIComponent(S.dir)}`); }
 async function loadSlates() {
   S.slatesErr = "";
   try { S.slates = await api(`/api/slates?date=${S.date}`); } catch (e) { S.slates = []; S.slatesErr = e.message; }
-  const cur = S.dirs.find(d => d.dir === S.dir);
-  if (!S.slates.some(s => String(s.slateId) === String(S.slateId))) S.slateId = cur && S.slates.some(s => String(s.slateId) === String(cur.slateId)) ? cur.slateId : (S.slates[0] ? S.slates[0].slateId : null);
+  // the Type picker (Classic / Showdown, like Stokastic) narrows the slate list; keep the pick inside the chosen type
+  const cur = S.dirs.find(d => d.dir === S.dir), typed = S.slates.filter(ofType);
+  if (!typed.some(s => String(s.slateId) === String(S.slateId))) S.slateId = cur && typed.some(s => String(s.slateId) === String(cur.slateId)) ? cur.slateId : ((typed.find(s => S.dirs.some(d => String(d.slateId) === String(s.slateId))) || typed.find(s => /^main$/i.test(s.name)) || typed[0] || {}).slateId ?? null);   // prefer a slate already set up, then Main
 }
-async function refresh() {
-  if (S.busy) return; S.busy = true; S.steps = []; render(); setMsg("Refreshing: Stokastic, Pinnacle, Downloads, injuries…");
+// Refresh (user's call 2026-10-10: one Refresh for everything, one Manual refresh for files): the free refresh first, so the
+// table updates in seconds, then the Claude pull of ETR + Blick in his Chrome, which ends with its own refresh. Manual refresh
+// (upload) runs only the free part.
+async function refresh(opts = {}) {
+  await refreshFree(); if (opts.manual || !S.hub || pulling()) return;
+  try { S.pull = await api("/api/pull-request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dir: S.hub.dir, sources: ["etr", "blick"] }) }); setMsg("Refreshed. Now pulling ETR + Blick through Claude in your Chrome (a few minutes); the table updates again when it's done"); render(); watchPull(); }
+  catch (e) { setMsg("Refreshed, but the ETR + Blick pull didn't start: " + e.message, true); }
+}
+// one source from its box on the strip (user, 2026-10-11): Stokastic, Pinnacle, ESPN run their free step; ETR or Blick is a
+// Claude pull of just that site
+const SRC_KEY = { stokastic: "stokastic", pinnacle: "pinnacle", espn: "injuries" }, SRC_NAME = { stokastic: "Stokastic", pinnacle: "Pinnacle", espn: "ESPN injuries", etr: "ETR", blick: "Blick" };
+async function refreshOne(src) {
+  if (S.busy || pulling() || !S.hub) return setMsg(S.busy || pulling() ? "Something is already refreshing; try again when it finishes" : "Pick a slate first", true);
+  if (src === "etr" || src === "blick") { try { S.pull = await api("/api/pull-request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dir: S.hub.dir, sources: [src] }) }); setMsg(`Pulling ${SRC_NAME[src]} only through Claude in your Chrome (a few minutes)`); render(); watchPull(); } catch (e) { setMsg(`${SRC_NAME[src]} pull didn't start: ${e.message}`, true); } return; }
+  return refreshFree([SRC_KEY[src]]);
+}
+async function refreshFree(only) {
+  if (S.busy) return; S.busy = true; S.steps = []; render(); setMsg(only ? `Refreshing ${only.join(", ")} only…` : "Refreshing: Stokastic, Pinnacle, Downloads, injuries…");
   try {
-    const r = await api("/api/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ date: S.date, slateId: S.slateId, dir: S.dir }) });
+    const r = await api("/api/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ date: S.date, slateId: S.slateId, dir: S.dir, only }) });
     S.steps = r.steps; const stk = r.steps.find(s => s.name === "stokastic");
     if (stk && stk.ok) S.dir = stk.info.dir;
     S.hub = r.hub; await loadDirs(); if (S.hub) S.dir = S.hub.dir;
@@ -77,13 +95,31 @@ async function upload(file) {
   render();
 }
 
+// data check, top right (user, 2026-10-11): vendor update times as on the Data Hub strip plus the last Refresh; green when the
+// last Refresh and the last ETR + Blick pull both went through, red with what failed on hover
+const hm = iso => { if (!iso) return "—"; const d = iso instanceof Date ? iso : new Date(iso); if (isNaN(d)) return "—"; const day = x => x.toLocaleDateString("en-US", { timeZone: CT }); return (day(d) === day(new Date()) ? "" : d.toLocaleDateString("en-US", { timeZone: CT, weekday: "short" }) + " ") + d.toLocaleTimeString("en-US", { timeZone: CT, hour: "numeric", minute: "2-digit" }); };
+function health() {
+  const H = S.hub; if (!H) return "";
+  const s = H.sources, h = H.health || {}, R = h.refresh, V = h.vendors, fails = [];
+  if (R) R.steps.filter(x => !x.ok).forEach(x => fails.push(`${x.name}: ${x.error || "failed"}`));
+  if (V && V.status === "error") fails.push("ETR + Blick pull: " + (V.message || "failed"));
+  if (!s.stokastic) fails.push("Stokastic not pulled"); if (!s.etr) fails.push("ETR not pulled"); if (!s.blick) fails.push("Blick not pulled"); else if (s.blick.stale) fails.push("Blick file has zero projections");
+  const running = S.busy || (S.pull && /pending|working/.test(S.pull.status) && S.pull.kind !== "weekly"), cls = running ? "run" : fails.length ? "bad" : R ? "good" : "none";
+  const t = [["ETR", s.etr && (vendorTime(s.etr.updated) || s.etr.mtime)], ["Stokastic", s.stokastic && s.stokastic.projUpdated], ["Blick", s.blick && (vendorTime(s.blick.updated) || s.blick.mtime)]];
+  const pop = `<div class="hpop"><b>${running ? "Refresh running" : fails.length ? "Something didn't go through" : R ? "Everything went through" : "No Refresh recorded for this slate yet: the next one sets this"}</b>${fails.map(x => `<div class="hf">${esc(x)}</div>`).join("")}
+    ${R ? `<div class="hs">${R.steps.map(x => `<span class="${x.ok ? "ok" : "bad"}">${esc(x.name)}</span>`).join(" ")}</div>` : ""}
+    <div class="hm">Last Refresh ${R ? esc(when(R.at)) : "—"}${V ? ` · ETR + Blick pull ${esc(V.status)} ${esc(when(V.at))}` : ""}</div></div>`;
+  return `<div class="health ${cls}" tabindex="0"><i></i>${t.map(([k, v]) => `<span class="ht"><span class="k">${k}</span> ${esc(hm(v))}</span>`).join("")}<span class="ht chk"><span class="k">Checked</span> ${esc(hm(R && R.at))}</span>${pop}</div>`;
+}
+
 /* ---------------- render ---------------- */
 function render() {
   const app = $("#app"), H = S.hub;
-  app.innerHTML = `<nav class="nav"><div class="brand"><i></i>SLATE LAB</div><div class="links">${VIEWS.map(([k, l, s, live]) => live ? `<button class="lnk" data-view="${k}" aria-selected="${S.view === k}"><span class="long">${l}</span><span class="short">${s}</span></button>` : `<a class="lnk" href="index.html" title="Not rebuilt yet; opens the current app"><span class="long">${l}</span><span class="short">${s}</span></a>`).join("")}</div><div class="grow"></div>
+  app.innerHTML = `<nav class="nav"><div class="brand"><i></i>SLATE LAB</div><div class="links">${VIEWS.map(([k, l, s, live]) => live ? `<button class="lnk" data-view="${k}" aria-selected="${S.view === k}"><span class="long">${l}</span><span class="short">${s}</span></button>` : `<a class="lnk" href="index.html" title="Not rebuilt yet; opens the current app"><span class="long">${l}</span><span class="short">${s}</span></a>`).join("")}</div><div class="grow"></div><div id="health">${health()}</div>
 </nav>
     <div id="ctl" class="${S.view === "hub" ? "" : "nothub"}">${ctl()}</div><div class="prog"><i id="prog"${S.busy ? ' style="width:60%"' : ""}></i></div><div id="status" class="status">${S.err ? `<span class="err">${esc(S.msg)}</span>` : esc(S.msg)}</div>${S.view === "hub" ? steps() + srcStrip() : ""}<div id="tabs">${S.view === "hub" ? tabs() : ""}</div><div id="main"></div><div id="bot"></div>`;
   $$(".lnk[data-view]").forEach(b => b.addEventListener("click", () => { S.view = b.getAttribute("data-view"); persist(); render(); }));
+  $$(".src[data-src]").forEach(b => { const go = () => refreshOne(b.getAttribute("data-src")); b.addEventListener("click", go); b.addEventListener("keydown", e => { if (e.key === "Enter") go(); }); });
   wireCtl(); renderMain();
 }
 function leaguePicker() {
@@ -92,27 +128,36 @@ function leaguePicker() {
 }
 function ctl() {
   // Stokastic's slate starts are Eastern wall-clock times; show them in Central, 12-hour
-  const slateOpts = S.slates.map(s => `<option value="${s.slateId}"${String(s.slateId) === String(S.slateId) ? " selected" : ""}>${esc(s.name)} · ${s.type === "SHOWDOWN" ? "Showdown" : "Classic"} · ${s.games.length} gm · ${esc(clockCT(zoned(s.start.slice(0, 19), "America/New_York")))} CT</option>`).join("");
-  const dirOpts = S.dirs.slice(0, 20).map(d => `<option value="dir:${d.dir}"${d.dir === S.dir && !S.slates.some(s => String(s.slateId) === String(S.slateId) && String(s.slateId) === String(d.slateId)) ? " selected" : ""}>${esc(d.date)} ${esc(d.name || d.code)} (${d.games.length || "?"} gm)</option>`).join("");
+  const slateOpts = S.slates.filter(ofType).map(s => `<option value="${s.slateId}"${String(s.slateId) === String(S.slateId) ? " selected" : ""}>${esc(s.name)} · ${s.type === "SHOWDOWN" ? "Showdown" : "Classic"} · ${s.games.length} gm · ${esc(clockCT(zoned(s.start.slice(0, 19), "America/New_York")))} CT</option>`).join("");
+  // saved slates show only for the picked date, and only when Stokastic doesn't list them (past dates: Stokastic lists nothing,
+  // so this is how an old slate reopens); everything stays on this PC under data/ (user, 2026-10-10)
+  const listed = new Set(S.slates.map(s => String(s.slateId)));
+  const dirOpts = S.dirs.filter(d => ofType(d) && d.date === S.date && !listed.has(String(d.slateId))).map(d => `<option value="dir:${d.dir}"${d.dir === S.dir && !S.slates.some(s => String(s.slateId) === String(S.slateId) && String(s.slateId) === String(d.slateId)) ? " selected" : ""}>${esc(d.date)} ${esc(d.name || d.code)} (${d.games.length || "?"} gm)</option>`).join("");
   return `<div class="ctl">
     <div class="f"><label>League</label>${leaguePicker()}</div>
     <div class="f"><label>Slate date</label><input class="txt" type="date" id="date" value="${S.date}"></div>
-    <div class="f wide"><label>Slate ${S.slatesErr ? `<span class="hint">(Stokastic: ${esc(S.slatesErr)})</span>` : ""}</label><select class="sel" id="slate" style="min-width:260px">${slateOpts ? `<optgroup label="Stokastic · ${S.date}">${slateOpts}</optgroup>` : `<option value="">no DK slates on ${S.date}</option>`}${dirOpts ? `<optgroup label="Saved folders">${dirOpts}</optgroup>` : ""}</select></div>
-    <div class="f cta"><label>&nbsp;</label><button class="btn refresh${S.busy ? " busy" : ""}" id="refresh"${S.busy ? " disabled" : ""}>${S.busy ? "Refreshing…" : "⟳ Refresh"}</button></div>
-    <div class="f"><label>&nbsp;</label><button class="btn sec" id="pullVend" title="Starts a short Claude run that pulls ETR and Blick in your logged-in Chrome, files them and refreshes. Chrome must be open with the Claude extension connected."${S.hub && !pulling() ? "" : " disabled"}>${pulling() && S.pull.kind !== "weekly" ? `Pulling… <span class="mini">${esc(S.pull.message || "")}</span>` : "⤓ Pull ETR + Blick"}</button></div>
-    <div class="f"><label>&nbsp;</label><label class="drop sm btn sec" id="drop" title="ETR or Blick CSV, or a file the Slate Lab grabber saved">Drop ETR / Blick CSV <input type="file" id="file" accept=".csv,.txt" multiple></label></div>
-    <div class="f"><label>&nbsp;</label><a class="btn ghost" href="src/grab/index.html" target="_blank" title="A browser button that pulls ETR, Blick and the shows with no Claude">No-Claude grabber</a></div></div>`;
+    <div class="f"><label>Type</label><select class="sel" id="stype"><option value="CLASSIC"${S.type === "CLASSIC" ? " selected" : ""}>Classic</option><option value="SHOWDOWN"${S.type === "SHOWDOWN" ? " selected" : ""}>Showdown</option></select></div>
+    <div class="f wide"><label>Slate ${S.slatesErr ? `<span class="hint">(Stokastic: ${esc(S.slatesErr)})</span>` : ""}</label><select class="sel" id="slate" style="min-width:260px">${slateOpts ? `<optgroup label="Stokastic · ${S.date}">${slateOpts}</optgroup>` : `<option value="">no DK ${S.type === "SHOWDOWN" ? "showdown" : "classic"} slates on ${S.date}</option>`}${dirOpts ? `<optgroup label="Saved on this PC · ${S.date}">${dirOpts}</optgroup>` : ""}</select></div>
+    <div class="f cta"><label>&nbsp;</label><button class="btn refresh${S.busy || (pulling() && S.pull.kind !== "weekly") ? " busy" : ""}" id="refresh" title="Pulls everything: Stokastic, Pinnacle lines, injuries, the DK lobby and files in Downloads right away, then ETR + Blick through Claude in your logged-in Chrome (a few minutes, about $1.50; Chrome must be open with the Claude extension connected)"${S.busy || pulling() ? " disabled" : ""}>${S.busy ? "Refreshing…" : pulling() && S.pull.kind !== "weekly" ? `Pulling ETR + Blick… <span class="mini">${esc(S.pull.message || "")}</span>` : "⟳ Refresh"}</button></div>
+    <div class="f"><label>&nbsp;</label><label class="drop sm btn sec" id="drop" title="Upload or drop any files: ETR or Blick CSVs, or files the Slate Lab grabber saved (src/grab/index.html). They're filed and the table refreshes, no Claude">⇪ Manual refresh <input type="file" id="file" accept=".csv,.txt" multiple></label></div></div>`;
 }
 function wireCtl() {
-  $("#date").addEventListener("change", async e => { S.date = e.target.value; persist(); await loadSlates(); render(); });
+  $("#date").addEventListener("change", async e => { S.date = e.target.value; persist(); await loadSlates();
+    // a past date (Stokastic lists nothing): open that day's first saved slate of this type, if any
+    if (!S.slates.some(ofType)) { const d = S.dirs.find(x => x.date === S.date && ofType(x)); if (d) { S.dir = d.dir; S.slateId = d.slateId || null; await loadHub(); persist(); } }
+    // otherwise load the folder of the slate now selected (or none yet): the table must match the dropdown
+    else { const d = S.dirs.find(x => String(x.slateId) === String(S.slateId)); if (d) { if (S.dir !== d.dir) { S.dir = d.dir; await loadHub(); } } else if (S.hub && S.hub.slate && S.hub.slate.date !== S.date) { S.dir = null; S.hub = null; setMsg("New slate: press Refresh to set it up"); } persist(); }
+    render(); });
+  $("#stype").addEventListener("change", async e => { S.type = e.target.value; S.slateId = null; await loadSlates(); const d = S.dirs.find(x => String(x.slateId) === String(S.slateId)); if (d) { S.dir = d.dir; await loadHub(); setMsg(""); } else { S.dir = null; S.hub = null; setMsg(S.slateId ? "New slate: press Refresh to set it up" : ""); } persist(); render(); });
   $("#slate").addEventListener("change", async e => { const v = e.target.value; if (v.startsWith("dir:")) { S.dir = v.slice(4); const d = S.dirs.find(x => x.dir === S.dir); if (d && d.slateId) S.slateId = d.slateId; await loadHub(); } else { S.slateId = v; const d = S.dirs.find(x => String(x.slateId) === String(v)); if (d) { S.dir = d.dir; await loadHub(); } } persist(); render(); });
-  $("#refresh").addEventListener("click", refresh);
+  $("#refresh").addEventListener("click", () => refresh());
   const lb = $("#lgbtn"); if (lb) lb.addEventListener("click", () => { S.lgOpen = !S.lgOpen; render(); });
   $$("[data-lg]").forEach(b => b.addEventListener("click", () => { S.lgOpen = false; render(); }));
-  const pv = $("#pullVend"); if (pv) pv.addEventListener("click", async () => { try { S.pull = await api("/api/pull-request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dir: S.hub.dir, sources: ["etr", "blick"] }) }); setMsg("Asked Claude to pull ETR + Blick; this updates as it works"); render(); watchPull(); } catch (e) { setMsg("Could not file the request: " + e.message, true); } });
-  const inp = $("#file"); inp.addEventListener("change", async e => { for (const f of Array.from(e.target.files || [])) await upload(f); try { e.target.value = ""; } catch {} });
+  // Manual refresh: file every uploaded or dropped file, then the free refresh (no Claude)
+  const manual = async files => { if (!files.length) return; for (const f of files) await upload(f); await refresh({ manual: true }); };
+  const inp = $("#file"); inp.addEventListener("change", async e => { await manual(Array.from(e.target.files || [])); try { e.target.value = ""; } catch {} });
   const zone = $("#drop"); ["dragenter", "dragover"].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.add("over"); })); ["dragleave", "drop"].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.remove("over"); }));
-  zone.addEventListener("drop", async e => { for (const f of Array.from(e.dataTransfer.files || [])) await upload(f); });
+  zone.addEventListener("drop", async e => { await manual(Array.from(e.dataTransfer.files || [])); });
 }
 // follow a pull request while it's open: every 3s until Claude marks it done or failed (or 20 minutes pass with nobody picking it up)
 let pullTimer = null;
@@ -124,26 +169,26 @@ function watchPull() {
       const wk = r.kind === "weekly", mins = wk ? 45 : 15;
       if (wk && S.hub && /done|error/.test(r.status)) await loadReads(true);
       if (r.status === "done") { clearInterval(pullTimer); pullTimer = null; setMsg((wk ? "" : "ETR + Blick pulled: ") + (r.message || "done")); await loadHub(); render(); return; }
-      if (r.status === "error") { clearInterval(pullTimer); pullTimer = null; setMsg((wk ? "Weekly ETR read stopped: " : "Pull failed: ") + (r.message || "unknown"), true); render(); return; }
+      if (r.status === "error") { clearInterval(pullTimer); pullTimer = null; setMsg((wk ? "Weekly ETR read stopped: " : "Pull failed: ") + (r.message || "unknown"), true); await loadHub(); render(); return; }
       if (/pending|working/.test(r.status) && Date.now() - t0 > (mins + 1) * 60000) { clearInterval(pullTimer); pullTimer = null; await api("/api/pull-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "error", message: `the Claude run didn't finish in ${mins} minutes` }) }); S.pull.status = "error"; setMsg(`The run didn't finish in ${mins} minutes. Check that Chrome is open with the Claude extension connected.`, true); render(); return; }
-      if (r.status + (r.message || "") !== was) { if (S.tab === "notes" && $("#weekBox")) { await loadReads(true); paintWeek(); const pv = $("#pullVend"); if (pv) pv.disabled = pulling(); } else render(); }
+      if (r.status + (r.message || "") !== was) { if (S.tab === "notes" && $("#weekBox")) { await loadReads(true); paintWeek(); const rb = $("#refresh"); if (rb) rb.disabled = pulling(); } else render(); }
     } catch { /* server restarting: keep waiting */ }
   }, 3000);
 }
 function steps() { if (!S.steps.length) return ""; return `<div class="steps">${S.steps.map(s => `<span class="${s.ok ? "ok" : "bad"}">${s.ok ? "✓" : "✗"} ${esc(s.name)} ${s.ok ? esc(stepInfo(s)) : esc(s.error)} <span class="mini">${(s.ms / 1000).toFixed(1)}s</span></span>`).join("")}</div>`; }
-function stepInfo(s) { const i = s.info || {}; if (s.name === "stokastic") return `${i.projected} projected, ${i.changed ? "new numbers" : "unchanged"}`; if (s.name === "pinnacle") return `${i.games} games, ${i.props} props`; if (s.name === "ingest") return i.copied.length ? i.copied.join("; ") : "nothing new in Downloads"; if (s.name === "injuries") return `${i.notActive} flagged`; if (s.name === "merge") return `${i.rows.length} players`; return ""; }
+function stepInfo(s) { const i = s.info || {}; if (s.name === "stokastic") return `${i.projected} projected, ${i.changed ? "new numbers" : "unchanged"}`; if (s.name === "pinnacle") return `${i.games} games, ${i.props} props`; if (s.name === "ingest") return i.copied.length ? i.copied.join("; ") : "nothing new in Downloads"; if (s.name === "injuries") return `${i.notActive} flagged`; if (s.name === "free") return `${i.games} game${i.games === 1 ? "" : "s"}: weather${i.daily ? " + routes + coverage" : ", routes/coverage from today's pull"}`; if (s.name === "merge") return `${i.rows.length} players`; return ""; }
 function srcStrip() {
   const H = S.hub; if (!H) return "";
-  const s = H.sources, box = (cls, name, line, sub) => `<div class="src ${cls}"><i></i><div><b>${name}</b> ${line}<small>${sub}</small></div></div>`;
+  const s = H.sources, box = (cls, name, line, sub) => `<div class="src ${cls}" data-src="${{ Stokastic: "stokastic", ETR: "etr", Blick: "blick", Pinnacle: "pinnacle", ESPN: "espn" }[name]}" role="button" tabindex="0" title="Click to refresh ${name} only"><i></i><div><b>${name}</b> ${line}<small>${sub}</small></div></div>`;
   return `<div class="srcs">
     ${s.stokastic ? box("ok", "Stokastic", `${s.stokastic.rows} players`, `proj ${when(s.stokastic.projUpdated)} · own ${when(s.stokastic.ownUpdated)} · checked ${ago(s.stokastic.pulledAt)}`) : box("bad", "Stokastic", "not pulled", "pick the slate and Refresh")}
-    ${s.etr ? box("ok", "ETR", `${s.etr.rows} players`, `${s.etr.updated ? `updated ${when(vendorTime(s.etr.updated))}` : "update time unknown"} · checked ${ago(s.etr.checked || s.etr.mtime)}`) : box("warn", "ETR", "not pulled", "press Pull ETR + Blick")}
-    ${s.blick ? box(s.blick.stale ? "warn" : "ok", "Blick", s.blick.stale ? "file has zero projections" : `${s.blick.rows} players`, `${s.blick.updated ? `updated ${when(vendorTime(s.blick.updated))}` : "update time unknown"} · checked ${ago(s.blick.checked || s.blick.mtime)}`) : box("warn", "Blick", "not pulled", "press Pull ETR + Blick")}
+    ${s.etr ? box("ok", "ETR", `${s.etr.rows} players`, `${s.etr.updated ? `updated ${when(vendorTime(s.etr.updated))}` : "update time unknown"} · checked ${ago(s.etr.checked || s.etr.mtime)}`) : box("warn", "ETR", "not pulled", "click to pull ETR")}
+    ${s.blick ? box(s.blick.stale ? "warn" : "ok", "Blick", s.blick.stale ? "file has zero projections" : `${s.blick.rows} players`, `${s.blick.updated ? `updated ${when(vendorTime(s.blick.updated))}` : "update time unknown"} · checked ${ago(s.blick.checked || s.blick.mtime)}`) : box("warn", "Blick", "not pulled", "click to pull Blick")}
     ${s.market ? box("ok", "Pinnacle", `${s.market.rows} players`, `lines ${when(s.market.pulledAt)} · checked ${ago(s.market.pulledAt)}`) : box("warn", "Pinnacle", "no lines for these games", "Refresh pulls the current week")}
     ${s.injuries ? box("ok", "ESPN", `${s.injuries.flagged} injuries`, `${s.injuries.latest ? `latest report ${when(s.injuries.latest)}` : "no reports"} · checked ${ago(s.injuries.at)}`) : box("warn", "ESPN", "injuries not pulled", "Refresh pulls ESPN")}
   </div>`;
 }
-function tabs() { const H = S.hub, sd = H && H.slate.type === "SHOWDOWN"; return `<div class="tabs">${[["players", "Players", H ? H.rows.length : ""], ...(sd ? [["captains", "Captains"]] : []), ["games", "Games", H ? H.games.length : ""], ["changes", "What changed"], ["notes", "Notes"], ["sources", "Sources"]].map(([k, l, n]) => `<button class="tab" data-tab="${k}" aria-selected="${S.tab === k}">${l}${n !== "" && n != null ? `<span class="n">${n}</span>` : ""}</button>`).join("")}</div>`; }
+function tabs() { const H = S.hub, sd = H && H.slate.type === "SHOWDOWN"; return `<div class="tabs">${[["players", "Players", H ? H.rows.length : ""], ...(sd ? [["captains", "Captains"]] : []), ["games", "Games", H ? H.games.length : ""], ["changes", "What changed"], ["notes", "Notes"]].map(([k, l, n]) => `<button class="tab" data-tab="${k}" aria-selected="${S.tab === k}">${l}${n !== "" && n != null ? `<span class="n">${n}</span>` : ""}</button>`).join("")}</div>`; }
 function renderMain() {
   $$("#tabs .tab").forEach(b => b.addEventListener("click", () => { S.tab = b.getAttribute("data-tab"); persist(); render(); }));
   const main = $("#main"), H = S.hub;
@@ -154,8 +199,10 @@ function renderMain() {
   if (S.view === "sim") { renderSim(main, ctx); return; }
   if (S.view === "gen") { renderGen(main, ctx); return; }
   if (!H) { main.innerHTML = `<div class="empty">No slate loaded<small>Pick the slate date and the DraftKings slate above, then press Refresh.</small></div>`; return; }
-  if (S.tab === "players") renderPlayers(main); else if (S.tab === "games") renderGames(main); else if (S.tab === "captains") renderCaptains(main); else if (S.tab === "changes") renderChanges(main); else if (S.tab === "notes") renderNotes(main); else renderSources(main);
+  if (S.tab === "players") renderPlayers(main); else if (S.tab === "games") renderGames(main); else if (S.tab === "captains") renderCaptains(main); else if (S.tab === "changes") renderChanges(main); else if (S.tab === "notes") renderNotes(main); else renderPlayers(main);
 }
+// value off the Model projection (user, 2026-10-10: Model replaces the plain consensus on the table)
+const modelVal = r => r.lab != null && r.sal ? 1000 * r.lab / r.sal : r.value;
 const COLS = [
   { k: "name", l: "Player", r: nameCell, s: r => r.name },
   { k: "pos", l: "Pos", r: r => esc(r.pos), s: r => r.pos },
@@ -169,13 +216,12 @@ const COLS = [
   { k: "blick", l: "Blick", n: 1, r: r => f1(r.blick && r.blick.proj), s: r => r.blick ? r.blick.proj : null },
   { k: "blickOwn", l: "Own", n: 1, r: r => pc(r.blick && r.blick.own), s: r => r.blick ? r.blick.own : null, t: "Blick MME ownership" },
   { k: "mkt", l: "Market", n: 1, r: r => `<span title="${esc(r.mkt ? r.mkt.lines : "")}">${f1(r.mkt && r.mkt.proj)}</span>`, s: r => r.mkt ? r.mkt.proj : null, t: "Pinnacle lines turned into DK points" },
-  { k: "cons", l: "Cons", n: 1, r: r => `<b>${f1(r.cons)}</b><span class="mini"> /${r.nSrc}</span>`, s: r => r.cons, t: "mean of the sources present" },
-  { k: "lab", l: "Lab", n: 1, r: r => `<b>${f1(r.lab)}</b>`, s: r => r.lab, t: "Lab blend: sources weighted by their scorecard accuracy per position" },
+  { k: "lab", l: "Model", n: 1, r: r => `<b>${f1(r.lab)}</b><span class="mini"> /${r.nSrc}</span>`, s: r => r.lab, t: "Model projection: the sources (Stokastic, ETR, Blick, Market) weighted by how accurate each has been at the position, like-for-like (data/reports/source-scorecard-nfl.json); /n = sources present" },
   { k: "labOwn", l: "Model own", n: 1, r: r => pc(r.labOwn), s: r => r.labOwn, t: "predicted actual ownership: the vendors' average run through the player model fit on real fields (classic) or the measured bucket curve (showdown)" },
   { k: "ownDelta", l: "vs sites", n: 1, r: r => r.ownDelta == null ? "—" : `<span class="${Math.abs(r.ownDelta) >= 3 ? (r.ownDelta > 0 ? "gap dn" : "gap up") : ""}">${r.ownDelta > 0 ? "+" : ""}${r.ownDelta.toFixed(1)}</span>`, s: r => r.ownDelta, t: "Model own minus the vendors' average: + means the field will come in heavier than projected, − lighter (classic only)" },
   { k: "spread", l: "Range", n: 1, r: r => r.spread == null ? "—" : `<span class="${r.spread >= 4 ? "gap dn" : ""}">${f1(r.spread)}</span>`, s: r => r.spread, t: "highest minus lowest source" },
   { k: "mktGap", l: "Mkt−Vend", n: 1, r: r => gapCell(r.mktGap), s: r => r.mktGap, t: "market minus the vendor average" },
-  { k: "value", l: "Val", n: 1, r: r => f1(r.value), s: r => r.value, t: "consensus per $1K" },
+  { k: "value", l: "Val", n: 1, r: r => f1(modelVal(r)), s: r => modelVal(r), t: "Model projection per $1K of salary" },
 ];
 function renderPlayers(main) {
   const H = S.hub, sd = H.slate.type === "SHOWDOWN";
@@ -201,31 +247,32 @@ function renderPlayers(main) {
     download(`merged-${H.dir}.csv`, lines.join("\n") + "\n");
   });
 }
-function renderGames(main) {
-  const H = S.hub, g = H.games, first = H.sources.market && H.sources.market.firstStamp;
-  main.innerHTML = `<div class="tw games"><table><thead><tr><th>Game</th><th>Kick</th><th class="num">Spread (home)</th><th class="num">Total</th><th class="num">Away TT</th><th class="num">Home TT</th><th class="num">Stok away</th><th class="num">Stok home</th><th class="num">ML home</th></tr></thead>
-    <tbody>${g.map(x => `<tr><td><b>${esc(x.game)}</b></td><td>${x.start ? new Date(x.start).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" }) : "—"}</td><td class="num">${x.spread == null ? "—" : (x.spread > 0 ? "+" : "") + x.spread}${mv(x.dSpread)}</td><td class="num">${x.total ?? "—"}${mv(x.dTotal)}</td><td class="num">${x.ttAway ?? "—"}${mv(x.dTTAway)}</td><td class="num">${x.ttHome ?? "—"}${mv(x.dTTHome)}</td><td class="num">${f1(x.stkAway)}</td><td class="num">${f1(x.stkHome)}</td><td class="num">${x.mlHome ?? "—"}</td></tr>`).join("")}</tbody></table></div>`;
-  $("#bot").innerHTML = `<div class="bot"><span class="hint">Pinnacle lines${first ? `; arrows show movement since the first snapshot this week (${esc(first.slice(5, 10))} ${esc(first.slice(11, 13))}:${esc(first.slice(13))})` : ""}. Stok = Stokastic team totals.</span></div>`;
+// ETR GPP Game Scores, DraftKings only (user, 2026-10-10), from the slate guide the weekly read writes; every column sorts
+const GCOLS = [
+  { k: "game", l: "Game", r: x => `<b>${esc(x.game)}</b>`, s: x => x.game },
+  { k: "start", l: "Kick", r: x => x.start ? new Date(x.start).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" }) : "—", s: x => x.start },
+  { k: "spread", l: "Spread (home)", n: 1, r: x => (x.spread == null ? "—" : (x.spread > 0 ? "+" : "") + x.spread) + mv(x.dSpread), s: x => x.spread },
+  { k: "total", l: "Total", n: 1, r: x => (x.total ?? "—") + mv(x.dTotal), s: x => x.total },
+  { k: "ttAway", l: "Away TT", n: 1, r: x => (x.ttAway ?? "—") + mv(x.dTTAway), s: x => x.ttAway },
+  { k: "ttHome", l: "Home TT", n: 1, r: x => (x.ttHome ?? "—") + mv(x.dTTHome), s: x => x.ttHome },
+  { k: "stkAway", l: "Stok away", n: 1, r: x => f1(x.stkAway), s: x => x.stkAway },
+  { k: "stkHome", l: "Stok home", n: 1, r: x => f1(x.stkHome), s: x => x.stkHome },
+  { k: "gs", l: "ETR GS", n: 1, t: "ETR GPP Game Score, DraftKings", r: x => x.gs ? `<span title="${esc((x.gs.call ? x.gs.call + ": " : "") + (x.gs.why || ""))}">${x.gs.dk > 0 ? "+" : ""}${x.gs.dk}</span>` : "—", s: x => x.gs ? x.gs.dk : null },
+];
+async function renderGames(main) {
+  const H = S.hub, first = H.sources.market && H.sources.market.firstStamp;
+  let gc = {}; try { gc = (await api(`/api/guide?dir=${encodeURIComponent(H.dir)}`)).gameCalls || {}; } catch {}
+  const g = H.games.map(x => ({ ...x, gs: gc[x.game] && gc[x.game].dk != null ? gc[x.game] : null }));
+  const draw = () => {
+    const so = S.gsort || { k: "start", d: 1 }, col = GCOLS.find(c => c.k === so.k) || GCOLS[1];
+    const rows = g.slice().sort((a, b) => { const x = col.s(a), y = col.s(b); if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return (typeof x === "string" ? x.localeCompare(y) : x - y) * so.d; });
+    main.innerHTML = `<div class="tw games"><table><thead><tr>${GCOLS.map(c => `<th class="${c.n ? "num" : ""}" data-gsort="${c.k}" title="${esc(c.t || "")}">${c.l}${so.k === c.k ? `<span class="ar">${so.d < 0 ? "▼" : "▲"}</span>` : ""}</th>`).join("")}</tr></thead>
+    <tbody>${rows.map(x => `<tr>${GCOLS.map(c => `<td class="${c.n ? "num" : ""}">${c.r(x)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+    $$("th[data-gsort]", main).forEach(th => th.addEventListener("click", () => { const k = th.getAttribute("data-gsort"); S.gsort = so.k === k ? { k, d: -so.d } : { k, d: k === "game" || k === "start" ? 1 : -1 }; draw(); }));
+  };
+  draw();
+  $("#bot").innerHTML = `<div class="bot"><span class="hint">Pinnacle lines${first ? `; arrows show movement since the first snapshot this week (${esc(first.slice(5, 10))} ${esc(first.slice(11, 13))}:${esc(first.slice(13))})` : ""}. Stok = Stokastic team totals. ETR GS = ETR GPP Game Score (DK); hover for the call. Click a header to sort.</span></div>`;
 }
-async function renderSources(main) {
-  const H = S.hub, s = H.sources;
-  const row = (name, v) => `<tr><td><b>${name}</b></td><td>${v}</td></tr>`;
-  main.innerHTML = `<div class="kpi">${[["Players", H.rows.length], ["2+ sources", H.rows.filter(r => r.nSrc >= 2).length], ["All 4", H.rows.filter(r => r.nSrc === 4).length], ["Range ≥ 4", H.rows.filter(r => r.spread >= 4).length], ["|Mkt−Vend| ≥ 3", H.rows.filter(r => Math.abs(r.mktGap) >= 3).length], ["Injury flags", H.rows.filter(r => r.inj).length]].map(([k, v]) => `<div class="box"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("")}</div>
-    <div class="tw"><table><thead><tr><th>Source</th><th>Status</th></tr></thead><tbody>
-    ${row("Stokastic", s.stokastic ? `${esc(s.stokastic.file)} · ${s.stokastic.rows} rows · projections ${when(s.stokastic.projUpdated)} · ownership ${when(s.stokastic.ownUpdated)} · pulled ${when(s.stokastic.pulledAt)}` : "none")}
-    ${row("ETR", s.etr ? `${esc(s.etr.file)} · ${s.etr.rows} rows · saved ${when(s.etr.mtime)}` : "none — download the slate CSV from ETR while logged in; the server files it from Downloads")}
-    ${row("Blick", s.blick ? `${esc(s.blick.file)} · ${s.blick.rows} rows${s.blick.stale ? " · ZERO projections (stale file)" : ""} · saved ${when(s.blick.mtime)}` : "none — download the CSV from the Blick Discord; the server files it from Downloads")}
-    ${row("Pinnacle", s.market ? `snapshot ${esc(s.market.stamp)} · ${s.market.rows} players · ${s.market.snapshots} snapshots this week (first ${esc(s.market.firstStamp)})` : "no snapshot covers these games")}
-    ${row("Injuries", s.injuries ? `ESPN · ${when(s.injuries.at)} · ${s.injuries.flagged} players on this slate not Active` : "none")}
-    </tbody></table></div><div id="score" class="status">loading scorecard…</div>`;
-  $("#bot").innerHTML = `<div class="bot"><span class="hint">Scorecard: how each source tracked actual points on past slates (bench/source-scorecard-nfl.mjs, nightly).</span></div>`;
-  try {
-    const sc = await (await fetch("data/reports/source-scorecard-nfl.json", { cache: "no-store" })).json();
-    const sl = sc.slates.filter(x => !x.note).slice(-6).reverse(), names = ["stokastic", "etr", "blick", "market", "consensus"];
-    $("#score").innerHTML = `<div class="tw"><table><thead><tr><th>Slate</th><th>n</th>${names.map(n => `<th class="num">${n} r / MAE</th>`).join("")}</tr></thead><tbody>${sl.map(x => `<tr><td><b>${esc(x.date)} ${esc(x.code)}</b></td><td>${x.n}</td>${names.map(n => `<td class="num">${x.sources[n] ? `${x.sources[n].r.toFixed(2)} / ${x.sources[n].mae.toFixed(1)}` : "—"}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
-  } catch { $("#score").textContent = "no scorecard yet"; }
-}
-
 /* ---------------- captains (showdown) ---------------- */
 function renderCaptains(main) {
   const H = S.hub, rows = H.rows.filter(r => (r.cons ?? 0) >= 2 && r.sal).map(r => ({ r, cptSal: Math.round(r.sal * 1.5), cptProj: +(1.5 * (r.lab ?? r.cons)).toFixed(1), stk: r.stk?.cptOwn, etr: r.etr?.cptOwn, blick: r.blick?.cptOwn, flags: [r.pos === "TE" ? "TE captain (avoid)" : "", r.pos === "K" || r.pos === "DST" ? "K/DST captain (never)" : "", r.stk?.cptOwn != null && r.stk.cptOwn < 10 ? "under 10% CPT own" : ""].filter(Boolean) })).sort((a, b) => b.cptProj - a.cptProj);
@@ -377,7 +424,10 @@ function wireMyReads() {
 
 /* ---------------- boot ---------------- */
 (async () => {
-  try { await loadDirs(); await loadHub(); render(); if (!S.hub) setMsg("Pick a slate and Refresh"); await loadSlates(); render();
+  try { await loadDirs(); if (!saved.type) { const d0 = S.dirs.find(d => d.dir === S.dir); if (d0 && d0.type) S.type = d0.type; } await loadHub(); render(); if (!S.hub) setMsg("Pick a slate and Refresh"); await loadSlates();
+    // line the table up with the dropdown: the selected slate's folder, if it has one
+    { const d = S.dirs.find(x => String(x.slateId) === String(S.slateId)); if (d && d.dir !== S.dir) { S.dir = d.dir; await loadHub(); persist(); } }
+    render();
     try { S.pull = await api("/api/pull-request"); if (/pending|working/.test(S.pull.status)) { render(); watchPull(); } } catch {} }
   catch (e) { $("#app").innerHTML = `<div class="empty">Hub server not reachable<small>${esc(e.message)} — start it with <code>node server/hub.mjs</code> and open http://localhost:8787</small></div>`; }
 })();

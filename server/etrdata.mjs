@@ -25,8 +25,8 @@ const toRows = d => { const ks = Object.keys(d), n = d[ks[0]].length; return Arr
 const csvOf = rows => { const ks = Object.keys(rows[0] || {}); const q = v => v == null || v === "NA" ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v); return [ks.join(","), ...rows.map(r => ks.map(k => q(r[k])).join(","))].join("\n"); };
 const parseCsv = txt => { const L = String(txt).trim().split(/\r?\n/), h = L[0].split(","); return L.slice(1).map(l => { const o = [], c = []; let s = "", q = false; for (const ch of l) { if (ch === '"') q = !q; else if (ch === "," && !q) { c.push(s); s = ""; } else s += ch; } c.push(s); return Object.fromEntries(h.map((k, i) => [k, c[i]])); }); };
 
-// week + publish date from the widget file name: ...-wk5-2026-10-06.html
-const labelOf = url => { const m = String(url).match(/wk(\d+)-(\d{4})-(\d\d)-(\d\d)\.html/i); return m ? { week: +m[1], year: m[2], published: `${m[2]}-${m[3]}-${m[4]}` } : null; };
+// week + publish date from the widget file name: ...-wk5-2026-10-06.html, or with ETR's re-upload suffix ...-2026-10-07-2.html
+const labelOf = url => { const m = String(url).match(/wk(\d+)-(\d{4})-(\d\d)-(\d\d)(?:-\d+)?\.html/i); return m ? { week: +m[1], year: m[2], published: `${m[2]}-${m[3]}-${m[4]}` } : null; };
 
 export async function fetchEtrData(kind, url) {
   if (!KINDS[kind]) throw new Error("kind must be dvp, xfp or proe");

@@ -75,6 +75,27 @@ export function assignSlots(ids, P, f) {
   return match.map(k => ids[k]);
 }
 
+// Late-swap order: the same players re-slotted so later tips sit in the flex slots (UTIL first, then
+// G/F/FLEX), where a late scratch can be replaced by almost anyone; earlier tips take the fixed
+// positions. tipOf(p) is minutes after midnight (null when unknown). Exhaustive over valid assignments,
+// keeping the given order on ties; showdown and lineups with no known tips come back unchanged.
+const SWAP_W = { UTIL: 2, FLEX: 1, SFLEX: 1, G: 1, F: 1 };
+export function lateSwapOrder(lu, P, f, tipOf) {
+  if (f.anySlot) return lu;
+  const tip = lu.map(id => tipOf(P[id])); if (tip.every(t => t == null)) return lu;
+  const t0 = Math.min(...tip.filter(t => t != null)), rel = tip.map(t => t == null ? 0 : t - t0);
+  const n = f.slots.length, used = new Uint8Array(n), cur = new Array(n);
+  let best = lu, bestV = -1;
+  const value = order => order.reduce((s, k, i) => s + rel[k] * (SWAP_W[f.slots[i]] || 0), 0);
+  bestV = value(lu.map((_, i) => i));
+  const go = s => {
+    if (s === n) { const v = value(cur); if (v > bestV + 1e-9) { bestV = v; best = cur.map(k => lu[k]); } return; }
+    for (let k = 0; k < n; k++) if (!used[k] && eligible(P[lu[k]], f.slots[s], f)) { used[k] = 1; cur[s] = k; go(s + 1); used[k] = 0; }
+  };
+  go(0);
+  return best;
+}
+
 // Match rows of names (optionally "Name (id)") to pool indices. Returns {lineups, missing}.
 export function matchLineups(rows, P, f) {
   const need = f.slots.length, byKey = {};
